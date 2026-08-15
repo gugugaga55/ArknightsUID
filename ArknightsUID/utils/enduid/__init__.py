@@ -1,0 +1,1 @@
+"""EndUID compatibility layer."""
