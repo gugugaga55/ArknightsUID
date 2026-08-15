@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-import sys
-import types
 import unittest
 from pathlib import Path
-from typing import Any
 
 
 SENTINEL_CRED = "SENTINEL_CRED_DO_NOT_LEAK"
@@ -19,47 +16,6 @@ SENSITIVE_VALUES = (
 )
 SENSITIVE_FIELD_NAMES = ("cookie", "cred", "token", "hg_token", "skland_user_id")
 
-
-def _install_gsuid_core_stubs() -> None:
-    class FakeSV:
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            pass
-
-        def on_command(self, *args: Any, **kwargs: Any) -> Any:
-            return lambda func: func
-
-        def on_fullmatch(self, *args: Any, **kwargs: Any) -> Any:
-            return lambda func: func
-
-    bot_module = types.ModuleType("gsuid_core.bot")
-    bot_module.Bot = object
-    models_module = types.ModuleType("gsuid_core.models")
-    models_module.Event = object
-    logger_module = types.ModuleType("gsuid_core.logger")
-    logger_module.logger = types.SimpleNamespace(
-        debug=lambda message: None,
-        warning=lambda message: None,
-    )
-    help_module = types.ModuleType("gsuid_core.help")
-    help_module.__path__ = []
-    help_utils_module = types.ModuleType("gsuid_core.help.utils")
-    help_utils_module.register_help = lambda *args, **kwargs: None
-    sv_module = types.ModuleType("gsuid_core.sv")
-    sv_module.Plugins = lambda *args, **kwargs: None
-    sv_module.SV = FakeSV
-
-    gsuid_core_module = types.ModuleType("gsuid_core")
-    gsuid_core_module.__path__ = []
-    sys.modules.setdefault("gsuid_core", gsuid_core_module)
-    sys.modules["gsuid_core.bot"] = bot_module
-    sys.modules["gsuid_core.models"] = models_module
-    sys.modules["gsuid_core.logger"] = logger_module
-    sys.modules["gsuid_core.help"] = help_module
-    sys.modules["gsuid_core.help.utils"] = help_utils_module
-    sys.modules["gsuid_core.sv"] = sv_module
-
-
-_install_gsuid_core_stubs()
 
 from ArknightsUID.arknightsuid_account import (  # noqa: E402
     ArkCredential,
@@ -133,7 +89,7 @@ class AccountReplySafetyTest(unittest.TestCase):
     def test_format_accounts_empty_state_has_no_sensitive_fields(self) -> None:
         reply = _format_accounts([], [])
 
-        self.assertEqual(reply, "「明日方舟」EndUID 账号复用状态\n未找到明日方舟账号。")
+        self.assertEqual(reply, "「明日方舟」绑定账号列表\n未找到明日方舟账号。")
         assert_reply_safe(self, reply)
 
     def test_format_player_info_normal_data_hides_credential_fields(self) -> None:
@@ -259,6 +215,9 @@ class AccountReplySafetyTest(unittest.TestCase):
 
         for command in (
             "ark账号",
+            "ark绑定",
+            "ark扫码登录",
+            "ark查看绑定",
             "ark绑定列表",
             "ark理智",
             "ark每日",
