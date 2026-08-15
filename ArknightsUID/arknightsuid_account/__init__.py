@@ -29,13 +29,17 @@ except ModuleNotFoundError:
 
 account_sv = SV("ArknightsUID账号", priority=5)
 
+_sensitive_fields = (
+    r"cookie|cred|token|hg_token|skland_user_id"
+    # 扩充常见高敏感字段，覆盖驼峰/下划线/空格变体，避免外部消息夹带泄漏。
+    r"|access[_ ]?token|refresh[_ ]?token"
+    r"|secret|password|passwd"
+)
 _SENSITIVE_ASSIGNMENT_RE = re.compile(
-    r"(?i)\b(?:cookie|cred|token|hg_token|skland_user_id)\b\s*[:=]\s*"
-    r"(?:\"[^\"]*\"|'[^']*'|[^,，;；\s]+)"
+    rf"(?i)\b(?:{_sensitive_fields})\b\s*[:=]\s*"
+    rf"(?:\"[^\"]*\"|'[^']*'|[^,，;；\s]+)"
 )
-_SENSITIVE_FIELD_RE = re.compile(
-    r"(?i)\b(?:cookie|cred|token|hg_token|skland_user_id)\b"
-)
+_SENSITIVE_FIELD_RE = re.compile(rf"(?i)\b(?:{_sensitive_fields})\b")
 _SENTINEL_VALUE_RE = re.compile(r"(?i)\bSENTINEL_[A-Z0-9_]*\b")
 
 

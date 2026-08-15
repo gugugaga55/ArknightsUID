@@ -66,6 +66,7 @@ from ArknightsUID.arknightsuid_account import (  # noqa: E402
     _format_accounts,
     _format_attendance,
     _format_player_info,
+    _safe_external_message,
 )
 from ArknightsUID.arknightsuid_help import HELP_TEXT  # noqa: E402
 
@@ -270,6 +271,41 @@ class AccountReplySafetyTest(unittest.TestCase):
         lowered = combined.lower()
         for field_name in SENSITIVE_FIELD_NAMES:
             self.assertNotIn(field_name, lowered)
+
+    def test_safe_external_message_redacts_extended_sensitive_fields(self) -> None:
+        # 验证扩充后的白名单能脱敏 access_token / refresh_token / password / secret
+        # 等常见高敏感字段，覆盖驼峰、下划线、空格变体。
+        raw = (
+            "登录异常 "
+            "access_token=SECRET_ACCESS "
+            "accessToken='SECRET_CAMEL' "
+            "refresh token=SECRET_REFRESH "
+            "refresh_token=SECRET_REFRESH_UNDER "
+            "password=SECRET_PWD "
+            "passwd:SECRET_PASSWD "
+            "secret=\"SECRET_SECRET\" "
+            "正常文本保留"
+        )
+        redacted = _safe_external_message(raw)
+
+        for leaked in (
+            "SECRET_ACCESS",
+            "SECRET_CAMEL",
+            "SECRET_REFRESH",
+            "SECRET_REFRESH_UNDER",
+            "SECRET_PWD",
+            "SECRET_PASSWD",
+            "SECRET_SECRET",
+            "access_token",
+            "accessToken",
+            "refresh_token",
+            "password",
+            "passwd",
+            "secret",
+        ):
+            self.assertNotIn(leaked, redacted)
+        self.assertIn("正常文本保留", redacted)
+        assert_reply_safe(self, redacted)
 
 
 if __name__ == "__main__":
