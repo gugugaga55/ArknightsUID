@@ -1,0 +1,54 @@
+<!--
+  ArknightsUID 渲染管线自检模板（自研）
+
+  此模板不展示任何业务数据，仅用于 P0 阶段验证：
+  - jinja2 能正确加载模板
+  - 字体 CSS 能正确注入
+  - Playwright 能截图 .container
+  - base64 图片能正确内联
+
+  P1 起会被真正的业务模板替换。
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <link rel="stylesheet" href="{{ font_css_url }}">
+    <style>
+        @import url("ark_base.css");
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div>
+                <div class="header-title">ArknightsUID</div>
+                <div class="header-subtitle">渲染管线自检</div>
+            </div>
+            <div class="mono header-subtitle">{{ ping_id }}</div>
+        </div>
+
+        <div class="row">
+            <span class="row-label">状态</span>
+            <span class="row-value accent">{{ status }}</span>
+        </div>
+        <div class="row">
+            <span class="row-label">引擎</span>
+            <span class="row-value mono">{{ engine }}</span>
+        </div>
+        <div class="row">
+            <span class="row-label">模板路径</span>
+            <span class="row-value mono">{{ template_path }}</span>
+        </div>
+        <div class="row">
+            <span class="row-label">时间戳</span>
+            <span class="row-value mono">{{ timestamp }}</span>
+        </div>
+
+        <div class="footer">
+            <span>ArknightsUID · P0 基础设施</span>
+            <span class="mono">{{ version }}</span>
+        </div>
+    </div>
+</body>
+</html>

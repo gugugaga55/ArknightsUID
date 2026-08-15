@@ -1,0 +1,141 @@
+/*
+ * ArknightsUID 基础样式（自研）
+ *
+ * 设计语言：明日方舟罗德岛工业风
+ *   - 深色背景 + 冷灰阶
+ *   - 橙色（#ff6a00）作为唯一强调色，呼应游戏 UI 的高亮色
+ *   - 细线条 + 棱角分明的卡片，避免圆滑"萌系"感
+ *   - 等宽字体用于数字，提升数据可读性
+ *
+ * 此文件定义 CSS 变量和基础组件类，所有 ark_*.html 模板都应 @import 此文件。
+ */
+
+:root {
+    /* 背景色阶 */
+    --bg-base: #0f1419;        /* 最深底色 */
+    --bg-card: #1a2028;        /* 卡片底色 */
+    --bg-elevated: #232a35;    /* 抬升层（标题栏、表头）*/
+    --bg-row-alt: #1e2530;     /* 列表隔行底色 */
+
+    /* 文字色阶 */
+    --text-primary: #e6ecf2;   /* 主要文字 */
+    --text-secondary: #9ba8b5; /* 次要文字（说明、单位）*/
+    --text-muted: #5f6d7c;     /* 弱化文字（时间戳、占位）*/
+
+    /* 强调色（罗德岛橙）*/
+    --accent: #ff6a00;
+    --accent-dim: #b24a00;
+    --accent-glow: rgba(255, 106, 0, 0.25);
+
+    /* 状态色 */
+    --rarity-6: #ff8c00;       /* 6 星 - 金 */
+    --rarity-5: #d9a34a;       /* 5 星 - 黄 */
+    --rarity-4: #8a73c4;       /* 4 星 - 紫 */
+    --rarity-3: #4a90d9;       /* 3 星 - 蓝 */
+    --success: #4caf50;
+    --warning: #ffb300;
+    --danger: #e53935;
+
+    /* 描边 */
+    --border: #2a3441;
+    --border-strong: #3d4a5c;
+
+    /* 间距 */
+    --space-xs: 4px;
+    --space-sm: 8px;
+    --space-md: 12px;
+    --space-lg: 20px;
+    --space-xl: 32px;
+
+    /* 圆角（克制使用，保持工业感）*/
+    --radius-sm: 2px;
+    --radius-md: 4px;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg-base);
+    color: var(--text-primary);
+    font-size: 14px;
+    line-height: 1.5;
+}
+
+/* 等宽数字（理智、UID、统计数字等）*/
+.mono {
+    font-family: "JetBrains Mono", "Consolas", monospace;
+    font-variant-numeric: tabular-nums;
+}
+
+/* === 容器：所有卡片渲染的根节点（Playwright 截图 .container）=== */
+.container {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);  /* 左侧橙色竖条是 ArknightsUID 标志 */
+    padding: var(--space-lg);
+    width: fit-content;
+    min-width: 400px;
+}
+
+/* === 标题栏 === */
+.header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: var(--space-md);
+    margin-bottom: var(--space-lg);
+    border-bottom: 1px solid var(--border);
+}
+
+.header-title {
+    font-size: 16px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}
+
+.header-subtitle {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+/* === 数据行 === */
+.row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-sm) 0;
+}
+
+.row + .row {
+    border-top: 1px solid var(--border);
+}
+
+.row-label {
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.row-value {
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.row-value.accent {
+    color: var(--accent);
+}
+
+/* === 页脚 === */
+.footer {
+    margin-top: var(--space-lg);
+    padding-top: var(--space-md);
+    border-top: 1px solid var(--border);
+    font-size: 11px;
+    color: var(--text-muted);
+    display: flex;
+    justify-content: space-between;
+}
