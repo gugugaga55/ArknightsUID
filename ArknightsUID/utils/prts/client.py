@@ -261,6 +261,8 @@ async def parse_page(title: str, *, follow_redirect: bool = True) -> PageWikitex
             return None
         parsed = data.get("parse") or {}
         wikitext_data = parsed.get("wikitext") or {}
+        if "*" not in wikitext_data:
+            return None
         wikitext = str(wikitext_data.get("*") or "")
         parsed_title = str(parsed.get("title") or current)
         redirect = _redirect_target(wikitext)
@@ -317,6 +319,7 @@ def _fields_from_template(lines: list[str]) -> dict[str, str]:
 
 def _clean_wiki_value(value: str) -> str:
     text = html.unescape(value or "")
+    text = text.replace("\xa0", " ")
     text = text.replace("<br/>", "\n").replace("<br />", "\n").replace("<br>", "\n")
     text = re.sub(r"</?(?:span|div|small|big|b|i|u|ruby|rt|rb)[^>]*>", "", text)
     text = re.sub(r"<references\s*/>", "", text)
