@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-import sys
-import types
 import unittest
 from dataclasses import dataclass
 from typing import Any
+
+from ArknightsUID.utils.skland import client as skland_client
 
 
 class RecordingLogger:
@@ -17,19 +17,6 @@ class RecordingLogger:
 
     def warning(self, message: str) -> None:
         self.warnings.append(message)
-
-
-logger_module = types.ModuleType("gsuid_core.logger")
-logger_module.logger = RecordingLogger()
-sv_module = types.ModuleType("gsuid_core.sv")
-sv_module.Plugins = lambda *args, **kwargs: None
-gsuid_core_module = types.ModuleType("gsuid_core")
-gsuid_core_module.__path__ = []
-sys.modules.setdefault("gsuid_core", gsuid_core_module)
-sys.modules["gsuid_core.logger"] = logger_module
-sys.modules["gsuid_core.sv"] = sv_module
-
-from ArknightsUID.utils.skland import client as skland_client  # noqa: E402
 
 
 @dataclass(slots=True)
@@ -171,6 +158,87 @@ class SklandClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, {"code": 0, "data": {"ok": True}})
         self.assertEqual(len(FakeAsyncClient.requests), 3)
         self.assertEqual(FakeAsyncClient.requests[1][1], skland_client.REFRESH_TOKEN_URL)
+
+    # === 补全接口（6 GET）请求形态测试 ===
+
+    async def test_get_user_info_hits_user_endpoint_without_query(self) -> None:
+        FakeAsyncClient.queue = [FakeResponse(200, {"code": 0, "data": {"nickname": "x"}})]
+
+        result = await skland_client.get_user_info(Credential())
+
+        self.assertEqual(result, {"code": 0, "data": {"nickname": "x"}})
+        method, url, _kwargs = FakeAsyncClient.requests[-1]
+        self.assertEqual(method, "GET")
+        self.assertIn("/api/v1/user", url)
+        # 无 params：url 不应拼 query string
+        self.assertNotIn("?", url)
+        self.assertNotIn("SECRET_CRED", url)
+
+    async def test_get_binding_hits_binding_endpoint_without_query(self) -> None:
+        FakeAsyncClient.queue = [FakeResponse(200, {"code": 0, "data": []})]
+
+        result = await skland_client.get_binding(Credential())
+
+        self.assertIsNotNone(result)
+        method, url, _kwargs = FakeAsyncClient.requests[-1]
+        self.assertEqual(method, "GET")
+        self.assertIn("/api/v1/game/player/binding", url)
+        self.assertNotIn("?", url)
+
+    async def test_ark_attendance_query_uses_get_with_uid_and_gameid(self) -> None:
+        FakeAsyncClient.queue = [FakeResponse(200, {"code": 0, "data": {}})]
+
+        await skland_client.ark_attendance_query(Credential())
+
+        method, url, _kwargs = FakeAsyncClient.requests[-1]
+        self.assertEqual(method, "GET")
+        self.assertIn("/api/v1/game/attendance", url)
+        # GET params 被 _query_string 按 key 排序拼进 url（client.py 签名链路）
+        self.assertIn("gameId=1", url)
+        self.assertIn("uid=123456789", url)
+
+    async def test_get_cultivate_character_passes_character_id(self) -> None:
+        FakeAsyncClient.queue = [FakeResponse(200, {"code": 0, "data": {}})]
+
+        await skland_client.get_cultivate_character(Credential(), "char_002_amiya")
+
+        method, url, _kwargs = FakeAsyncClient.requests[-1]
+        self.assertEqual(method, "GET")
+        self.assertIn("/api/v1/game/cultivate/character", url)
+        self.assertIn("characterId=char_002_amiya", url)
+
+    async def test_get_cultivate_info_hits_info_endpoint_without_query(self) -> None:
+        FakeAsyncClient.queue = [FakeResponse(200, {"code": 0, "data": {}})]
+
+        result = await skland_client.get_cultivate_info(Credential())
+
+        self.assertIsNotNone(result)
+        method, url, _kwargs = FakeAsyncClient.requests[-1]
+        self.assertEqual(method, "GET")
+        self.assertIn("/api/v1/game/cultivate/info", url)
+        self.assertNotIn("?", url)
+
+    async def test_get_cultivate_player_passes_uid(self) -> None:
+        FakeAsyncClient.queue = [FakeResponse(200, {"code": 0, "data": {}})]
+
+        await skland_client.get_cultivate_player(Credential())
+
+        method, url, _kwargs = FakeAsyncClient.requests[-1]
+        self.assertEqual(method, "GET")
+        self.assertIn("/api/v1/game/cultivate/player", url)
+        self.assertIn("uid=123456789", url)
+
+    async def test_get_cards_hits_cards_endpoint_without_query(self) -> None:
+        FakeAsyncClient.queue = [FakeResponse(200, {"code": 0, "data": {}})]
+
+        result = await skland_client.get_cards(Credential())
+
+        self.assertIsNotNone(result)
+        method, url, _kwargs = FakeAsyncClient.requests[-1]
+        self.assertEqual(method, "GET")
+        self.assertIn("/api/v1/game/cards", url)
+        # 与 get_cultivate_info 同型：cred 作用域，无 params，url 不拼 query string
+        self.assertNotIn("?", url)
 
 
 if __name__ == "__main__":

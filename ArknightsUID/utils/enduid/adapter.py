@@ -9,12 +9,16 @@ from gsuid_core.logger import logger
 
 try:
     from ArknightsUID.ArknightsUID.utils.skland import client as local_skland
+    from ArknightsUID.ArknightsUID.utils.skland import store as ark_store
 except ModuleNotFoundError:
     from ArknightsUID.utils.skland import client as local_skland
+    from ArknightsUID.utils.skland import store as ark_store
 
 # 复用 skland 模块定义的游戏 ID，避免双处维护导致的不一致。
 ARKNIGHTS_GAME_ID = local_skland.ARKNIGHTS_GAME_ID
-ENDUID_MISSING_HINT = "未检测到可用的 EndUID。请先将 EndUID 放入 gsuid_core/gsuid_core/plugins 并完成森空岛登录。"
+ENDUID_MISSING_HINT = (
+    "未找到明日方舟账号。请使用 ark绑定 登录，或安装 EndUID 复用其森空岛登录。"
+)
 
 
 @dataclass(slots=True)
@@ -27,6 +31,8 @@ class ArkCredential:
     token: str
     hg_token: str
     skland_user_id: str
+    # 森空岛账号 uid（抽卡 OAuth 链 u8_token_by_uid 用，非游戏内 UID）
+    record_id: str = ""
 
     @property
     def usable(self) -> bool:
@@ -115,6 +121,36 @@ def _enduid_requests() -> ModuleType | None:
 
 
 async def resolve_accounts(user_id: str, bot_id: str) -> AccountResolveResult:
+    # 自有 ArkUser/ArkBind 优先（脱离 EndUID 硬依赖）
+    local_users = await ark_store.list_local_accounts(user_id, bot_id)
+    if local_users:
+        uids: list[str] = []
+        accounts: list[ArkCredential] = []
+        seen: set[str] = set()
+        for row in local_users:
+            uid = (getattr(row, "uid", "") or "").strip()
+            if uid and uid not in uids:
+                uids.append(uid)
+            if not uid or uid in seen:
+                continue
+            seen.add(uid)
+            accounts.append(
+                ArkCredential(
+                    uid=uid,
+                    nickname=getattr(row, "nickname", "") or "",
+                    server_id=getattr(row, "server_id", "") or "1",
+                    cookie_status=getattr(row, "cookie_status", "") or "",
+                    cred=getattr(row, "cookie", "") or "",
+                    token=getattr(row, "token", "") or "",
+                    hg_token=getattr(row, "hg_token", "") or "",
+                    skland_user_id=getattr(row, "skland_user_id", "") or "",
+                    record_id=str(getattr(row, "record_id", "") or ""),
+                )
+            )
+        if accounts:
+            return AccountResolveResult(True, "", uids, accounts)
+
+    # EndUID 回退
     models = _enduid_models()
     if models is None:
         return AccountResolveResult(False, ENDUID_MISSING_HINT, [], [])
@@ -149,6 +185,7 @@ async def resolve_accounts(user_id: str, bot_id: str) -> AccountResolveResult:
                 token=_as_text(getattr(user, "token", "")),
                 hg_token=_as_text(getattr(user, "hg_token", "")),
                 skland_user_id=_as_text(getattr(user, "skland_user_id", "")),
+                record_id=_as_text(getattr(user, "record_id", "")),
             )
         )
 
@@ -231,4 +268,116 @@ async def ark_attendance(credential: ArkCredential) -> dict[str, Any] | str:
     response = await end_api.ark_attendance(credential.cred, credential.uid)
     if response is None:
         return "森空岛签到接口请求失败。"
+    return response
+
+
+async def fetch_user_info(credential: ArkCredential) -> dict[str, Any] | str:
+    response = await local_skland.get_user_info(credential)
+    if response is not None:
+        return response
+
+    requests = _enduid_requests()
+    if requests is None:
+        return "森空岛用户信息接口请求失败。"
+    end_api = requests.end_api
+    if not hasattr(end_api, "get_user_info"):
+        return "当前 EndUID 版本缺少明日方舟用户信息接口，请更新 EndUID。"
+    # 待 EndUID 实现后以其实测签名为准
+    response = await end_api.get_user_info(credential.cred)
+    if response is None:
+        return "森空岛用户信息接口请求失败。"
+    return response
+
+
+async def fetch_binding(credential: ArkCredential) -> dict[str, Any] | str:
+    response = await local_skland.get_binding(credential)
+    if response is not None:
+        return response
+
+    requests = _enduid_requests()
+    if requests is None:
+        return "森空岛绑定列表接口请求失败。"
+    end_api = requests.end_api
+    if not hasattr(end_api, "get_binding"):
+        return "当前 EndUID 版本缺少明日方舟绑定列表接口，请更新 EndUID。"
+    # 待 EndUID 实现后以其实测签名为准
+    response = await end_api.get_binding(credential.cred)
+    if response is None:
+        return "森空岛绑定列表接口请求失败。"
+    return response
+
+
+async def fetch_attendance_status(credential: ArkCredential) -> dict[str, Any] | str:
+    response = await local_skland.ark_attendance_query(credential)
+    if response is not None:
+        return response
+
+    requests = _enduid_requests()
+    if requests is None:
+        return "森空岛签到状态接口请求失败。"
+    end_api = requests.end_api
+    if not hasattr(end_api, "ark_attendance_query"):
+        return "当前 EndUID 版本缺少明日方舟签到状态接口，请更新 EndUID。"
+    # 待 EndUID 实现后以其实测签名为准
+    response = await end_api.ark_attendance_query(credential.cred, credential.uid)
+    if response is None:
+        return "森空岛签到状态接口请求失败。"
+    return response
+
+
+async def fetch_cultivate_character(
+    credential: ArkCredential, character_id: str
+) -> dict[str, Any] | str:
+    response = await local_skland.get_cultivate_character(credential, character_id)
+    if response is not None:
+        return response
+
+    requests = _enduid_requests()
+    if requests is None:
+        return "森空岛单干员养成材料接口请求失败。"
+    end_api = requests.end_api
+    if not hasattr(end_api, "get_cultivate_character"):
+        return "当前 EndUID 版本缺少明日方舟养成材料接口，请更新 EndUID。"
+    # 待 EndUID 实现后以其实测签名为准
+    response = await end_api.get_cultivate_character(
+        credential.cred, credential.uid, character_id
+    )
+    if response is None:
+        return "森空岛单干员养成材料接口请求失败。"
+    return response
+
+
+async def fetch_cultivate_info(credential: ArkCredential) -> dict[str, Any] | str:
+    response = await local_skland.get_cultivate_info(credential)
+    if response is not None:
+        return response
+
+    requests = _enduid_requests()
+    if requests is None:
+        return "森空岛养成通用信息接口请求失败。"
+    end_api = requests.end_api
+    if not hasattr(end_api, "get_cultivate_info"):
+        return "当前 EndUID 版本缺少明日方舟养成通用信息接口，请更新 EndUID。"
+    # 待 EndUID 实现后以其实测签名为准
+    response = await end_api.get_cultivate_info(credential.cred)
+    if response is None:
+        return "森空岛养成通用信息接口请求失败。"
+    return response
+
+
+async def fetch_cultivate_player(credential: ArkCredential) -> dict[str, Any] | str:
+    response = await local_skland.get_cultivate_player(credential)
+    if response is not None:
+        return response
+
+    requests = _enduid_requests()
+    if requests is None:
+        return "森空岛玩家养成进度接口请求失败。"
+    end_api = requests.end_api
+    if not hasattr(end_api, "get_cultivate_player"):
+        return "当前 EndUID 版本缺少明日方舟养成进度接口，请更新 EndUID。"
+    # 待 EndUID 实现后以其实测签名为准
+    response = await end_api.get_cultivate_player(credential.cred, credential.uid)
+    if response is None:
+        return "森空岛玩家养成进度接口请求失败。"
     return response

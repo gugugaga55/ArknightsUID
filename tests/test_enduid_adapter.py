@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-import sys
 import types
 import unittest
 from typing import Any
+from unittest import mock
+
+from ArknightsUID.utils.enduid import adapter as enduid_adapter
 
 
 class RecordingLogger:
@@ -16,39 +18,6 @@ class RecordingLogger:
 
     def warning(self, message: str) -> None:
         self.warnings.append(message)
-
-
-def _install_gsuid_core_stubs() -> RecordingLogger:
-    logger = RecordingLogger()
-    logger_module = types.ModuleType("gsuid_core.logger")
-    logger_module.logger = logger
-
-    class FakeSV:
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            pass
-
-        def on_command(self, *args: Any, **kwargs: Any) -> Any:
-            return lambda func: func
-
-        def on_fullmatch(self, *args: Any, **kwargs: Any) -> Any:
-            return lambda func: func
-
-    sv_module = types.ModuleType("gsuid_core.sv")
-    sv_module.Plugins = lambda *args, **kwargs: None
-    sv_module.SV = FakeSV
-
-    gsuid_core_module = types.ModuleType("gsuid_core")
-    gsuid_core_module.__path__ = []
-
-    sys.modules.setdefault("gsuid_core", gsuid_core_module)
-    sys.modules["gsuid_core.logger"] = logger_module
-    sys.modules["gsuid_core.sv"] = sv_module
-    return logger
-
-
-_install_gsuid_core_stubs()
-
-from ArknightsUID.utils.enduid import adapter as enduid_adapter  # noqa: E402
 
 
 class Row:
@@ -111,6 +80,15 @@ class EnduidAdapterTest(unittest.IsolatedAsyncioTestCase):
         enduid_adapter.logger = self.logger
         FakeEndBind.bind = None
         FakeEndUser.users = []
+        # resolve_accounts 改造后先查自有 ArkUser 表；本测试套件聚焦 EndUID
+        # 回退分支，故把自有账号置空，避免触碰真实数据库 session。
+        self._local_patcher = mock.patch.object(
+            enduid_adapter.ark_store,
+            "list_local_accounts",
+            new=mock.AsyncMock(return_value=[]),
+        )
+        self._local_patcher.start()
+        self.addCleanup(self._local_patcher.stop)
 
     def tearDown(self) -> None:
         enduid_adapter.logger = self.original_logger
@@ -139,7 +117,7 @@ class EnduidAdapterTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(result.installed)
         self.assertEqual(result.uids, [])
         self.assertEqual(result.accounts, [])
-        self.assertIn("未检测到可用的 EndUID", result.reason)
+        self.assertIn("ark绑定", result.reason)
 
     async def test_resolve_accounts_handles_bound_uids_without_credentials(self) -> None:
         self.use_fake_models()

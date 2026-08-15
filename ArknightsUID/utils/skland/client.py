@@ -27,8 +27,12 @@ from ..api.request_util import (
     ARK_SIGN_VNAME,
     IOS_USER_AGENT,
     SIGN_VNAME,
+    SKLAND_APP_PLATFORM,
+    SKLAND_APP_USER_AGENT,
+    SKLAND_APP_VNAME,
     RespCode,
     get_device_id,
+    get_skland_app_headers,
 )
 
 if TYPE_CHECKING:
@@ -42,6 +46,15 @@ API_VERSION = "v1"
 REFRESH_TOKEN_URL = f"{MAIN_URL}api/{API_VERSION}/auth/refresh"
 GAME_PLAYER_INFO_URL = f"{MAIN_URL}api/{API_VERSION}/game/player/info"
 GAME_ATTENDANCE_URL = f"{MAIN_URL}api/{API_VERSION}/game/attendance"
+
+# 补全接口：user/binding/cultivate 系列均为 GET，套 _signed_request。
+USER_INFO_URL = f"{MAIN_URL}api/{API_VERSION}/user"
+GAME_BINDING_URL = f"{MAIN_URL}api/{API_VERSION}/game/player/binding"
+# attendance 状态查询复用签到端点（GET 变体，与 POST ark_attendance 同 URL 不同方法）。
+CULTIVATE_CHARACTER_URL = f"{MAIN_URL}api/{API_VERSION}/game/cultivate/character"
+CULTIVATE_INFO_URL = f"{MAIN_URL}api/{API_VERSION}/game/cultivate/info"
+CULTIVATE_PLAYER_URL = f"{MAIN_URL}api/{API_VERSION}/game/cultivate/player"
+GAME_CARDS_URL = f"{MAIN_URL}api/{API_VERSION}/game/cards"
 
 # 明日方舟在 Skland 的"游戏 ID"实际是 channelMasterId（官服渠道 ID）。
 # 这个值跟 EndUID 的 ENDFIELD_GAME_ID=3 并存于同一套森空岛账号体系。
@@ -113,6 +126,7 @@ def _base_headers(
     game_id: int | None = None,
     did: str = "",
     accept_encoding: str = "gzip",
+    extra_headers: dict[str, str] | None = None,
 ) -> dict[str, str]:
     headers = {
         "User-Agent": user_agent,
@@ -127,6 +141,8 @@ def _base_headers(
     }
     if uid and game_id is not None:
         headers["sk-game-role"] = f"{platform}_{uid}_{game_id}"
+    if extra_headers:
+        headers.update(extra_headers)
     return headers
 
 
@@ -190,6 +206,7 @@ async def _signed_request(
     user_agent: str = ANDROID_USER_AGENT,
     accept_encoding: str = "gzip",
     use_device_id: bool = False,
+    extra_headers: dict[str, str] | None = None,
 ) -> dict[str, Any] | None:
     """签名请求主流程。
 
@@ -242,6 +259,7 @@ async def _signed_request(
             game_id=game_id,
             did=did,
             accept_encoding=accept_encoding,
+            extra_headers=extra_headers,
         )
         request_url = url
         if method == "GET" and query:
@@ -313,4 +331,111 @@ async def ark_attendance(credential: "ArkCredential") -> dict[str, Any] | None:
         vname=ARK_SIGN_VNAME,
         user_agent=IOS_USER_AGENT,
         accept_encoding="gzip",
+    )
+
+
+async def get_user_info(credential: "ArkCredential") -> dict[str, Any] | None:
+    """获取森空岛用户基础信息（cred 作用域，不带角色头）。
+
+    签名组合照搬 EndUID get_user_info：platform=SKLAND_APP_PLATFORM(1) /
+    vName=SKLAND_APP_VNAME / SKLAND_APP_USER_AGENT + get_skland_app_headers
+    风控头（language/os/nId/vCode/channel/manufacturer）+ use_device_id。
+    """
+    return await _signed_request(
+        credential,
+        url=USER_INFO_URL,
+        method="GET",
+        use_device_id=True,
+        platform=SKLAND_APP_PLATFORM,
+        vname=SKLAND_APP_VNAME,
+        user_agent=SKLAND_APP_USER_AGENT,
+        extra_headers=get_skland_app_headers(SKLAND_APP_USER_AGENT),
+    )
+
+
+async def get_binding(credential: "ArkCredential") -> dict[str, Any] | None:
+    """获取玩家绑定列表（cred 作用域，不带角色头）。
+
+    签名组合与 EndUID get_binding 一致：默认 platform=3 / SIGN_VNAME /
+    Android UA + use_device_id=True（带 dId 设备指纹）。
+    """
+    return await _signed_request(
+        credential,
+        url=GAME_BINDING_URL,
+        method="GET",
+        use_device_id=True,
+    )
+
+
+async def ark_attendance_query(credential: "ArkCredential") -> dict[str, Any] | None:
+    """查询明日方舟签到状态（GET 变体，与 POST ark_attendance 同端点不同方法）。
+
+    签名参数与 POST ark_attendance 保持一致（platform=1 / vName=ARK_SIGN_VNAME
+    / iOS UA），params 带 uid+gameId（POST body 同款）。
+    实测 code=0（2026-08-14 真实凭据 联调）。
+    """
+    return await _signed_request(
+        credential,
+        url=GAME_ATTENDANCE_URL,
+        method="GET",
+        uid=credential.uid,
+        game_id=ARKNIGHTS_CHANNEL_OFFICIAL,
+        params={"uid": credential.uid, "gameId": ARKNIGHTS_CHANNEL_OFFICIAL},
+        platform=1,
+        vname=ARK_SIGN_VNAME,
+        user_agent=IOS_USER_AGENT,
+        accept_encoding="gzip",
+    )
+
+
+async def get_cultivate_character(
+    credential: "ArkCredential", character_id: str
+) -> dict[str, Any] | None:
+    """查询单干员养成材料（按 characterId，绑定角色）。"""
+    return await _signed_request(
+        credential,
+        url=CULTIVATE_CHARACTER_URL,
+        method="GET",
+        uid=credential.uid,
+        game_id=ARKNIGHTS_CHANNEL_OFFICIAL,
+        params={"characterId": character_id},
+    )
+
+
+async def get_cultivate_info(credential: "ArkCredential") -> dict[str, Any] | None:
+    """查询干员/材料通用信息（cred 作用域，接近静态）。
+
+    签名同 get_binding/get_player_info（zonai.skland.com GET 同源默认签名）。
+    实测 code=0（2026-08-14 真实凭据 联调；EndUID 无此接口，本插件首发验证）。
+    """
+    return await _signed_request(
+        credential,
+        url=CULTIVATE_INFO_URL,
+        method="GET",
+    )
+
+
+async def get_cultivate_player(credential: "ArkCredential") -> dict[str, Any] | None:
+    """查询玩家养成进度（按 uid，绑定角色）。"""
+    return await _signed_request(
+        credential,
+        url=CULTIVATE_PLAYER_URL,
+        method="GET",
+        uid=credential.uid,
+        game_id=ARKNIGHTS_CHANNEL_OFFICIAL,
+        params={"uid": credential.uid},
+    )
+
+
+async def get_cards(credential: "ArkCredential") -> dict[str, Any] | None:
+    """查询游戏卡片/成就信息（cred 作用域，不带角色头）。
+
+    对应 gxy12345 sklandApi.js 的 cards 接口（与 cal_info 同型：仅 URL，无 query/body）。
+    签名组合同 get_cultivate_info（zonai.skland.com GET 同源默认签名）。
+    EndUID 无此接口实现，真实联调待验证响应结构。
+    """
+    return await _signed_request(
+        credential,
+        url=GAME_CARDS_URL,
+        method="GET",
     )

@@ -45,6 +45,8 @@ class ArkUser(User, table=True):
 
     # 游戏 UID
     uid: str = Field(default="", title="明日方舟 UID")
+    # 角色昵称（登录时从森空岛 binding 的 defaultRole.nickname 写入）
+    nickname: str = Field(default="", title="昵称")
     # 森空岛 Cred（User 基类已有 cookie 字段，这里保留同步一份做查询索引）
     cookie: str = Field(default="", title="森空岛 Cred")
 
@@ -94,6 +96,25 @@ class ArkUser(User, table=True):
         result = await session.execute(select(cls).where(*filters))
         data = result.scalars().all()
         return data[0] if data else None
+
+    @classmethod
+    @with_session
+    async def delete_by_user(
+        cls,
+        session: AsyncSession,
+        user_id: str,
+        bot_id: str,
+        uid: str = "",
+    ) -> int:
+        """删除该用户的 ArkUser 行；uid 非空则只删指定 uid 行。返回删除行数。"""
+        stmt = select(cls).where(cls.user_id == user_id, cls.bot_id == bot_id)
+        if uid:
+            stmt = stmt.where(cls.uid == uid)
+        result = await session.execute(stmt)
+        rows = result.scalars().all()
+        for row in rows:
+            await session.delete(row)
+        return len(rows)
 
 
 class ArkBind(Bind, table=True):
