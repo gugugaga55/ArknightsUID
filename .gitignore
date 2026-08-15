@@ -23,3 +23,11 @@ data/
 
 # 预览脚本下载的 CDN 资产缓存（头像/技能图标等，不入库）
 docs/design/.assets/
+
+# 真实联调产物（含账号游戏数据，不入库）
+tools/smoke_result.json
+tools/rogue_dump.json
+tools/building_preview.png
+
+# 内部规划文档（本地保留，不入库）
+docs/ROADMAP.md

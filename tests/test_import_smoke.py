@@ -15,6 +15,15 @@ from pathlib import Path
 # 在未安装完整运行时的环境（如纯插件 CI）中跳过，避免无意义的失败。
 _FASTAPI_AVAILABLE = importlib.util.find_spec("fastapi") is not None
 
+# 该测试还依赖 gsuid_core 的 TEST_DATA_ROOT_ENV 数据目录隔离机制；
+# core 若移除该属性（如 0.10.5），则跳过（避免假失败，而非 getattr 降级后撞 config.json 断言）。
+try:
+    import gsuid_core.data_store as _ds_for_check  # noqa: E402
+
+    _DATA_ROOT_ISOLATION_SUPPORTED = hasattr(_ds_for_check, "TEST_DATA_ROOT_ENV")
+except Exception:
+    _DATA_ROOT_ISOLATION_SUPPORTED = False
+
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 CORE_ROOT = Path(__file__).resolve().parents[4]
@@ -25,6 +34,9 @@ REQUIRED_MODULES = [
     "ArknightsUID",
     "ArknightsUID.utils.enduid.adapter",
     "ArknightsUID.arknightsuid_account",
+    "ArknightsUID.arknightsuid_bind",
+    "ArknightsUID.arknightsuid_notify",
+    "ArknightsUID.arknightsuid_rogue",
     "ArknightsUID.arknightsuid_wiki",
     "ArknightsUID.arknightsuid_help",
     "ArknightsUID.utils.skland.client",
@@ -78,7 +90,9 @@ IMPORT_SCRIPT = textwrap.dedent(
         json.dumps(
             {
                 "data_root": str(data_root),
-                "env_name": data_store.TEST_DATA_ROOT_ENV,
+                "env_name": getattr(
+                    data_store, "TEST_DATA_ROOT_ENV", "GSUID_CORE_TEST_DATA_ROOT"
+                ),
                 "imported": imported,
                 "real_data_root": str(real_data_root),
                 "runtime_paths": {
@@ -128,8 +142,8 @@ class RealRuntimeImportSmokeTest(unittest.TestCase):
         self.fail(msg)
 
     @unittest.skipUnless(
-        _FASTAPI_AVAILABLE,
-        "需要完整 gsuid_core 运行时（fastapi 等依赖）才能跑真实导入冒烟测试",
+        _FASTAPI_AVAILABLE and _DATA_ROOT_ISOLATION_SUPPORTED,
+        "需要完整 gsuid_core 运行时且支持 TEST_DATA_ROOT_ENV 数据目录隔离",
     )
     def test_required_modules_import_with_real_gscore_runtime(self) -> None:
         with tempfile.TemporaryDirectory(prefix="arknightsuid-gscore-") as tmp:
