@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 import time
-import types
 import unittest
 import tempfile
 from pathlib import Path
@@ -35,21 +33,6 @@ class RecordingLogger:
     def warning(self, message: str) -> None:
         self.warnings.append(message)
 
-
-_module_temp = tempfile.TemporaryDirectory()
-
-logger_module = types.ModuleType("gsuid_core.logger")
-logger_module.logger = RecordingLogger()
-data_store_module = types.ModuleType("gsuid_core.data_store")
-data_store_module.get_res_path = lambda name: Path(_module_temp.name) / name
-sv_module = types.ModuleType("gsuid_core.sv")
-sv_module.Plugins = lambda *args, **kwargs: None
-gsuid_core_module = types.ModuleType("gsuid_core")
-gsuid_core_module.__path__ = []
-sys.modules.setdefault("gsuid_core", gsuid_core_module)
-sys.modules["gsuid_core.logger"] = logger_module
-sys.modules["gsuid_core.data_store"] = data_store_module
-sys.modules["gsuid_core.sv"] = sv_module
 
 from ArknightsUID.utils.prts import client as prts_client  # noqa: E402
 

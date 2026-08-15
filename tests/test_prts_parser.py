@@ -1,77 +1,20 @@
 from __future__ import annotations
 
+import calendar
 import json
-import sys
 import time
-import types
 import unittest
 import tempfile
 from pathlib import Path
 from typing import Any
 
-
-class RecordingLogger:
-    def __init__(self) -> None:
-        self.debugs: list[str] = []
-        self.warnings: list[str] = []
-
-    def debug(self, message: str) -> None:
-        self.debugs.append(message)
-
-    def warning(self, message: str) -> None:
-        self.warnings.append(message)
-
-
-def _install_gsuid_core_stubs() -> tempfile.TemporaryDirectory[str]:
-    class FakeSV:
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            pass
-
-        def on_command(self, *args: Any, **kwargs: Any) -> Any:
-            return lambda func: func
-
-        def on_fullmatch(self, *args: Any, **kwargs: Any) -> Any:
-            return lambda func: func
-
-    temp_root = tempfile.TemporaryDirectory()
-    bot_module = types.ModuleType("gsuid_core.bot")
-    bot_module.Bot = object
-    models_module = types.ModuleType("gsuid_core.models")
-    models_module.Event = object
-    logger_module = types.ModuleType("gsuid_core.logger")
-    logger_module.logger = RecordingLogger()
-    data_store_module = types.ModuleType("gsuid_core.data_store")
-    data_store_module.get_res_path = lambda name: Path(temp_root.name) / name
-    help_module = types.ModuleType("gsuid_core.help")
-    help_module.__path__ = []
-    help_utils_module = types.ModuleType("gsuid_core.help.utils")
-    help_utils_module.register_help = lambda *args, **kwargs: None
-    sv_module = types.ModuleType("gsuid_core.sv")
-    sv_module.Plugins = lambda *args, **kwargs: None
-    sv_module.SV = FakeSV
-
-    gsuid_core_module = types.ModuleType("gsuid_core")
-    gsuid_core_module.__path__ = []
-    sys.modules.setdefault("gsuid_core", gsuid_core_module)
-    sys.modules["gsuid_core.bot"] = bot_module
-    sys.modules["gsuid_core.models"] = models_module
-    sys.modules["gsuid_core.logger"] = logger_module
-    sys.modules["gsuid_core.data_store"] = data_store_module
-    sys.modules["gsuid_core.help"] = help_module
-    sys.modules["gsuid_core.help.utils"] = help_utils_module
-    sys.modules["gsuid_core.sv"] = sv_module
-    return temp_root
-
-
-_STUB_TEMP = _install_gsuid_core_stubs()
-
-from ArknightsUID.arknightsuid_wiki import (  # noqa: E402
+from ArknightsUID.arknightsuid_wiki import (
     _clip,
     _format_enemy,
     _format_page,
     _format_stage,
 )
-from ArknightsUID.utils.prts import client as prts_client  # noqa: E402
+from ArknightsUID.utils.prts import client as prts_client
 
 
 class FakeResponse:
@@ -305,6 +248,346 @@ class PRTSParserTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cache_file.parent, self.cache_root)
         self.assertNotIn("..", cache_file.name)
         self.assertEqual(len(FakeAsyncClient.requests), 1)
+
+    # === 干员富解析 + 突袭差异 + query_operator（fixture/monkeypatch 驱动）===
+
+    def _fixture(self, name: str) -> str:
+        return (Path(__file__).parent / "fixtures" / name).read_text(encoding="utf-8")
+
+    async def test_parse_operator_extracts_skills_talents_mastery(self) -> None:
+        op = prts_client.parse_operator_wikitext(
+            prts_client.PageWikitext(title="银灰", wikitext=self._fixture("silverash.wikitext"))
+        )
+        self.assertIsNotNone(op)
+        assert op is not None
+        # meta（rarity 在 PRTS 存 0-5，5 = 6 星）
+        self.assertEqual(op.name, "银灰")
+        self.assertEqual(op.rarity, "5")
+        self.assertEqual(op.profession, "近卫")
+        self.assertEqual(op.branch, "领主")
+        self.assertIn("谢拉格", op.faction)
+        # 3 技能，每个 10 级（1-7 + 专1-3）+ 3 组专精材料
+        self.assertEqual(len(op.skills), 3)
+        for skill in op.skills:
+            self.assertEqual(len(skill.levels), 10)
+            self.assertEqual(len(skill.mastery_costs), 3)
+        # 真银斩逐级数值
+        skill3 = op.skills[2]
+        self.assertEqual(skill3.name, "真银斩")
+        self.assertEqual(skill3.levels[0].sp_cost, "90")
+        self.assertEqual(skill3.levels[0].duration, "20")
+        self.assertEqual(skill3.levels[6].duration, "26")  # L7
+        self.assertEqual(skill3.levels[7].duration, "27")  # 专1
+        # 专3 材料含双极纳米片
+        mastery3 = skill3.mastery_costs[2]
+        self.assertEqual(mastery3.mastery, "专3")
+        self.assertIn("双极纳米片", " ".join(mastery3.materials))
+        # 2 天赋
+        self.assertEqual(len(op.talents), 2)
+        self.assertEqual(op.talents[1].name, "鹰眼视觉")
+
+    async def test_build_assault_diffs_filters_noise_and_computes_deltas(self) -> None:
+        # 构造普通/突袭字段：核心机制有数值差，噪音/失效字段存在，情报在描述
+        normal = {
+            "部署上限": "8", "初始COST": "10", "目标点耐久": "3",
+            "部署费用": "18→20",
+            "演习消耗": "1", "关卡难度": "NORMAL", "推荐等级": "LV.10",
+        }
+        assault = {
+            "部署上限": "6", "初始COST": "12", "目标点耐久": "3",
+            "部署费用": "20→22",
+            "演习消耗": "3", "关卡难度": "FOUR_STAR", "推荐等级": "-",
+            "情报": "敌方生命/攻击/防御提升至120%",
+        }
+        diffs = prts_client._build_assault_diffs(normal, assault)
+        # 核心数值差异 → 算差值
+        self.assertTrue(any("部署上限" in d and "8→6" in d and "-2" in d for d in diffs))
+        self.assertTrue(any("初始COST" in d and "10→12" in d and "+2" in d for d in diffs))
+        # 值自带→（部署费用 18→20）：避免 18→20→20→22 双箭头
+        cost = [d for d in diffs if "部署费用" in d]
+        self.assertEqual(len(cost), 1)
+        self.assertIn("18→20，突袭改为 20→22", cost[0])
+        # 失效/噪音字段 → 过滤（演习消耗已失效、关卡难度/推荐等级是描述噪音）
+        self.assertFalse(any("演习消耗" in d for d in diffs))
+        self.assertFalse(any("关卡难度" in d for d in diffs))
+        self.assertFalse(any("推荐等级" in d for d in diffs))
+        # 相同字段（目标点耐久）→ 不列
+        self.assertFalse(any("目标点耐久" in d for d in diffs))
+        # 情报 → 走 assault_info，不在此重复
+        self.assertFalse(any("情报" in d for d in diffs))
+
+    async def test_parse_stage_assault_info_carries_enemy_buff(self) -> None:
+        # 1-7 突袭差异是"敌人属性提升至120%"，在情报描述里，非 COST/部署上限等数值变化
+        stage = prts_client.parse_stage_wikitext(
+            prts_client.PageWikitext(
+                title="1-7 暴君", wikitext=self._fixture("stage_1-7.wikitext")
+            )
+        )
+        self.assertIsNotNone(stage)
+        assert stage is not None
+        self.assertEqual(stage.code, "1-7")
+        # 突袭差异由 assault_info（情报）承载
+        self.assertTrue(stage.assault_info)
+        self.assertIn("120", stage.assault_info)
+        # 1-7 无数值机制差异，assault_diffs 可为空；assault_fields 保留突袭模板全字段
+        self.assertTrue(stage.assault_fields)
+
+    async def test_material_to_text_extracts_name_and_count(self) -> None:
+        # 单个材料消耗模板
+        self.assertEqual(
+            prts_client._material_to_text("{{材料消耗|龙门币|3w}}"),
+            ["龙门币 ×3w"],
+        )
+        # 多个材料（空格分隔）
+        self.assertEqual(
+            prts_client._material_to_text(
+                "{{材料消耗|技巧概要·卷1|5}} {{材料消耗|酯原料|6}}"
+            ),
+            ["技巧概要·卷1 ×5", "酯原料 ×6"],
+        )
+        # 空值
+        self.assertEqual(prts_client._material_to_text(""), [])
+        # 兜底：无材料消耗模板时走通用拆分
+        self.assertEqual(
+            prts_client._material_to_text("材料A，材料B"), ["材料A", "材料B"]
+        )
+
+    async def test_query_operator_falls_back_to_search_when_direct_miss(self) -> None:
+        minimal_op = (
+            "{{CharinfoV2\n|干员名=银灰\n|稀有度=5\n|职业=近卫\n}}\n"
+            "{{技能2\n|技能名=技能一\n|技能1描述=描述\n|技能1消耗=10\n}}"
+        )
+
+        async def fake_api(params: dict[str, Any], *, cache_seconds: int = 86400) -> dict[str, Any]:
+            if params.get("action") == "query":
+                return {"query": {"search": [{"title": "银灰"}]}}
+            page = params.get("page")
+            if page == "银灰简写":
+                return {"parse": {"title": "银灰简写", "wikitext": {"*": "不是干员页"}}}
+            if page == "银灰":
+                return {"parse": {"title": "银灰", "wikitext": {"*": minimal_op}}}
+            return {}
+
+        prts_client._api = fake_api  # type: ignore[assignment]
+
+        op = await prts_client.query_operator("银灰简写")
+        self.assertIsNotNone(op)
+        assert op is not None
+        self.assertEqual(op.name, "银灰")
+        self.assertEqual(len(op.skills), 1)
+
+    async def test_query_operator_returns_none_for_non_operator_page(self) -> None:
+        async def fake_api(params: dict[str, Any], *, cache_seconds: int = 86400) -> dict[str, Any]:
+            if params.get("action") == "query":
+                return {"query": {"search": []}}
+            return {"parse": {"title": "x", "wikitext": {"*": "普通词条，无 CharinfoV2"}}}
+
+        prts_client._api = fake_api  # type: ignore[assignment]
+        self.assertIsNone(await prts_client.query_operator("不存在的干员"))
+
+    async def test_parse_operator_base_skill_ignores_grade_key(self) -> None:
+        # 黑角型页面：后勤技能模板含 等级 修饰键，不得当成技能名
+        wikitext = (
+            "{{CharinfoV2\n|干员名=黑角\n|稀有度=1\n|职业=重装\n}}\n"
+            "{{后勤技能\n"
+            "|后勤技能1-1=仓库整备·β\n|后勤技能1-1阶段=精英0\n"
+            "|后勤技能2-1=订单管理·α\n|后勤技能2-1阶段=精英0\n|后勤技能2-1等级=30级\n"
+            "}}"
+        )
+        op = prts_client.parse_operator_wikitext(
+            prts_client.PageWikitext(title="黑角", wikitext=wikitext)
+        )
+
+        self.assertIsNotNone(op)
+        assert op is not None
+        self.assertEqual(len(op.base_skills), 2)
+        self.assertEqual(op.base_skills[0].name, "仓库整备·β")
+        self.assertEqual(op.base_skills[0].unlock, "精英0")
+        # 等级并入 unlock，"30级" 不产生第三个技能条目
+        self.assertEqual(op.base_skills[1].name, "订单管理·α")
+        self.assertEqual(op.base_skills[1].unlock, "精英0 30级")
+        self.assertNotIn("30级", [b.name for b in op.base_skills])
+
+    async def test_query_base_skill_cleans_cargo_description(self) -> None:
+        async def fake_api(params: dict[str, Any], *, cache_seconds: int = 86400) -> dict[str, Any]:
+            self.assertEqual(params["action"], "cargoquery")
+            self.assertEqual(params["tables"], "building_skill2")
+            self.assertIn("测试技能", params["where"])
+            return {
+                "cargoquery": [
+                    {
+                        "title": {
+                            "name": "测试技能",
+                            "room": "贸易站",
+                            "icon": "bskill_tra_spd",
+                            "description": (
+                                "进驻贸易站时，订单获取效率"
+                                '<span style="color:#0098DC;">+15%</span>'
+                            ),
+                        }
+                    }
+                ]
+            }
+
+        prts_client._api = fake_api  # type: ignore[assignment]
+
+        effect = await prts_client.query_base_skill("测试技能")
+
+        self.assertEqual(effect, ("贸易站", "进驻贸易站时，订单获取效率+15%"))
+
+    async def test_query_base_skill_handles_missing_and_empty(self) -> None:
+        async def empty_api(params: dict[str, Any], *, cache_seconds: int = 86400) -> dict[str, Any]:
+            return {"cargoquery": []}
+
+        prts_client._api = empty_api  # type: ignore[assignment]
+        self.assertIsNone(await prts_client.query_base_skill("无此技能"))
+
+        async def none_api(params: dict[str, Any], *, cache_seconds: int = 86400) -> dict[str, Any] | None:
+            return None
+
+        prts_client._api = none_api  # type: ignore[assignment]
+        self.assertIsNone(await prts_client.query_base_skill("网络失败"))
+        self.assertIsNone(await prts_client.query_base_skill("  "))
+
+    async def test_query_operator_fills_base_skill_effects(self) -> None:
+        operator_wikitext = (
+            "{{CharinfoV2\n|干员名=银灰\n|稀有度=5\n|职业=近卫\n}}\n"
+            "{{后勤技能\n|后勤技能1-1=喀兰贸易·α\n|后勤技能1-1阶段=精英0\n"
+            "|后勤技能1-2=喀兰之主\n|后勤技能1-2阶段=精英2\n}}\n"
+            "{{技能2\n|技能名=技能一\n|技能1描述=描述\n}}"
+        )
+
+        async def fake_api(params: dict[str, Any], *, cache_seconds: int = 86400) -> dict[str, Any]:
+            if params.get("action") == "cargoquery":
+                name = params["where"].split("='")[1].split("'")[0]
+                desc = {
+                    "喀兰贸易·α": "进驻贸易站时，订单获取效率+15%",
+                    "喀兰之主": "进驻贸易站时，订单获取效率+20%",
+                }[name]
+                return {"cargoquery": [{"title": {"name": name, "room": "贸易站", "description": desc}}]}
+            return {"parse": {"title": "银灰", "wikitext": {"*": operator_wikitext}}}
+
+        prts_client._api = fake_api  # type: ignore[assignment]
+
+        op = await prts_client.query_operator("银灰")
+
+        self.assertIsNotNone(op)
+        assert op is not None
+        self.assertEqual(len(op.base_skills), 2)
+        self.assertEqual(op.base_skills[0].room, "贸易站")
+        self.assertIn("+15%", op.base_skills[0].description)
+        self.assertEqual(op.base_skills[1].unlock, "精英2")
+        self.assertIn("+20%", op.base_skills[1].description)
+
+    # === 活动日历（SMW ask + Gameinfo LST）===
+
+    def test_parse_smw_raw_date_beijing_epoch(self) -> None:
+        text, ts = prts_client._parse_smw_raw_date("1/2026/8/14/19/59/0/0")
+        self.assertEqual(text, "2026-08-14 19:59")
+        # 北京时间 19:59 = UTC 11:59，epoch 用 timegm 动态核算
+        expected = calendar.timegm((2026, 8, 14, 11, 59, 0, 0, 0))
+        self.assertAlmostEqual(ts, float(expected), delta=1)
+        # 非法格式
+        self.assertEqual(prts_client._parse_smw_raw_date("garbage"), ("", 0.0))
+        self.assertEqual(prts_client._parse_smw_raw_date(""), ("", 0.0))
+
+    def test_parse_lst_sections_extracts_labeled_values(self) -> None:
+        wikitext = (
+            "*当前版本：<section class=\"lst\" begin=cnver />2.6.01"
+            "<section class=\"lst\" end=cnver />"
+            "*开始：<section class=\"lst\" begin=cnmaintstart />2026-08-20 10:00"
+            " <section class=\"lst\" end=cnmaintstart />"
+            "*空值：<section class=\"lst\" begin=empty />  "
+            "<section class=\"lst\" end=empty />"
+        )
+        sections = prts_client.parse_lst_sections(wikitext)
+        self.assertEqual(sections["cnver"], "2.6.01")
+        self.assertEqual(sections["cnmaintstart"], "2026-08-20 10:00")
+        self.assertNotIn("empty", sections)
+
+    async def test_query_activities_parses_smw_ask_response(self) -> None:
+        async def fake_api(params: dict[str, Any], *, cache_seconds: int = 86400) -> dict[str, Any]:
+            self.assertEqual(params["action"], "ask")
+            self.assertIn("分类:有活动信息的页面", params["query"])
+            return {
+                "query": {
+                    "results": {
+                        "活动A": {
+                            "printouts": {
+                                "活动开始时间": [{"raw": "1/2099/8/1/4/0/0/0"}],
+                                "活动结束时间": [{"raw": "1/2099/8/21/19/59/0/0"}],
+                            }
+                        },
+                        "已结束活动": {
+                            "printouts": {
+                                "活动开始时间": [{"raw": "1/2020/1/1/4/0/0/0"}],
+                                "活动结束时间": [{"raw": "1/2020/1/7/19/59/0/0"}],
+                            }
+                        },
+                        "无结束时间": {"printouts": {"活动开始时间": []}},
+                    }
+                }
+            }
+
+        prts_client._api = fake_api  # type: ignore[assignment]
+
+        activities = await prts_client.query_activities()
+
+        # 已结束（2020）与无结束时间条目被剔除，仅剩未来活动
+        self.assertEqual(len(activities), 1)
+        act = activities[0]
+        self.assertEqual(act.title, "活动A")
+        self.assertEqual(act.start, "2099-08-01 04:00")
+        self.assertEqual(act.end, "2099-08-21 19:59")
+        self.assertGreater(act.end_ts, act.start_ts)
+
+    async def test_query_gacha_pools_uses_pool_name(self) -> None:
+        async def fake_api(params: dict[str, Any], *, cache_seconds: int = 86400) -> dict[str, Any]:
+            self.assertIn("国服寻访", params["query"])
+            return {
+                "query": {
+                    "results": {
+                        "卡池页": {
+                            "printouts": {
+                                "卡池名": [{"raw": "·深水 Nile"}],
+                                "寻访开启时间cn": [{"raw": "1/2026/8/7/4/0/0/0"}],
+                                "寻访关闭时间cn": [{"raw": "1/2026/8/21/3/59/0/0"}],
+                            }
+                        }
+                    }
+                }
+            }
+
+        prts_client._api = fake_api  # type: ignore[assignment]
+
+        pools = await prts_client.query_gacha_pools()
+
+        self.assertEqual(len(pools), 1)
+        self.assertEqual(pools[0].title, "·深水 Nile")
+        self.assertEqual(pools[0].end, "2026-08-21 03:59")
+
+    async def test_query_game_info_merges_lst_pages(self) -> None:
+        pages = {
+            "PRTS:Gameinfo/国服/基础": (
+                "<section class=\"lst\" begin=cnver />2.6.01"
+                "<section class=\"lst\" end=cnver />"
+            ),
+            "PRTS:Gameinfo/国服/服务器维护": (
+                "<section class=\"lst\" begin=cnmaintstart />2026-08-20 10:00"
+                "<section class=\"lst\" end=cnmaintstart />"
+            ),
+        }
+
+        async def fake_api(params: dict[str, Any], *, cache_seconds: int = 86400) -> dict[str, Any]:
+            page = str(params.get("page") or "")
+            return {"parse": {"title": page, "wikitext": {"*": pages[page]}}}
+
+        prts_client._api = fake_api  # type: ignore[assignment]
+
+        info = await prts_client.query_game_info()
+
+        self.assertEqual(info["cnver"], "2.6.01")
+        self.assertEqual(info["cnmaintstart"], "2026-08-20 10:00")
 
 
 if __name__ == "__main__":
