@@ -48,6 +48,7 @@ PLAYWRIGHT_AVAILABLE = async_playwright is not None
 _playwright = None
 _browser = None
 _browser_lock = asyncio.Lock()
+_browser_loop = None  # 当前浏览器/页池/锁所属的事件循环
 _browser_uses = 0
 _last_used = 0.0
 _active_renders = 0
@@ -57,6 +58,7 @@ _BROWSER_IDLE_TTL = 3600
 
 # Page pool for reuse (avoids context/page creation overhead per render)
 _page_pool: asyncio.Queue = asyncio.Queue()
+_pool_lock = asyncio.Lock()
 _pool_ctx = None
 _pool_generation = 0  # Incremented on browser restart to invalidate stale pages
 
@@ -101,10 +103,31 @@ _mount_fonts()
 async def _ensure_browser():
     """Get a reusable browser instance; restart periodically to bound memory."""
     global _playwright, _browser, _browser_uses, _last_used, _active_renders
-    global _pool_ctx, _pool_generation
+    global _pool_ctx, _pool_generation, _browser_loop, _browser_lock, _pool_lock
 
     if not PLAYWRIGHT_AVAILABLE or async_playwright is None:
         return None
+
+    # 事件循环更换（如测试套件逐用例换 loop / 插件重载）时，旧浏览器、页池与
+    # 锁都绑定在旧 loop 上——跨 loop await 会永久挂起，这里直接整组作废重建，
+    # 旧对象不做跨 loop 清理，由 GC / 进程退出回收。生产环境单 loop 不触发。
+    loop = asyncio.get_running_loop()
+    if _browser_loop is not None and _browser_loop is not loop:
+        _playwright = None
+        _browser = None
+        _pool_ctx = None
+        _pool_generation += 1
+        while not _page_pool.empty():
+            try:
+                _page_pool.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+        _browser_lock = asyncio.Lock()
+        _pool_lock = asyncio.Lock()
+        _browser_uses = 0
+        _last_used = 0.0
+        _active_renders = 0
+    _browser_loop = loop
 
     async with _browser_lock:
         now = time.monotonic()
@@ -417,8 +440,8 @@ async def get_image_b64_with_cache(
         return ""
 
     try:
-        from .image import pic_download_from_url
-        from .path import BAKE_PATH
+        from ..image import pic_download_from_url
+        from ..path import BAKE_PATH
         from PIL import Image
         from io import BytesIO
 
