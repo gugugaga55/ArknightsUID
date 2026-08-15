@@ -1,0 +1,172 @@
+<!--
+  ark_building.html —— 基建总览卡（#23）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（utils/player/context.build_building_context）：
+    name: str, uid: str
+    control_level: int                 控制中枢等级（基建等级）
+    labor_value/labor_max/labor_pct    无人机
+    manufactures: [{label, level, formula, speed_pct, members[]}]
+    tradings: [{label, level, strategy, stock, stock_limit, members[]}]
+    power_count: int, power_levels: [int]
+    dormitories: [{label, comfort, comfort_pct}]
+    clue_own: int, clue_board: [str], clue_daily_reward: bool
+    training_trainee: str（空 = 未在训练）
+    tired_chars: [{name, room, morale}]  低心情干员（心情 < 12，升序前 8）
+    tired_more: int
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="BASE">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 基建总览 BASE</em></span>
+            <span class="mast-meta"><span class="idx">23</span>UID {{ uid }}</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">{{ name }} · 罗德岛基建</div>
+                <h1 class="title">基建<em>总览</em></h1>
+                <div class="title-rule"><span class="en">BASE INFRASTRUCTURE</span></div>
+            </div>
+        </div>
+
+        <div class="sect">
+            <span class="sect-label bk">设施读数</span>
+            <span class="sect-en">READOUTS</span>
+        </div>
+        <div class="grid grid-4">
+            <div class="cell">
+                <div class="cell-label">控制中枢 CONTROL</div>
+                <div class="cell-value">Lv{{ control_level }}</div>
+                <div class="cell-sub">发电站 ×{{ power_count }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">无人机 DRONES</div>
+                <div class="cell-value">{{ labor_value }}<span style="font-size: 12px; color: var(--tx-3);">/{{ labor_max }}</span></div>
+                <div class="bar" style="margin-top: 4px;"><i style="width: {{ labor_pct }}%;"></i></div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">线索持有 CLUES</div>
+                <div class="cell-value">{{ clue_own }}</div>
+                <div class="cell-sub">{% if clue_daily_reward %}今日奖励已领{% else %}今日奖励未领{% endif %}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">待换班 TIRED</div>
+                <div class="cell-value {% if tired_chars %}u-red{% endif %}">{{ tired_chars | length }}{% if tired_more %}+{% endif %}</div>
+                <div class="cell-sub">心情不足 12 的干员</div>
+            </div>
+        </div>
+
+        {% if clue_board %}
+        <div class="rows" style="margin-top: 0; border-top: 0;">
+            <div class="row">
+                <span class="row-label">会客室线索板</span>
+                <span class="row-value">{% for c in clue_board %}<span class="chip" style="margin-left: 6px;">{{ c }}</span>{% endfor %}</span>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if manufactures %}
+        <div class="sect">
+            <span class="sect-label bk">制造流水线</span>
+            <span class="sect-en">MANUFACTURES</span>
+        </div>
+        <div class="rows">
+            {% for m in manufactures %}
+            <div class="row">
+                <span class="row-label">{{ m.label }} <span class="mono u-mute">Lv{{ m.level }}</span></span>
+                <span class="row-value">{{ m.formula }} <span class="mono u-mute">{{ m.speed_pct }}%</span></span>
+                <span class="row-value u-mute" style="font-size: 10px;">{{ m.members | join(" · ") }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if tradings %}
+        <div class="sect">
+            <span class="sect-label bk">贸易订单</span>
+            <span class="sect-en">TRADING</span>
+        </div>
+        <div class="rows">
+            {% for t in tradings %}
+            <div class="row" style="display: block;">
+                <div class="bar-row" style="margin-bottom: var(--space-2);">
+                    <span class="row-label">{{ t.label }} <span class="mono u-mute">Lv{{ t.level }}</span> · {{ t.strategy }}</span>
+                    <span style="flex: 1;"></span>
+                    <span class="bar-num">{{ t.stock }} / {{ t.stock_limit }}</span>
+                </div>
+                <div class="bar"><i style="width: {{ (t.stock * 100 / t.stock_limit) | round | int if t.stock_limit else 0 }}%;"></i></div>
+                <div style="margin-top: 4px; font-size: 10px; color: var(--tx-3);">{{ t.members | join(" · ") }}</div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if dormitories %}
+        <div class="sect">
+            <span class="sect-label bk">宿舍氛围</span>
+            <span class="sect-en">DORMITORIES</span>
+        </div>
+        <div class="rows">
+            {% for d in dormitories %}
+            <div class="row" style="display: block;">
+                <div class="bar-row" style="margin-bottom: var(--space-2);">
+                    <span class="row-label">{{ d.label }}</span>
+                    <span style="flex: 1;"></span>
+                    <span class="bar-num">{{ d.comfort }} <span class="u-mute">/ 5000</span></span>
+                </div>
+                <div class="bar"><i style="width: {{ d.comfort_pct }}%;"></i></div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if training_trainee %}
+        <div class="rows" style="margin-top: 0; border-top: 0;">
+            <div class="row">
+                <span class="row-label">训练室 TRAINING</span>
+                <span class="row-value">{{ training_trainee }} 专精训练中</span>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if tired_chars %}
+        <div class="sect">
+            <span class="sect-label bk">低心情干员</span>
+            <span class="sect-en">SHIFT CHANGE</span>
+        </div>
+        <div class="rows">
+            {% for c in tired_chars %}
+            <div class="row {% if loop.first %}row--active{% endif %}">
+                <span class="row-label">{{ c.name }}</span>
+                <span class="row-value u-mute">{{ c.room }}</span>
+                <span class="row-value mono {% if c.morale < 6 %}u-red{% endif %}">{{ c.morale }} / 24</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% if tired_more %}
+        <div style="margin-top: 4px; font-size: 10px; color: var(--tx-3);">… 其余 {{ tired_more }} 名低心情干员未列出</div>
+        {% endif %}
+        {% else %}
+        <div class="rows" style="margin-top: 0; border-top: 0;">
+            <div class="row">
+                <span class="row-label">换班状态</span>
+                <span class="row-value">在岗干员心情充足，无需换班</span>
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 基建</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// BASE INFRASTRUCTURE</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

@@ -228,6 +228,24 @@ async def resolve_credential(
                 return "该账号的 EndUID 凭据为空或已失效，请重新使用 EndUID 登录。"
         return f"未找到 UID {hide_uid(uid)} 的可用凭据。"
 
+    # ark切换 设置的用户级默认账号（未显式指定 uid/序号时生效）
+    from ..account_switch import get_default_uid
+
+    default_uid = get_default_uid(bot_id, user_id)
+    if default_uid:
+        for account in result.accounts:
+            if account.uid == default_uid:
+                if account.usable:
+                    return account
+                return (
+                    "默认账号的凭据为空或已失效，"
+                    "请重新 ark绑定 登录，或用 ark切换 换一个账号。"
+                )
+        # 默认指向的账号已不存在（删除登录等）：落回第一个可用账号
+        logger.info(
+            f"[ArknightsUID] 默认账号 {hide_uid(default_uid)} 不存在，回退首个可用账号"
+        )
+
     for account in result.accounts:
         if account.usable:
             return account

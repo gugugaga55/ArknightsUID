@@ -9,6 +9,11 @@ from gsuid_core.models import Event
 from gsuid_core.sv import SV
 
 try:
+    from ArknightsUID.ArknightsUID.utils.account_switch import (
+        clear_default_uid,
+        get_default_uid,
+        set_default_uid,
+    )
     from ArknightsUID.ArknightsUID.utils.card import send_card_or_text
     from ArknightsUID.ArknightsUID.utils.enduid.adapter import (
         ArkCredential,
@@ -23,9 +28,12 @@ try:
         match_entries,
     )
     from ArknightsUID.ArknightsUID.utils.player import (
+        BuildingData,
         CharEntry,
         PlayerData,
+        TRADING_STRATEGY_NAMES,
         build_box_context,
+        build_building_context,
         build_campaign_context,
         build_char_card_context,
         build_char_stat_context,
@@ -33,10 +41,16 @@ try:
         build_status_context,
         effective_ap,
         fetch_cached_player_info,
+        parse_building,
         parse_player_info,
     )
     from ArknightsUID.ArknightsUID.version import ArknightsUID_version
 except ModuleNotFoundError:
+    from ArknightsUID.utils.account_switch import (
+        clear_default_uid,
+        get_default_uid,
+        set_default_uid,
+    )
     from ArknightsUID.utils.card import send_card_or_text
     from ArknightsUID.utils.enduid.adapter import (
         ArkCredential,
@@ -51,9 +65,12 @@ except ModuleNotFoundError:
         match_entries,
     )
     from ArknightsUID.utils.player import (
+        BuildingData,
         CharEntry,
         PlayerData,
+        TRADING_STRATEGY_NAMES,
         build_box_context,
+        build_building_context,
         build_campaign_context,
         build_char_card_context,
         build_char_stat_context,
@@ -61,6 +78,7 @@ except ModuleNotFoundError:
         build_status_context,
         effective_ap,
         fetch_cached_player_info,
+        parse_building,
         parse_player_info,
     )
     from ArknightsUID.version import ArknightsUID_version
@@ -332,6 +350,7 @@ async def show_ark_accounts(bot: Bot, ev: Event) -> None:
     result = await resolve_accounts(ev.user_id, ev.bot_id)
     if not result.installed:
         return await _send_text(bot, ev, result.reason)
+    default_uid = get_default_uid(ev.bot_id, ev.user_id)
     context = {
         "version": ArknightsUID_version,
         "accounts": [
@@ -340,6 +359,7 @@ async def show_ark_accounts(bot: Bot, ev: Event) -> None:
                 "nickname": account.nickname if account.nickname else "未记录昵称",
                 "uid": hide_uid(account.uid),
                 "usable": bool(account.usable),
+                "is_default": account.uid == default_uid,
             }
             for index, account in enumerate(result.accounts, start=1)
         ],
@@ -349,8 +369,70 @@ async def show_ark_accounts(bot: Bot, ev: Event) -> None:
     }
     await send_card_or_text(
         bot, ev, "ark_accounts.html", context,
-        _format_accounts(result.uids, result.accounts),
+        _format_accounts(result.uids, result.accounts, default_uid),
     )
+
+
+@account_sv.on_command(
+    (
+        "切换",
+        "切换账号",
+        "方舟切换",
+    ),
+    block=True,
+)
+async def switch_ark_account(bot: Bot, ev: Event) -> None:
+    """ark切换 <序号|UID>：设置默认查询账号（不带参数时查看当前默认）。"""
+    result = await resolve_accounts(ev.user_id, ev.bot_id)
+    if not result.installed or not result.accounts:
+        reason = result.reason or "未找到明日方舟账号，请先使用 ark绑定 登录。"
+        return await _send_text(bot, ev, reason)
+
+    default_uid = get_default_uid(ev.bot_id, ev.user_id)
+    query = ev.text.strip()
+    if not query:
+        current = "未设置（默认用第一个可用账号）"
+        for index, account in enumerate(result.accounts, start=1):
+            if account.uid == default_uid:
+                current = f"{index}. {account.nickname or '未记录昵称'}（UID {hide_uid(account.uid)}）"
+        return await _send_text(
+            bot, ev,
+            f"当前默认账号：{current}\n"
+            f"用法：ark切换 序号 / ark切换 UID（序号见 ark账号）",
+        )
+
+    target: ArkCredential | None = None
+    uid = _extract_uid(query)
+    if uid:
+        for account in result.accounts:
+            if account.uid == uid:
+                target = account
+                break
+        if target is None:
+            return await _send_text(
+                bot, ev, f"未找到 UID {hide_uid(uid)} 对应的账号，可用账号见 ark账号。"
+            )
+    else:
+        match = re.fullmatch(r"第?(\d{1,2})号?", query)
+        if match is None:
+            return await _send_text(
+                bot, ev, "用法：ark切换 序号 / ark切换 UID（序号见 ark账号）。"
+            )
+        index = int(match.group(1))
+        if not 1 <= index <= len(result.accounts):
+            return await _send_text(
+                bot, ev, f"序号超出范围（1-{len(result.accounts)}），可用账号见 ark账号。"
+            )
+        target = result.accounts[index - 1]
+
+    if set_default_uid(ev.bot_id, ev.user_id, target.uid):
+        await _send_text(
+            bot, ev,
+            f"已切换默认账号：{target.nickname or '未记录昵称'}（UID {hide_uid(target.uid)}）\n"
+            f"之后 ark理智 / ark基建 等查询默认走该账号；ark切换 序号 可再改。",
+        )
+    else:
+        await _send_text(bot, ev, "默认账号保存失败，请稍后重试。")
 
 
 async def _load_player_data(credential: ArkCredential) -> PlayerData | str:
@@ -709,3 +791,75 @@ async def send_ark_attendance(bot: Bot, ev: Event) -> None:
     if isinstance(response, str):
         return await _send_text(bot, ev, response)
     await _send_text(bot, ev, _format_attendance(credential, response))
+
+
+def _format_building(
+    credential: ArkCredential, data: PlayerData, building: BuildingData
+) -> str:
+    lines = ["「明日方舟」基建总览", f"UID：{hide_uid(credential.uid)}"]
+    lines.append(
+        f"控制中枢 Lv{building.control_level} · 无人机 "
+        f"{building.labor_value}/{building.labor_max}"
+        + (f" · 发电 ×{len(building.powers)}" if building.powers else "")
+    )
+    for index, room in enumerate(building.manufactures, start=1):
+        label = "制造站" if index == 1 else f"制造站{index}"
+        product = f"配方#{room.formula_id}" if room.formula_id else "未在生产"
+        speed = f" · 效率{round(room.speed * 100)}%" if room.speed > 0 else ""
+        lines.append(f"{label} Lv{room.level}：{product}{speed}")
+    for index, room in enumerate(building.tradings, start=1):
+        label = "贸易站" if index == 1 else f"贸易站{index}"
+        strategy = TRADING_STRATEGY_NAMES.get(room.strategy, room.strategy or "订单")
+        lines.append(
+            f"{label} Lv{room.level}：{strategy}订单 {room.stock_count}/{room.stock_limit}"
+        )
+    for index, room in enumerate(building.dormitories, start=1):
+        lines.append(f"宿舍{index}：氛围 {room.comfort}/5000")
+    if building.clue_own or building.clue_board:
+        board = "、".join(building.clue_board) if building.clue_board else "空"
+        lines.append(f"会客室：线索 {building.clue_own} · 线索板：{board}")
+    if building.training_trainee:
+        lines.append(f"训练室：{building.training_trainee} 专精训练中")
+    if building.tired_chars:
+        names = "、".join(
+            f"{c.name}({c.room} {c.morale})" for c in building.tired_chars[:6]
+        )
+        more = f" 等{len(building.tired_chars)}人" if len(building.tired_chars) > 6 else ""
+        lines.append(f"待换班：{names}{more}")
+    else:
+        lines.append("待换班：无（在岗干员心情充足）")
+    return "\n".join(lines)
+
+
+@account_sv.on_command(
+    (
+        "基建",
+        "方舟基建",
+    ),
+    block=True,
+)
+async def show_ark_building(bot: Bot, ev: Event) -> None:
+    uid = _extract_uid(ev.text)
+    index = _extract_index(ev.text)
+    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
+    if isinstance(credential, str):
+        return await _send_text(bot, ev, credential)
+
+    loaded = await _load_player_data(credential)
+    if isinstance(loaded, str):
+        return await _send_text(bot, ev, loaded)
+    data = loaded
+
+    building = parse_building(data)
+    if building is None:
+        return await _send_text(
+            bot, ev, "未识别到基建数据（森空岛返回缺失 building 字段）。"
+        )
+
+    context = await build_building_context(
+        data, building, ArknightsUID_version, hide_uid(credential.uid)
+    )
+    await send_card_or_text(
+        bot, ev, "ark_building.html", context or {},
+        _format_building(credential, data, building),
+    )
