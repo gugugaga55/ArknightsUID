@@ -4,14 +4,14 @@ import json
 import time
 import hmac
 import hashlib
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import httpx
 
 from gsuid_core.logger import logger
 
-if False:
+if TYPE_CHECKING:
     from ..enduid.adapter import ArkCredential
 
 
@@ -74,6 +74,8 @@ def _generate_sign(
 
 
 def _query_string(params: dict[str, Any] | None) -> str:
+    # 刻意不做 URL 编码：Skland 官方签名要求按原始键值拼接（sorted by key），
+    # 编码会破坏签名一致性。调用方应仅传入无特殊字符的参数（如 uid/gameId 数字）。
     if not params:
         return ""
     return "&".join(f"{key}={value}" for key, value in sorted(params.items()))

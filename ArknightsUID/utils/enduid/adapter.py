@@ -12,7 +12,8 @@ try:
 except ModuleNotFoundError:
     from ArknightsUID.utils.skland import client as local_skland
 
-ARKNIGHTS_GAME_ID = 1
+# 复用 skland 模块定义的游戏 ID，避免双处维护导致的不一致。
+ARKNIGHTS_GAME_ID = local_skland.ARKNIGHTS_GAME_ID
 ENDUID_MISSING_HINT = "未检测到可用的 EndUID。请先将 EndUID 放入 gsuid_core/gsuid_core/plugins 并完成森空岛登录。"
 
 
@@ -126,7 +127,7 @@ async def resolve_accounts(user_id: str, bot_id: str) -> AccountResolveResult:
     if bind is not None:
         uids = _split_uid_list(getattr(bind, "ark_uid", ""))
 
-    users = await EndUser.select_data_list(user_id=user_id, bot_id=bot_id)
+    users = await EndUser.select_data_list(user_id=user_id, bot_id=bot_id) or []
     accounts: list[ArkCredential] = []
     seen_accounts: set[str] = set()
     for user in users:
