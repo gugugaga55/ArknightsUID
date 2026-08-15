@@ -169,7 +169,10 @@ def _save_cache(path: Path, payload: dict[str, Any]) -> None:
             encoding="utf-8",
         )
     except Exception as exc:
-        logger.debug(f"[ArknightsUID] PRTS cache save failed: {exc}")
+        logger.debug(
+            "[ArknightsUID] PRTS cache save failed: "
+            f"{exc.__class__.__name__}"
+        )
 
 
 async def _api(
@@ -195,7 +198,10 @@ async def _api(
             _save_cache(cache_path, payload)
             return payload
     except Exception as exc:
-        logger.warning(f"[ArknightsUID] PRTS API request failed: {exc}")
+        logger.warning(
+            "[ArknightsUID] PRTS API request failed: "
+            f"{exc.__class__.__name__}"
+        )
         return _load_stale_cache(cache_path)
 
 

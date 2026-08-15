@@ -180,6 +180,24 @@ class AccountReplySafetyTest(unittest.TestCase):
         self.assertEqual(reply, "查询森空岛玩家信息失败：code=10002，message=登录态失效")
         assert_reply_safe(self, reply)
 
+    def test_format_player_info_api_error_redacts_sensitive_echo_message(self) -> None:
+        reply = _format_player_info(
+            credential(uid="123456789"),
+            {
+                "code": 10002,
+                "message": (
+                    "登录态失效 "
+                    f"cred={SENTINEL_CRED} token={SENTINEL_TOKEN} "
+                    f"hg_token={SENTINEL_HG_TOKEN} "
+                    f"skland_user_id={SENTINEL_SKLAND_USER}"
+                ),
+            },
+        )
+
+        self.assertIn("查询森空岛玩家信息失败：code=10002", reply)
+        self.assertIn("登录态失效", reply)
+        assert_reply_safe(self, reply)
+
     def test_format_player_info_field_missing_fallback_hides_credential_fields(self) -> None:
         reply = _format_player_info(
             credential(uid="123456789", nickname="FallbackDoctor"),
@@ -203,6 +221,34 @@ class AccountReplySafetyTest(unittest.TestCase):
         self.assertEqual(failure, "「明日方舟」签到失败\nUID：123***789\ncode=10001，message=今日已签到")
         self.assertEqual(missing, "「明日方舟」签到失败\nUID：123***789\ncode=10002，message=无")
         for reply in (success, failure, missing):
+            self.assertNotIn("123456789", reply)
+            assert_reply_safe(self, reply)
+
+    def test_format_attendance_redacts_sensitive_echo_message(self) -> None:
+        account = credential(uid="123456789")
+
+        success = _format_attendance(
+            account,
+            {
+                "code": 0,
+                "message": f"签到完成 cookie={SENTINEL_CRED} token={SENTINEL_TOKEN}",
+            },
+        )
+        failure = _format_attendance(
+            account,
+            {
+                "code": 10001,
+                "msg": (
+                    "今日已签到 "
+                    f"cred={SENTINEL_CRED} hg_token={SENTINEL_HG_TOKEN} "
+                    f"skland_user_id={SENTINEL_SKLAND_USER}"
+                ),
+            },
+        )
+
+        self.assertIn("签到完成", success)
+        self.assertIn("今日已签到", failure)
+        for reply in (success, failure):
             self.assertNotIn("123456789", reply)
             assert_reply_safe(self, reply)
 

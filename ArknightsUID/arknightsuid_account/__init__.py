@@ -29,6 +29,27 @@ except ModuleNotFoundError:
 
 account_sv = SV("ArknightsUID账号", priority=5)
 
+_SENSITIVE_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b(?:cookie|cred|token|hg_token|skland_user_id)\b\s*[:=]\s*"
+    r"(?:\"[^\"]*\"|'[^']*'|[^,，;；\s]+)"
+)
+_SENSITIVE_FIELD_RE = re.compile(
+    r"(?i)\b(?:cookie|cred|token|hg_token|skland_user_id)\b"
+)
+_SENTINEL_VALUE_RE = re.compile(r"(?i)\bSENTINEL_[A-Z0-9_]*\b")
+
+
+def _safe_external_message(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    text = str(value)
+    text = _SENSITIVE_ASSIGNMENT_RE.sub("已隐藏敏感内容", text)
+    text = _SENSITIVE_FIELD_RE.sub("已隐藏敏感内容", text)
+    text = _SENTINEL_VALUE_RE.sub("已隐藏敏感内容", text)
+    text = re.sub(r"(?:已隐藏敏感内容[\s,，;；]*){2,}", "已隐藏敏感内容", text)
+    text = re.sub(r"\s{2,}", " ", text).strip()
+    return text or "已隐藏敏感内容"
+
 
 def _extract_uid(text: str) -> str:
     match = re.search(r"\d{5,}", text)
@@ -122,6 +143,7 @@ def _format_api_error(action: str, response: dict[str, Any]) -> str | None:
     message = _value(response, "message")
     if message is None:
         message = _value(response, "msg")
+    message = _safe_external_message(message)
 
     if code == 10001 and message:
         return f"{action}返回：{message}"
@@ -246,6 +268,7 @@ def _format_attendance(
     message = _value(response, "message")
     if message is None:
         message = _value(response, "msg")
+    message = _safe_external_message(message)
     if code == 0:
         return f"「明日方舟」签到请求成功\nUID：{hide_uid(credential.uid)}\n{message or 'OK'}"
     return f"「明日方舟」签到失败\nUID：{hide_uid(credential.uid)}\ncode={code}，message={message or '无'}"
