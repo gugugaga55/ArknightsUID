@@ -1,4 +1,9 @@
 [project]
 name = "arknightsuid"
 version = "0.2.0"
-dependencies = []
+# 对齐 parent gsuid_core 的 Python 约束，避免无谓收紧兼容范围。
+requires-python = ">=3.11,<4.0"
+# 仅声明插件直接使用的网络库；其余运行时依赖由 parent gsuid_core 提供。
+dependencies = [
+    "httpx>=0.23.0",
+]

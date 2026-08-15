@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 import json
 import os
 import subprocess
@@ -8,6 +9,11 @@ import tempfile
 import textwrap
 import unittest
 from pathlib import Path
+
+
+# 该冒烟测试需要完整的 parent gsuid_core 运行时（gsuid_core.bot 会 import fastapi）。
+# 在未安装完整运行时的环境（如纯插件 CI）中跳过，避免无意义的失败。
+_FASTAPI_AVAILABLE = importlib.util.find_spec("fastapi") is not None
 
 
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
@@ -121,6 +127,10 @@ class RealRuntimeImportSmokeTest(unittest.TestCase):
             return
         self.fail(msg)
 
+    @unittest.skipUnless(
+        _FASTAPI_AVAILABLE,
+        "需要完整 gsuid_core 运行时（fastapi 等依赖）才能跑真实导入冒烟测试",
+    )
     def test_required_modules_import_with_real_gscore_runtime(self) -> None:
         with tempfile.TemporaryDirectory(prefix="arknightsuid-gscore-") as tmp:
             data_root = Path(tmp) / "data"
