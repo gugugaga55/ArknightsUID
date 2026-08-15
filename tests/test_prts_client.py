@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import types
@@ -107,9 +108,12 @@ class PRTSClientSafetyTest(unittest.IsolatedAsyncioTestCase):
         self.original_logger = prts_client.logger
         self.original_async_client = prts_client.httpx.AsyncClient
         self.original_cache_path = prts_client.PRTS_CACHE_PATH
+        self.original_last_cleanup_at = prts_client._last_cleanup_at
         prts_client.logger = self.logger
         prts_client.httpx.AsyncClient = FakeAsyncClient
         prts_client.PRTS_CACHE_PATH = self.cache_root
+        # 重置节流时间戳，确保本测试用例能立即触发清理扫描。
+        prts_client._last_cleanup_at = 0.0
         FakeAsyncClient.queue = []
         FakeAsyncClient.requests = []
 
@@ -117,6 +121,7 @@ class PRTSClientSafetyTest(unittest.IsolatedAsyncioTestCase):
         prts_client.logger = self.original_logger
         prts_client.httpx.AsyncClient = self.original_async_client
         prts_client.PRTS_CACHE_PATH = self.original_cache_path
+        prts_client._last_cleanup_at = self.original_last_cleanup_at
         self.temp_dir.cleanup()
 
     def all_logs(self) -> str:
@@ -175,6 +180,36 @@ class PRTSClientSafetyTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, {"query": {"search": []}})
         self.assertIn("RuntimeError", self.all_logs())
+        assert_log_safe(self, self.all_logs())
+
+    async def test_stale_cache_cleanup_removes_old_files_and_keeps_recent(self) -> None:
+        # 旧缓存：mtime 设为 30 天前；新缓存：当前时间。
+        # 触发一次 _api 调用（缓存命中），验证清理扫描删旧留新。
+        old_params = {"action": "query", "list": "search", "srsearch": "old"}
+        new_params = {"action": "query", "list": "search", "srsearch": "new"}
+        old_file = prts_client._cache_file(old_params)
+        new_file = prts_client._cache_file(new_params)
+        old_payload = {"query": {"search": [{"title": "旧条目"}]}}
+        new_payload = {"query": {"search": [{"title": "新条目"}]}}
+        old_file.write_text(
+            json.dumps({"_cache_time": time.time(), "payload": old_payload}),
+            encoding="utf-8",
+        )
+        new_file.write_text(
+            json.dumps({"_cache_time": time.time(), "payload": new_payload}),
+            encoding="utf-8",
+        )
+        # 用 os.utime 把旧文件 mtime 拨到 30 天前，新文件保持当前。
+        thirty_days_ago = time.time() - 30 * 86400
+        os.utime(old_file, (thirty_days_ago, thirty_days_ago))
+
+        # new 命中缓存，触发清理（setUp 已重置节流）。
+        result = await prts_client._api(new_params, cache_seconds=86400)
+
+        self.assertEqual(result, new_payload)
+        self.assertFalse(old_file.exists(), "旧缓存应被清理删除")
+        self.assertTrue(new_file.exists(), "近期缓存应保留")
+        # 清理失败的日志不应泄漏敏感信息。
         assert_log_safe(self, self.all_logs())
 
 

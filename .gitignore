@@ -1,0 +1,22 @@
+# Agent self-iteration artifacts (process metadata, not plugin code)
+.planning/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# Virtualenvs / lockfiles managed by parent gsuid_core
+.venv/
+uv.lock
+
+# Runtime data
+data/
+
+# Editor / agent tooling
+.zcode/
+.agents/
+.codex/
+.DS_Store

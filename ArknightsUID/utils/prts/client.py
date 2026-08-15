@@ -28,6 +28,13 @@ USER_AGENT = "ArknightsUID/0.1 (+GsCore; PRTS MediaWiki API)"
 PRTS_CACHE_PATH = CACHE_PATH / "prts"
 PRTS_CACHE_PATH.mkdir(parents=True, exist_ok=True)
 
+# 单关敌方情报模板最多解析的敌人条目数；超过此值的极少数关卡按上限截断。
+_MAX_ENEMY_FIELDS = 80
+# 缓存过期清理阈值与节流间隔。
+_CACHE_MAX_AGE_SECONDS = 7 * 86400
+_CACHE_CLEANUP_INTERVAL = 3600
+_last_cleanup_at: float = 0.0
+
 
 @dataclass(slots=True)
 class SearchResult:
@@ -175,6 +182,34 @@ def _save_cache(path: Path, payload: dict[str, Any]) -> None:
         )
 
 
+def _cleanup_stale_cache(max_age_seconds: int = _CACHE_MAX_AGE_SECONDS) -> None:
+    # 删除 mtime 超过 max_age_seconds 的 .json 缓存条目。
+    # 单文件失败仅记录 debug 日志，不影响其他条目或主流程。
+    global _last_cleanup_at
+    now = time.time()
+    if now - _last_cleanup_at < _CACHE_CLEANUP_INTERVAL:
+        return
+    _last_cleanup_at = now
+    try:
+        threshold = now - max_age_seconds
+        for entry in PRTS_CACHE_PATH.iterdir():
+            if not entry.is_file() or entry.suffix != ".json":
+                continue
+            try:
+                if entry.stat().st_mtime < threshold:
+                    entry.unlink()
+            except Exception as exc:
+                logger.debug(
+                    "[ArknightsUID] PRTS cache entry cleanup failed: "
+                    f"{exc.__class__.__name__}"
+                )
+    except Exception as exc:
+        logger.debug(
+            "[ArknightsUID] PRTS cache cleanup scan failed: "
+            f"{exc.__class__.__name__}"
+        )
+
+
 async def _api(
     params: dict[str, Any],
     *,
@@ -183,6 +218,7 @@ async def _api(
     cache_path = _cache_file(params)
     cached = _load_cache(cache_path, cache_seconds)
     if cached is not None:
+        _cleanup_stale_cache()
         return cached
 
     request_params = {"format": "json", **params}
@@ -196,6 +232,7 @@ async def _api(
             response.raise_for_status()
             payload = response.json()
             _save_cache(cache_path, payload)
+            _cleanup_stale_cache()
             return payload
     except Exception as exc:
         logger.warning(
@@ -384,7 +421,7 @@ def parse_stage_wikitext(page: PageWikitext) -> StageInfo | None:
     assault = _first_template_fields(page.wikitext, ("突袭关卡信息",))
     enemy_fields = _first_template_fields(page.wikitext, ("敌方情报",))
     enemies: list[StageEnemy] = []
-    for index in range(1, 80):
+    for index in range(1, _MAX_ENEMY_FIELDS + 1):
         name = enemy_fields.get(f"敌人{index}", "")
         if not name:
             continue
