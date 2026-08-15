@@ -72,14 +72,24 @@ def _split_uid_list(value: Any) -> list[str]:
     return uids
 
 
+def _exception_type(exc: Exception) -> str:
+    return exc.__class__.__name__
+
+
 def _import_first(module_names: tuple[str, ...]) -> ModuleType | None:
     for module_name in module_names:
         try:
             return import_module(module_name)
         except ModuleNotFoundError as exc:
-            logger.debug(f"[ArknightsUID] 可选模块未找到: {module_name} ({exc})")
+            logger.debug(
+                "[ArknightsUID] 可选模块未找到: "
+                f"{module_name} ({_exception_type(exc)})"
+            )
         except Exception as exc:
-            logger.warning(f"[ArknightsUID] 导入可选模块失败: {module_name}: {exc}")
+            logger.warning(
+                "[ArknightsUID] 导入可选模块失败: "
+                f"{module_name}: {_exception_type(exc)}"
+            )
     return None
 
 

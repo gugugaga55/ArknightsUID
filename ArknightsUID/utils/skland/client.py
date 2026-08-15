@@ -40,6 +40,10 @@ ARK_SIGN_VNAME = "1.21.0"
 TOKEN_INVALID_CODES = {220, 10002}
 
 
+def _safe_error_type(exc: Exception) -> str:
+    return exc.__class__.__name__
+
+
 def _generate_sign(
     token: str,
     path: str,
@@ -114,9 +118,27 @@ async def refresh_token(cred: str) -> str:
     try:
         async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
             response = await client.get(REFRESH_TOKEN_URL, headers=headers)
-            data = response.json()
     except Exception as exc:
-        logger.warning(f"[ArknightsUID] Skland token refresh failed: {exc}")
+        logger.warning(
+            "[ArknightsUID] Skland token refresh request failed: "
+            f"{_safe_error_type(exc)}"
+        )
+        return ""
+
+    if response.status_code != 200:
+        logger.warning(
+            "[ArknightsUID] Skland token refresh failed: "
+            f"HTTP {response.status_code}"
+        )
+        return ""
+
+    try:
+        data = response.json()
+    except Exception as exc:
+        logger.warning(
+            "[ArknightsUID] Skland token refresh non-json response: "
+            f"HTTP {response.status_code} ({_safe_error_type(exc)})"
+        )
         return ""
 
     if data.get("code") == 0:
@@ -206,7 +228,10 @@ async def _signed_request(
                 return None
             return data
         except Exception as exc:
-            logger.warning(f"[ArknightsUID] Skland request error: {exc}")
+            logger.warning(
+                "[ArknightsUID] Skland request error: "
+                f"{_safe_error_type(exc)}"
+            )
             return None
 
     result = await do_request(token)
@@ -241,4 +266,3 @@ async def ark_attendance(credential: "ArkCredential") -> dict[str, Any] | None:
         user_agent=IOS_USER_AGENT,
         accept_encoding="gzip",
     )
-
