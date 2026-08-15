@@ -1,0 +1,91 @@
+"""公招查询逻辑测试（build/match，不触发网络下载）。"""
+from __future__ import annotations
+
+import unittest
+
+from ArknightsUID.utils.gamedata import recruit
+
+
+class RecruitLogicTest(unittest.TestCase):
+    def test_build_recruit_data_filters_and_maps(self) -> None:
+        char_table = {
+            "char_a": {  # 可公招 5 星术师
+                "name": "测试A", "rarity": "TIER_5", "profession": "CASTER",
+                "position": "RANGED", "tagList": ["输出"], "itemObtainApproach": "招募寻访",
+            },
+            "char_b": {  # 6 星（TIER_6）→ 排除（不在公招池）
+                "name": "测试B", "rarity": "TIER_6", "profession": "WARRIOR",
+                "position": "MELEE", "tagList": [], "itemObtainApproach": "招募寻访",
+            },
+            "char_c": {  # NPC（approach 空）→ 排除
+                "name": "NPC", "rarity": "TIER_3", "profession": "PIONEER",
+                "position": "MELEE", "tagList": [], "itemObtainApproach": "",
+            },
+            "char_d": {  # 活动获得 → 排除
+                "name": "活动干员", "rarity": "TIER_5", "profession": "MEDIC",
+                "position": "RANGED", "tagList": [], "itemObtainApproach": "活动获得",
+            },
+        }
+        data = recruit.build_recruit_data(char_table)
+
+        self.assertEqual(len(data), 1)
+        entry = data[0]
+        self.assertEqual(entry["name"], "测试A")
+        # TIER_5 = 5 星（character_table 的 TIER_x = x 星）
+        self.assertEqual(entry["rarity"], 5)
+        self.assertEqual(entry["profession"], "术师")
+        self.assertEqual(entry["position"], "远程位")
+        # 5 星自动获得"高级资深干员"标签
+        self.assertIn("高级资深干员", entry["all_tags"])
+        self.assertIn("输出", entry["all_tags"])
+        self.assertIn("术师", entry["all_tags"])
+
+    def test_build_recruit_data_rarity_tag_thresholds(self) -> None:
+        # 4 星 → 资深干员；3 星 → 无稀有度标签
+        char_table = {
+            "c4": {"name": "四星", "rarity": "TIER_4", "profession": "SNIPER",
+                   "position": "RANGED", "tagList": [], "itemObtainApproach": "招募寻访"},
+            "c3": {"name": "三星", "rarity": "TIER_3", "profession": "PIONEER",
+                   "position": "MELEE", "tagList": [], "itemObtainApproach": "招募寻访"},
+        }
+        data = {e["name"]: e for e in recruit.build_recruit_data(char_table)}
+        self.assertIn("资深干员", data["四星"]["all_tags"])
+        self.assertNotIn("资深干员", data["三星"]["all_tags"])
+        self.assertNotIn("高级资深干员", data["三星"]["all_tags"])
+
+    def test_match_recruit_returns_tag_superset_sorted(self) -> None:
+        data = [
+            {"name": "高星术师", "rarity": 5, "tags": ["输出"],
+             "all_tags": ["术师", "远程位", "高级资深干员", "输出"]},
+            {"name": "四星狙击", "rarity": 4, "tags": [],
+             "all_tags": ["狙击", "远程位", "资深干员"]},
+        ]
+        # 高级资深+术师 → 只高星术师
+        matched = recruit.match_recruit(["高级资深干员", "术师"], data)
+        self.assertEqual([m["name"] for m in matched], ["高星术师"])
+        # 单标签 狙击 → 四星狙击
+        matched = recruit.match_recruit(["狙击"], data)
+        self.assertEqual([m["name"] for m in matched], ["四星狙击"])
+        # 空标签 → []
+        self.assertEqual(recruit.match_recruit([], data), [])
+        # 无匹配 → []
+        self.assertEqual(recruit.match_recruit(["不存在的标签"], data), [])
+
+    def test_match_recruit_sorts_by_rarity_desc(self) -> None:
+        data = [
+            {"name": "三星", "rarity": 3, "tags": [], "all_tags": ["先锋"]},
+            {"name": "五星", "rarity": 5, "tags": [], "all_tags": ["先锋"]},
+            {"name": "四星", "rarity": 4, "tags": [], "all_tags": ["先锋"]},
+        ]
+        matched = recruit.match_recruit(["先锋"], data)
+        # 按稀有度降序
+        self.assertEqual([m["rarity"] for m in matched], [5, 4, 3])
+
+    def test_match_recruit_strips_whitespace(self) -> None:
+        data = [{"name": "X", "rarity": 3, "tags": [], "all_tags": ["先锋"]}]
+        matched = recruit.match_recruit([" 先锋 "], data)
+        self.assertEqual(len(matched), 1)
+
+
+if __name__ == "__main__":
+    unittest.main()
