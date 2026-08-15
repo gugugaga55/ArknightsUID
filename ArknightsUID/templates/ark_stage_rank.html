@@ -1,0 +1,59 @@
+<!--
+  ark_stage_rank.html —— 刷图效率榜卡（#19）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_push.show_stage_recommend 组装）：
+    group: str              分组名（主线 / 别传 / 限时活动 / 资源收集）
+    rows: [{
+        stage_code: str,    关卡代号
+        zone: str,          所属章节/区域
+        spm: float,         一图流效率值
+        ap_cost: int,       理智消耗
+        spm_pct: int,       相对榜首的百分比 0-100（进度条宽）
+    }]
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="EFFICIENCY">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 刷图效率 EFFICIENCY</em></span>
+            <span class="mast-meta"><span class="idx">19</span>YITULIU</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">一图流 spm · 样本 &gt; 300</div>
+                <h1 class="title"><em>{{ group }}</em></h1>
+                <div class="title-rule"><span class="en">STAGE EFFICIENCY</span></div>
+            </div>
+        </div>
+
+        <div class="rows" style="margin-top: var(--space-5);">
+            {% for r in rows %}
+            <div class="row" style="display: block;">
+                <div class="bar-row" style="margin-bottom: 6px;">
+                    <span class="idx {{ '' if loop.first else 'idx--ghost' }}" style="margin-right: var(--space-2);">{{ "%02d" | format(loop.index) }}</span>
+                    <span class="row-value" style="font-size: 13px;">{{ r.stage_code }}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 6px;">{{ r.zone }}</span></span>
+                    <span style="flex: 1;"></span>
+                    <span class="bar-num">spm <span style="color: var(--tx-0); font-weight: 700;">{{ "%.2f" | format(r.spm) }}</span> · {{ r.ap_cost }} 理智</span>
+                </div>
+                <div class="bar">
+                    <i style="width: {{ r.spm_pct }}%;"></i>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 刷图</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// STAGE EFFICIENCY // ARK.YITULIU.CN</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

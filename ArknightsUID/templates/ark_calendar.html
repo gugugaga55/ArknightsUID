@@ -1,0 +1,88 @@
+<!--
+  ark_calendar.html —— 活动日历卡（#20）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_wiki.send_calendar 组装）：
+    now_str: str            当前北京时间（"2026-08-15 12:00"）
+    game_version: str       当前版本号（可空）
+    game_updated: str       版本更新日期（可空）
+    maint_text: str         维护状态文案（可空，如 "维护中，预计 xx 结束"）
+    activities: [{title: str, remaining: str, start: str, end: str}]
+    pools: [{title: str, remaining: str}]
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="CALENDAR">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 活动日历 CALENDAR</em></span>
+            <span class="mast-meta"><span class="idx">20</span>PRTS.WIKI</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">{{ now_str }} 北京时间</div>
+                <h1 class="title">活动<em>日历</em></h1>
+                <div class="title-rule"><span class="en">EVENT CALENDAR</span></div>
+            </div>
+        </div>
+
+        {% if game_version or maint_text %}
+        <div class="rows" style="margin-top: var(--space-5);">
+            {% if game_version %}
+            <div class="row">
+                <span class="row-label">当前版本 VERSION</span>
+                <span class="row-value mono" style="font-size: 13px;">{{ game_version }}{% if game_updated %}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 6px;">更新 {{ game_updated }}</span>{% endif %}</span>
+            </div>
+            {% endif %}
+            {% if maint_text %}
+            <div class="row row--active">
+                <span class="row-label">维护状态 MAINTENANCE</span>
+                <span class="row-value" style="font-size: 12px;">{{ maint_text }}</span>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        {% if activities %}
+        <div class="sect">
+            <span class="sect-label">限时活动</span>
+            <span class="sect-en">EVENTS // {{ activities | length }}</span>
+        </div>
+        <div class="rows">
+            {% for act in activities %}
+            <div class="row">
+                <span class="row-value" style="font-size: 13px;">{{ act.title }}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 6px;">{{ act.start }} ~ {{ act.end }}</span></span>
+                <span class="bar-num u-yellow" style="font-size: 12px; font-weight: 700;">{{ act.remaining }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if pools %}
+        <div class="sect">
+            <span class="sect-label">寻访卡池</span>
+            <span class="sect-en">HEADHUNTING // {{ pools | length }}</span>
+        </div>
+        <div class="rows">
+            {% for p in pools %}
+            <div class="row">
+                <span class="row-value" style="font-size: 13px;">{{ p.title }}</span>
+                <span class="bar-num u-yellow" style="font-size: 12px; font-weight: 700;">{{ p.remaining }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 日历</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// EVENT CALENDAR // PRTS.WIKI</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

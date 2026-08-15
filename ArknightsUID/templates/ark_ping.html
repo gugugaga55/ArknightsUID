@@ -1,53 +1,61 @@
 <!--
   ArknightsUID 渲染管线自检模板（自研）
 
+  设计语言：「罗德岛终端」（见 ark_base.css 头部注释）
+  深底 / 警示红 / 括号标签 / 微字分层 / 菱形水印。
+
   此模板不展示任何业务数据，仅用于 P0 阶段验证：
-  - jinja2 能正确加载模板
+  - jinja2 能正确加载模板并内联 ark_base.css
   - 字体 CSS 能正确注入
   - Playwright 能截图 .container
   - base64 图片能正确内联
-
-  P1 起会被真正的业务模板替换。
 -->
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <link rel="stylesheet" href="{{ font_css_url }}">
-    <style>
-        @import url("ark_base.css");
-    </style>
-</head>
+<head>{% include "ark_head.html" %}</head>
 <body>
-    <div class="container">
-        <div class="header">
+    <div class="container" data-ghost="RENDER">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 渲染自检 RENDER CHECK</em></span>
+            <span class="mast-meta"><span class="idx">00</span>{{ ping_id }}</span>
+        </div>
+
+        <div class="titleblock">
             <div>
-                <div class="header-title">ArknightsUID</div>
-                <div class="header-subtitle">渲染管线自检</div>
+                <div class="eyebrow">渲染管线自检 · RENDER PIPELINE</div>
+                <h1 class="title">渲染<em>管线</em></h1>
+                <div class="title-rule"><span class="en">RENDER SELF-CHECK</span></div>
             </div>
-            <div class="mono header-subtitle">{{ ping_id }}</div>
         </div>
 
-        <div class="row">
-            <span class="row-label">状态</span>
-            <span class="row-value accent">{{ status }}</span>
-        </div>
-        <div class="row">
-            <span class="row-label">引擎</span>
-            <span class="row-value mono">{{ engine }}</span>
-        </div>
-        <div class="row">
-            <span class="row-label">模板路径</span>
-            <span class="row-value mono">{{ template_path }}</span>
-        </div>
-        <div class="row">
-            <span class="row-label">时间戳</span>
-            <span class="row-value mono">{{ timestamp }}</span>
+        <div class="rows" style="margin-top: var(--space-5);">
+            <div class="row">
+                <span class="row-label">状态 STATUS</span>
+                <span class="row-value">
+                    <span class="chip"><i class="st"></i>{{ status }}</span>
+                </span>
+            </div>
+            <div class="row">
+                <span class="row-label">引擎 ENGINE</span>
+                <span class="row-value mono">{{ engine }}</span>
+            </div>
+            <div class="row">
+                <span class="row-label">模板 TEMPLATE</span>
+                <span class="row-value mono" style="font-size: 11px;">{{ template_path }}</span>
+            </div>
+            <div class="row">
+                <span class="row-label">时间 TIMESTAMP</span>
+                <span class="row-value mono">{{ timestamp }}</span>
+            </div>
         </div>
 
-        <div class="footer">
-            <span>ArknightsUID · P0 基础设施</span>
-            <span class="mono">{{ version }}</span>
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · P0 基础设施</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// RENDER PIPELINE OK</span>
+            <span>// RHODES ISLAND TERMINAL</span>
         </div>
     </div>
 </body>

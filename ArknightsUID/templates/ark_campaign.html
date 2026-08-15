@@ -1,0 +1,60 @@
+<!--
+  ark_campaign.html —— 剿灭进度卡（#4）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文：
+    name: str, uid: str
+    reward_current: int, reward_total: int   本周合成玉进度
+    reward_pct: int                          0-100
+    stages: [{name: str, progress: int, total: int}]  各剿灭关卡击杀进度
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="ANNIHILATION">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 剿灭作战 ANNIHILATION</em></span>
+            <span class="mast-meta"><span class="idx">04</span>UID {{ uid }}</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">{{ name }} · 剿灭作战进度</div>
+                <h1 class="title">剿灭<em>作战</em></h1>
+                <div class="title-rule"><span class="en">ANNIHILATION</span></div>
+            </div>
+        </div>
+
+        <div class="hero">
+            <div class="bignum">{{ reward_current }}<span class="unit"> / {{ reward_total }} 合成玉</span></div>
+            <span class="bar-num">{{ reward_pct }}%</span>
+        </div>
+        <div class="bar is-yellow" style="margin-top: var(--space-3);">
+            <i style="width: {{ reward_pct }}%;"></i>
+        </div>
+
+        <div class="sect">
+            <span class="sect-label bk">战区进度</span>
+            <span class="sect-en">SECTORS</span>
+        </div>
+        <div class="rows">
+            {% for s in stages %}
+            <div class="row">
+                <span class="row-label">{{ s.name }}</span>
+                <span class="row-value mono" style="font-size: 13px;">{{ s.progress }} / {{ s.total }}</span>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 剿灭</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// ANNIHILATION OPS</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

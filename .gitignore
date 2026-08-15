@@ -20,3 +20,6 @@ data/
 .agents/
 .codex/
 .DS_Store
+
+# 预览脚本下载的 CDN 资产缓存（头像/技能图标等，不入库）
+docs/design/.assets/

@@ -1,0 +1,78 @@
+<!--
+  ark_status.html —— 玩家信息 / 理智卡（#2）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文：
+    name: str            昵称
+    level: int           等级
+    uid: str             已脱敏 UID
+    ap_current: int      当前理智
+    ap_max: int          理智上限
+    ap_pct: int          理智百分比 0-100
+    ap_full_at: str      完全恢复时间（如 "08-14 02:33"）
+    ap_recover_in: str   距完全恢复（如 "3h 12m"）
+    reg_days: int        注册天数
+    chars_total: int     持有干员数
+    campaign_current: int  剿灭已得合成玉
+    campaign_total: int    剿灭每周上限
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="AP">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 理智查询 AP MONITOR</em></span>
+            <span class="mast-meta"><span class="idx">02</span>UID {{ uid }}</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">{{ name }} · LV.{{ level }} · 博士便签</div>
+                <h1 class="title">博士<em>便签</em></h1>
+                <div class="title-rule"><span class="en">AP STATUS</span></div>
+            </div>
+        </div>
+
+        <div class="hero">
+            <div class="bignum">{{ ap_current }}<span class="unit"> / {{ ap_max }} AP</span></div>
+            <span class="bar-num">{{ ap_full_at }} 回满</span>
+        </div>
+        <div class="bar" style="margin-top: var(--space-3);">
+            <i style="width: {{ ap_pct }}%;"></i>
+        </div>
+
+        <div class="sect">
+            <span class="sect-label bk">档案详情</span>
+            <span class="sect-en">DOSSIER</span>
+        </div>
+        <div class="rows">
+            <div class="row">
+                <span class="row-label">距回满 RECOVER IN</span>
+                <span class="row-value mono">{{ ap_recover_in }}</span>
+            </div>
+            <div class="row">
+                <span class="row-label">注册天数 DAYS</span>
+                <span class="row-value mono">{{ reg_days }}</span>
+            </div>
+            <div class="row">
+                <span class="row-label">持有干员 OPERATORS</span>
+                <span class="row-value mono">{{ chars_total }}</span>
+            </div>
+            <div class="row">
+                <span class="row-label">剿灭合成玉 ORUNDUM</span>
+                <span class="row-value mono">{{ campaign_current }} / {{ campaign_total }}</span>
+            </div>
+        </div>
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 便签</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// AP MONITOR ONLINE</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

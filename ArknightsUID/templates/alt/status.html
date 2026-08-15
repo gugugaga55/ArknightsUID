@@ -1,0 +1,48 @@
+{#-
+  alt/status.html —— 理智终端读数卡（「罗德岛作战终端」探索稿 #1）
+  上下文：
+    name, level, uid, ap_current, ap_max, ap_pct, ap_full_at, ap_recover_in,
+    reg_days, chars_total, campaign_current, campaign_total, version
+-#}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "alt/alt_head.html" %}</head>
+<body>
+<div class="terminal container">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span class="tag tag--bracket">Rhodes Island · Ops Terminal</span>
+        <span class="tag" style="font-variant-numeric:tabular-nums;">UID {{ uid }}</span>
+    </div>
+
+    <div class="headline">
+        <div>
+            <span class="tag tag--orange">Doctor · {{ name }} · LV.{{ level }}</span>
+            <div class="title-cn">理智恢复监测</div>
+            <div class="title-en">SANITY MONITOR</div>
+        </div>
+        <div class="diamond-row">
+            <i class="diamond"></i><i class="diamond diamond--hollow"></i><i class="diamond diamond--hollow"></i>
+        </div>
+    </div>
+
+    <div class="readout" style="margin-top:16px;">
+        <div class="readout-value">{{ ap_current }}<span class="unit">/ {{ ap_max }} SANITY</span></div>
+        <div class="readout-label">Current · 完全恢复 {{ ap_full_at }}</div>
+        <div class="bar"><i style="width: {{ ap_pct }}%;"></i></div>
+        <div class="bar-meta"><span>RECOVERY {{ ap_recover_in }}</span><span>{{ ap_pct }}%</span></div>
+    </div>
+
+    <div class="readout-grid">
+        <div class="cell"><div class="num">{{ reg_days }}</div><div class="lbl">服役天数 Days</div></div>
+        <div class="cell"><div class="num">{{ chars_total }}</div><div class="lbl">在册干员 Ops</div></div>
+        <div class="cell"><div class="num">{{ campaign_current }}</div><div class="lbl">周剿灭玉 Ann</div></div>
+        <div class="cell"><div class="num">/{{ campaign_total }}</div><div class="lbl">周上限 Cap</div></div>
+    </div>
+
+    <div class="footer">
+        <span class="tag">ArknightsUID · Terminal/01</span>
+        <span class="stamp">{{ version }}</span>
+    </div>
+</div>
+</body>
+</html>

@@ -1,0 +1,57 @@
+<!--
+  ark_recruit.html —— 公招标签组合结果卡（#21）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_wiki.send_recruit_query 组装）：
+    tags: str               查询标签串（如 "高级资深干员 + 术师"）
+    total: int              匹配总数（截断前）
+    rows: [{rarity: int, name: str, profession: str, tags: str}]
+        匹配干员（rarity 1-6 人读值；tags 为 "/" 分隔的前 3 个标签，可空）
+    truncated: bool         是否有更多未显示
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    {% set rcolor = {6: '#ff8c00', 5: '#d9a34a', 4: '#8a73c4', 3: '#4a90d9', 2: '#7a818c', 1: '#a6abb5'} %}
+    <div class="container" data-ghost="RECRUIT">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 公开招募 RECRUIT</em></span>
+            <span class="mast-meta"><span class="idx">21</span>PRTS.WIKI</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">标签 · {{ tags }}</div>
+                <h1 class="title">公招<em>结果</em></h1>
+                <div class="title-rule"><span class="en">RECRUITMENT</span></div>
+            </div>
+        </div>
+
+        <div class="sect">
+            <span class="sect-label">可招募干员</span>
+            <span class="sect-en">MATCHED // {{ total }} 名</span>
+        </div>
+        <div class="rows">
+            {% for r in rows %}
+            <div class="row">
+                <span class="row-value" style="font-size: 13px;"><span class="mono" style="color: {{ rcolor.get(r.rarity, '#a6abb5') }}; font-weight: 700; margin-right: 6px;">{{ r.rarity }}★</span>{{ r.name }}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 6px;">{{ r.profession }}</span></span>
+                <span class="bar-num" style="max-width: 46%; text-align: right;">{{ r.tags }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% if truncated %}
+        <div class="prose">结果过多，仅显示前 {{ rows | length }} 名，共 {{ total }} 名。</div>
+        {% endif %}
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 公招</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// RECRUITMENT // PRTS.WIKI</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,72 @@
+<!--
+  ark_char_stat.html —— 练度统计卡（按职业分组，#6）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文：
+    name: str, uid: str
+    total: int            持有干员总数
+    e2_total: int         精二总数
+    maxlvl_total: int     满级总数
+    professions: [{name: str, en: str, count: int, e2: int, maxlvl: int}]  8 个职业
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="SQUAD">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 练度统计 SQUAD STATS</em></span>
+            <span class="mast-meta"><span class="idx">06</span>UID {{ uid }}</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">{{ name }} · 练度统计</div>
+                <h1 class="title">练度<em>统计</em></h1>
+                <div class="title-rule"><span class="en">SQUAD STATS</span></div>
+            </div>
+        </div>
+
+        <div class="grid grid-4" style="margin-top: var(--space-5);">
+            <div class="cell">
+                <div class="cell-label">持有 TOTAL</div>
+                <div class="cell-value">{{ total }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">精二 E2</div>
+                <div class="cell-value">{{ e2_total }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">满级 MAX</div>
+                <div class="cell-value">{{ maxlvl_total }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">精二率 E2%</div>
+                <div class="cell-value">{{ (e2_total * 100 / total) | round | int }}<span style="font-size: 12px;">%</span></div>
+            </div>
+        </div>
+
+        <div class="sect">
+            <span class="sect-label bk">按职业</span>
+            <span class="sect-en">PROFESSION // 总数 · 精二 · 满级</span>
+        </div>
+        <div class="rows">
+            {% for p in professions %}
+            <div class="row">
+                <span class="row-value" style="font-size: 13px;">{{ p.name }}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 6px;">{{ p.en }}</span></span>
+                <span class="bar-num">{{ p.count }} / {{ p.e2 }} / {{ p.maxlvl }}</span>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 统计</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// SQUAD STATS</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,78 @@
+<!--
+  ark_rogue.html —— 集成战略（肉鸽）进度卡（#13）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_rogue 组装）：
+    name: str, uid: str
+    records: [{
+        rogue_id: str,        主题 ID（rogue_1..rogue_6）
+        name: str,            主题名（可选，缺省显示 rogue_id）
+        clear_time: int,      通关次数
+        bp_level: int,        声望等级
+        relic_cnt: int,       收藏品解锁数
+        bank_current: int,    当前蜡烛/投资
+        bank_record: int,     历史最高
+        medal_current: int,   奖章已得
+        medal_total: int,     奖章总数
+    }]
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="ROGUE">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 集成战略 I.S.</em></span>
+            <span class="mast-meta"><span class="idx">13</span>UID {{ uid }}</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">{{ name }} · 集成战略</div>
+                <h1 class="title">集成<em>战略</em></h1>
+                <div class="title-rule"><span class="en">INTEGRATED STRATEGIES</span></div>
+            </div>
+        </div>
+
+        {% for r in records %}
+        <div class="sect">
+            <span class="sect-label bk">{{ r.name or r.rogue_id }}</span>
+            <span class="sect-en">{{ r.rogue_id }}</span>
+        </div>
+        <div class="grid grid-4">
+            <div class="cell">
+                <div class="cell-label">通关 CLEARS</div>
+                <div class="cell-value">{{ r.clear_time }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">声望 BP</div>
+                <div class="cell-value">{{ r.bp_level }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">收藏品 RELICS</div>
+                <div class="cell-value">{{ r.relic_cnt }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">奖章 MEDALS</div>
+                <div class="cell-value">{{ r.medal_current }}<span style="font-size: 12px; color: var(--tx-3);">/{{ r.medal_total }}</span></div>
+            </div>
+        </div>
+        <div class="rows" style="margin-top: 0; border-top: 0;">
+            <div class="row">
+                <span class="row-label">投资系统（蜡烛）</span>
+                <span class="bar-num">{{ r.bank_current }} · 最高 {{ r.bank_record }}</span>
+            </div>
+        </div>
+        {% endfor %}
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 肉鸽</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// INTEGRATED STRATEGIES</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

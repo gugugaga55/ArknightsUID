@@ -1,0 +1,63 @@
+<!--
+  ark_wiki_mastery.html —— PRTS 专精材料卡（#15）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_wiki.send_mastery_materials 组装）：
+    name: str             干员名
+    rarity: str           1-6（人读值）
+    profession: str
+    skills: [{name, mastery_costs: [{mastery: str, materials: [str]}]}]  仅含有专精材料的技能
+    source_url/version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="MASTERY">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 专精材料 MASTERY</em></span>
+            <span class="mast-meta"><span class="idx">15</span>PRTS.WIKI</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">{{ profession }} · 技能专精材料</div>
+                <h1 class="title title--s"><em>{{ name }}</em></h1>
+                {% if rarity.isdigit() %}
+                <div class="stars" style="margin-top: var(--space-2);">
+                    {% for i in range(6) %}<i class="{{ 'on' if i < (rarity | int) else '' }}"></i>{% endfor %}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">MASTERY MATERIALS</span></div>
+
+        {% for s in skills %}
+        <div class="sect">
+            <span class="sect-label">{{ s.name }}</span>
+            <span class="sect-en">SKILL {{ loop.index }} // {{ s.mastery_costs | length }} 阶</span>
+        </div>
+        <div class="rows">
+            {% for mc in s.mastery_costs %}
+            <div class="row" style="align-items: flex-start;">
+                <span class="chip chip--yellow" style="flex-shrink: 0; margin-top: 3px;">{{ mc.mastery }}</span>
+                <div class="mats">
+                    {% for m in mc.materials %}
+                    <span class="mat">{% if m.icon %}<span class="iicon"><img src="{{ m.icon }}" alt=""></span>{% endif %}{{ m.name }}{% if m.count %}<span class="cnt">×{{ m.count }}</span>{% endif %}</span>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endfor %}
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 数据来源 PRTS Wiki</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// PRTS // MASTERY MATERIALS</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

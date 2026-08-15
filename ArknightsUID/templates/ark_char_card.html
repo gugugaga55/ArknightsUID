@@ -1,0 +1,109 @@
+<!--
+  ark_char_card.html —— 单干员练度卡（#5）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文：
+    name: str             干员名（阿米娅需带职业后缀，由数据层处理）
+    rarity: int           1-6（注意数据层 rarity+1）
+    profession: str       职业中文（术师/近卫…）
+    avatar: str           头像 base64 data URL
+    level: int            当前等级
+    max_level: int        当前精英化阶段等级上限
+    elite: int            精英化 0-2
+    potential: int        潜能 0-6
+    favor: int            信赖 0-200
+    main_skill_lvl: int   主技能等级 1-7
+    skills: [{icon: str, name: str, specialize: int}]   specialize 0-3
+    equips: [{name: str, stage: int}]  模组（可为空列表）
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="OPERATOR">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 干员档案 OPERATOR</em></span>
+            <span class="mast-meta"><span class="idx">05</span>{{ profession }}</span>
+        </div>
+
+        <div class="titleblock" style="align-items: center;">
+            <div class="optile">
+                {% if avatar %}<img src="{{ avatar }}" alt="">{% endif %}
+            </div>
+            <div style="flex: 1; min-width: 0;">
+                <div class="eyebrow">{{ profession }} · 干员档案</div>
+                <h1 class="title" style="font-size: 36px;">{{ name }}</h1>
+                <div class="stars" style="margin-top: var(--space-2);">
+                    {% for i in range(6) %}<i class="{{ 'on' if i < rarity else '' }}"></i>{% endfor %}
+                </div>
+            </div>
+        </div>
+        <div class="title-rule" style="margin-top: var(--space-4);"><span class="en">OPERATOR FILE</span></div>
+
+        <div class="grid grid-4" style="margin-top: var(--space-4);">
+            <div class="cell">
+                <div class="cell-label">等级 LV</div>
+                <div class="cell-value">{{ level }}</div>
+                <div class="cell-sub">MAX {{ max_level }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">精英化 ELITE</div>
+                <div class="cell-value">{{ elite }}</div>
+                <div class="cell-sub">/ 2</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">潜能 POT</div>
+                <div class="cell-value">{{ potential }}</div>
+                <div class="cell-sub">/ 6</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">信赖 TRUST</div>
+                <div class="cell-value">{{ favor }}<span style="font-size: 12px;">%</span></div>
+                <div class="cell-sub">/ 200%</div>
+            </div>
+        </div>
+
+        <div class="sect">
+            <span class="sect-label bk">技能 · LV{{ main_skill_lvl }}</span>
+            <span class="sect-en">SKILLS // {{ skills | length }}</span>
+        </div>
+        <div class="rows">
+            {% for sk in skills %}
+            <div class="row">
+                <span style="display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0;">
+                    <span class="icon">{% if sk.icon %}<img src="{{ sk.icon }}" alt="">{% endif %}</span>
+                    <span class="row-value" style="font-size: 13px;">{{ sk.name }}</span>
+                </span>
+                <span class="dms" title="专精">
+                    {% for i in range(3) %}<i class="{{ 'on' if i < sk.specialize else '' }}"></i>{% endfor %}
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+
+        {% if equips %}
+        <div class="sect">
+            <span class="sect-label bk">模组</span>
+            <span class="sect-en">MODULES // {{ equips | length }}</span>
+        </div>
+        <div class="rows">
+            {% for eq in equips %}
+            <div class="row">
+                <span class="row-value" style="font-size: 13px;">{{ eq.name }}</span>
+                <span class="chip chip--yellow">STAGE {{ eq.stage }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 干员</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// OPERATOR FILE</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

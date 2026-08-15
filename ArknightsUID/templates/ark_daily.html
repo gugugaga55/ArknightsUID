@@ -1,0 +1,76 @@
+<!--
+  ark_daily.html —— 日常 / 周常进度卡（#3）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文：
+    name: str, uid: str
+    daily_done: int, daily_total: int        每日任务
+    weekly_done: int, weekly_total: int      每周任务
+    campaign_current: int, campaign_total: int  剿灭合成玉
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="ROUTINE">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 日常进度 ROUTINE</em></span>
+            <span class="mast-meta"><span class="idx">03</span>UID {{ uid }}</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">{{ name }} · 日常 / 周常进度</div>
+                <h1 class="title">日常<em>周常</em></h1>
+                <div class="title-rule"><span class="en">ROUTINE TRACKER</span></div>
+            </div>
+        </div>
+
+        <div class="sect">
+            <span class="sect-label bk">任务进度</span>
+            <span class="sect-en">MISSIONS</span>
+        </div>
+        <div class="rows">
+            <div class="row" style="display: block;">
+                <div class="bar-row" style="margin-bottom: var(--space-2);">
+                    <span class="row-label">每日任务 DAILY</span>
+                    <span style="flex: 1;"></span>
+                    <span class="bar-num">{{ daily_done }} / {{ daily_total }}</span>
+                </div>
+                <div class="bar">
+                    <i style="width: {{ (daily_done * 100 / daily_total) | round | int }}%;"></i>
+                </div>
+            </div>
+            <div class="row" style="display: block;">
+                <div class="bar-row" style="margin-bottom: var(--space-2);">
+                    <span class="row-label">每周任务 WEEKLY</span>
+                    <span style="flex: 1;"></span>
+                    <span class="bar-num">{{ weekly_done }} / {{ weekly_total }}</span>
+                </div>
+                <div class="bar">
+                    <i style="width: {{ (weekly_done * 100 / weekly_total) | round | int }}%;"></i>
+                </div>
+            </div>
+            <div class="row" style="display: block;">
+                <div class="bar-row" style="margin-bottom: var(--space-2);">
+                    <span class="row-label">剿灭作战 ANNIHILATION</span>
+                    <span style="flex: 1;"></span>
+                    <span class="bar-num">{{ campaign_current }} / {{ campaign_total }}</span>
+                </div>
+                <div class="bar is-yellow">
+                    <i style="width: {{ (campaign_current * 100 / campaign_total) | round | int }}%;"></i>
+                </div>
+            </div>
+        </div>
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 日常</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// ROUTINE TRACKER</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

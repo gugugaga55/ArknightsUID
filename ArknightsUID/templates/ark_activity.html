@@ -1,0 +1,71 @@
+<!--
+  ark_activity.html —— 进行中活动 / 限定卡池卡（#16）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_push.show_ark_activities 组装）：
+    activities: [{title: str, start: str, end: str}]   限时活动（可空）
+    pools: [{title: str, start: str, end: str}]        限定卡池（可空）
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="EVENTS">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 活动情报 EVENTS</em></span>
+            <span class="mast-meta"><span class="idx">16</span>PRTS.WIKI</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">进行中 / 即将开始</div>
+                <h1 class="title">活动<em>情报</em></h1>
+                <div class="title-rule"><span class="en">EVENTS & HEADHUNTING</span></div>
+            </div>
+        </div>
+
+        {% if activities %}
+        <div class="sect">
+            <span class="sect-label">限时活动</span>
+            <span class="sect-en">EVENTS // {{ activities | length }}</span>
+        </div>
+        <div class="rows">
+            {% for act in activities %}
+            <div class="row">
+                <span class="row-value" style="font-size: 13px;">{{ act.title }}</span>
+                <span class="bar-num">{{ act.start }} ~ {{ act.end }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if pools %}
+        <div class="sect">
+            <span class="sect-label">限定卡池</span>
+            <span class="sect-en">HEADHUNTING // {{ pools | length }}</span>
+        </div>
+        <div class="rows">
+            {% for p in pools %}
+            <div class="row">
+                <span class="row-value" style="font-size: 13px;">{{ p.title }}</span>
+                <span class="bar-num">{{ p.start }} ~ {{ p.end }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if not activities and not pools %}
+        <div class="prose" style="margin-top: var(--space-5);">暂无进行中的活动或卡池。</div>
+        {% endif %}
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 活动</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// EVENTS & HEADHUNTING // PRTS.WIKI</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

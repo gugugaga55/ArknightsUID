@@ -1,0 +1,53 @@
+{#-
+  alt/campaign.html —— 剿灭作战简报卡（「罗德岛作战终端」探索稿 #5）
+  上下文：
+    name, uid, reward_current, reward_total, reward_pct,
+    stages: [{name, progress, total}], version
+-#}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "alt/alt_head.html" %}</head>
+<body>
+<div class="terminal container">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span class="tag tag--bracket">Annihilation Briefing</span>
+        <span class="tag" style="font-variant-numeric:tabular-nums;">UID {{ uid }}</span>
+    </div>
+
+    <div class="headline">
+        <div>
+            <span class="tag tag--orange">{{ name }} · 本周剿灭作战</span>
+            <div class="title-cn">剿灭简报</div>
+            <div class="title-en">ANNIHILATION OPS</div>
+        </div>
+        <div class="diamond-row">
+            <i class="diamond"></i><i class="diamond"></i><i class="diamond"></i>
+        </div>
+    </div>
+
+    <div class="readout" style="margin-top:16px;">
+        <div class="readout-value">{{ reward_current }}<span class="unit">/ {{ reward_total }} ORUNDUM</span></div>
+        <div class="readout-label">Weekly · 合成玉获取进度</div>
+        <div class="bar"><i style="width: {{ reward_pct }}%;"></i></div>
+        <div class="bar-meta"><span>每周上限 {{ reward_total }}</span><span>{{ reward_pct }}%</span></div>
+    </div>
+
+    {% if stages %}
+    <div class="section"><i class="diamond"></i><span class="tag">作战区域 · Zones</span></div>
+    <div class="rows">
+        {% for s in stages %}
+        <div class="row">
+            <span class="row-name">{{ s.name }}</span>
+            <span class="row-num">{% if s.progress >= s.total %}<span class="dim">击杀 {{ s.progress }} · 完成</span>{% else %}<span class="lack">{{ s.progress }}</span><span class="dim"> / {{ s.total }}</span>{% endif %}</span>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="footer">
+        <span class="tag">ArknightsUID · Terminal/05</span>
+        <span class="stamp">{{ version }}</span>
+    </div>
+</div>
+</body>
+</html>

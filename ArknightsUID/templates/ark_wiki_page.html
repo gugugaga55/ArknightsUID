@@ -1,0 +1,54 @@
+<!--
+  ark_wiki_page.html —— PRTS 通用词条卡（#9）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_wiki._build_page_context 提供）：
+    title: str
+    summary: str
+    fields: [{key: str, value: str}]
+    source_url: str
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="PRTS">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 百科词条 PRTS ENTRY</em></span>
+            <span class="mast-meta"><span class="idx">09</span>PRTS.WIKI</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">PRTS 资料库 · 词条</div>
+                <h1 class="title title--s">{{ title }}</h1>
+            </div>
+        </div>
+        <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">PRTS WIKI</span></div>
+
+        {% if summary %}
+        <div class="prose" style="margin-top: var(--space-4);">{{ summary }}</div>
+        {% endif %}
+
+        {% if fields %}
+        <div class="rows" style="margin-top: var(--space-4);">
+            {% for f in fields[:10] %}
+            <div class="row" style="align-items: flex-start;">
+                <span class="row-label" style="flex-shrink: 0;">{{ f.key }}</span>
+                <span class="row-value" style="font-size: 12px; font-weight: 500; text-align: right; max-width: 68%;">{{ f.value }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 数据来源 PRTS Wiki</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// PRTS // ARCHIVE ENTRY</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

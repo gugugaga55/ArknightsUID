@@ -1,0 +1,122 @@
+<!--
+  ark_cultivate.html —— 养成计算卡（#14）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_cultivate.show_cultivation 组装）：
+    version: str
+    name: str                干员显示名（display_name）
+    result: {
+        char: CharEntry,     数据层干员对象（rarity_display / profession_name 等属性可用）
+        current: {
+            evolve_phase: int,        精英化 0-2
+            main_skill_lvl: int,      主技能等级 1-7
+            masteries: [int],         各技能专精 0-3
+            equip_levels: [int],      模组等级
+        },
+        gap: {
+            gold_lack: int,           龙门币缺口
+            materials: [{id, name, rarity, need, owned, lack}],  rarity 形如 "4★" 或空
+            materials_total: int,     缺口材料种数（截断前）
+            exp_books: [{name, lack, need, owned}],
+        },
+        warnings: [str],
+    }
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="CULTIVATE">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 养成计算 CULTIVATE</em></span>
+            <span class="mast-meta"><span class="idx">14</span>{{ result.char.profession_name }}</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">{{ result.char.profession_name }} · 到毕业材料缺口</div>
+                <h1 class="title title--s"><em>{{ name }}</em></h1>
+                {% if result.char.rarity_display %}
+                <div class="stars" style="margin-top: var(--space-2);">
+                    {% for i in range(6) %}<i class="{{ 'on' if i < result.char.rarity_display else '' }}"></i>{% endfor %}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">CULTIVATION PLAN</span></div>
+
+        <div class="grid grid-4" style="margin-top: var(--space-4);">
+            <div class="cell">
+                <div class="cell-label">精英化 ELITE</div>
+                <div class="cell-value">{{ result.current.evolve_phase }}</div>
+                <div class="cell-sub">目标 E2</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">主技能 SKILL</div>
+                <div class="cell-value">{{ result.current.main_skill_lvl }}</div>
+                <div class="cell-sub">目标 LV7</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">专精 MASTERY</div>
+                <div class="cell-value">{{ result.current.masteries | join("/") if result.current.masteries else "-" }}</div>
+                <div class="cell-sub">目标 M3</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">模组 MODULE</div>
+                <div class="cell-value">{{ result.current.equip_levels | max if result.current.equip_levels else "-" }}</div>
+                <div class="cell-sub">目标 满级</div>
+            </div>
+        </div>
+
+        {% if result.gap.gold_lack or result.gap.exp_books %}
+        <div class="sect">
+            <span class="sect-label">货币与经验</span>
+            <span class="sect-en">LMD // EXP</span>
+        </div>
+        <div class="rows">
+            {% if result.gap.gold_lack %}
+            <div class="row">
+                <span class="row-label" style="display: inline-flex; align-items: center; gap: 8px;">{% if result.gap.gold_icon %}<span class="iicon"><img src="{{ result.gap.gold_icon }}" alt=""></span>{% endif %}龙门币 LMD</span>
+                <span class="row-value mono">缺 {{ "{:,}".format(result.gap.gold_lack) }}</span>
+            </div>
+            {% endif %}
+            {% for b in result.gap.exp_books %}
+            <div class="row">
+                <span class="row-label" style="display: inline-flex; align-items: center; gap: 8px;">{% if b.icon %}<span class="iicon"><img src="{{ b.icon }}" alt=""></span>{% endif %}{{ b.name }}</span>
+                <span class="row-value mono">缺 {{ b.lack }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="sect">
+            <span class="sect-label">材料缺口</span>
+            <span class="sect-en">MATERIALS // {{ result.gap.materials_total }} 种</span>
+        </div>
+        {% if result.gap.materials %}
+        <div class="rows">
+            {% for m in result.gap.materials %}
+            <div class="row">
+                <span class="row-value" style="display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px;">{% if m.icon %}<span class="iicon"><img src="{{ m.icon }}" alt=""></span>{% endif %}{% if m.rarity %}<span class="u-mute" style="font-size: 10px; font-weight: 400;">{{ m.rarity }}</span>{% endif %}{{ m.name }}</span>
+                <span class="bar-num">缺 <span class="u-yellow" style="font-size: 13px; font-weight: 700;">{{ m.lack }}</span> · 需 {{ m.need }} · 有 {{ m.owned }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="prose">材料缺口：无——已毕业，或仓库库存充足。</div>
+        {% endif %}
+
+        {% if result.warnings %}
+        <div class="prose prose--blue">{% for w in result.warnings %}⚠ {{ w }}{% if not loop.last %}<br>{% endif %}{% endfor %}</div>
+        {% endif %}
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 养成</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// CULTIVATION PLAN // MATERIAL GAP</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

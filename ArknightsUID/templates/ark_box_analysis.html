@@ -1,0 +1,75 @@
+<!--
+  ark_box_analysis.html —— BOX 分析卡（#7）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文：
+    name: str, uid: str
+    total: int                              持有干员总数
+    rarity_rows: [{label: str, count: int, pct: int, color: str}]
+        稀有度分布（label 如 "6★"，pct 为 0-100，color 为堆叠条颜色）
+    elite_rows: [{label: str, count: int}]  精英化分布（如 精二/精一/无精）
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="BOX">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 干员BOX BOX ANALYSIS</em></span>
+            <span class="mast-meta"><span class="idx">07</span>UID {{ uid }}</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">{{ name }} · BOX 分析</div>
+                <h1 class="title">我的<em>BOX</em></h1>
+                <div class="title-rule"><span class="en">BOX ANALYSIS</span></div>
+            </div>
+        </div>
+
+        <div class="hero">
+            <div class="bignum">{{ total }}<span class="unit"> 持有干员 OPS</span></div>
+        </div>
+
+        <div class="stack" style="margin-top: var(--space-3);">
+            {% for r in rarity_rows %}
+            <i style="width: {{ r.pct }}%; background: {{ r.color }};"></i>
+            {% endfor %}
+        </div>
+
+        <div class="grid grid-4" style="margin-top: var(--space-4);">
+            {% for r in rarity_rows %}
+            <div class="cell">
+                <div class="cell-label">
+                    <i style="display: inline-block; width: 7px; height: 7px; transform: rotate(45deg); background: {{ r.color }}; margin-right: 5px;"></i>{{ r.label }}
+                </div>
+                <div class="cell-value">{{ r.count }}</div>
+                <div class="cell-sub">{{ r.pct }}%</div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="sect">
+            <span class="sect-label bk">精英化分布</span>
+            <span class="sect-en">ELITE</span>
+        </div>
+        <div class="rows">
+            {% for e in elite_rows %}
+            <div class="row">
+                <span class="row-label">{{ e.label }}</span>
+                <span class="row-value mono" style="font-size: 13px;">{{ e.count }}</span>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · BOX</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// BOX ANALYSIS</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

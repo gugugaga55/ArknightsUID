@@ -1,0 +1,53 @@
+<!--
+  ark_help.html —— 指令帮助卡（#1）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  排列方式：分组 + 双列命令格（命令 / 说明 / 示例），信息结构对齐 EndUID help.json
+  上下文：
+    version: str
+    groups: [{name: str, en: str, cmds: [{cmd: str, desc: str, eg: str}]}]
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="HELP">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 使用说明 MANUAL</em></span>
+            <span class="mast-meta"><span class="idx">01</span>COMMAND LIST</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">ArknightsUID · 使用说明</div>
+                <h1 class="title">指令<em>帮助</em></h1>
+                <div class="title-rule"><span class="en">COMMAND MANUAL</span></div>
+            </div>
+        </div>
+
+        {% for group in groups %}
+        <div class="sect">
+            <span class="sect-label bk">{{ group.name }}</span>
+            <span class="sect-en">{{ group.en }} // {{ group.cmds | length }}</span>
+        </div>
+        <div class="grid grid-2">
+            {% for c in group.cmds %}
+            <div class="cell">
+                <div class="cell-cmd mono">{{ c.cmd }}</div>
+                <div class="cell-desc">{{ c.desc }}</div>
+                <div class="cell-eg">示例：{{ c.eg }}</div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endfor %}
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 帮助</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// COMMAND MANUAL</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

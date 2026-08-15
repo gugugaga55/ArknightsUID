@@ -1,55 +1,71 @@
 /*
- * ArknightsUID 基础样式（自研）
+ * ArknightsUID 设计系统（自研）
  *
- * 设计语言：明日方舟罗德岛工业风
- *   - 深色背景 + 冷灰阶
- *   - 橙色（#ff6a00）作为唯一强调色，呼应游戏 UI 的高亮色
- *   - 细线条 + 棱角分明的卡片，避免圆滑"萌系"感
- *   - 等宽字体用于数字，提升数据可读性
+ * 设计语言：「罗德岛终端 / RHODES TERMINAL」v3（2026-08-14 二次重构）
+ * 视觉基线：明日方舟游戏内 UI——终端主界面 / 干员列表 / 任务 / 仓库的
+ *           浅色界面语言；背景为游戏主界面舰桥场景图（PRTS 公版资源）。
  *
- * 此文件定义 CSS 变量和基础组件类，所有 ark_*.html 模板都应 @import 此文件。
+ *   · 强制浅色：舰桥背景图 + 纸白渐变纱罩 + 纯白面板，截图即游戏终端
+ *   · 信号黄 #FFC907 是第一强调色（进度条 / 菱形 / 选中态 / 标题块）
+ *   · 黄黑 45° 斜纹（寻访条纹）只出现在标题规则线与画幅底缘
+ *   · 切角面板 + 菱形母题 + 发丝分隔线；拒绝圆角卡片堆叠
+ *   · 中文 MiSans，数字/英文 JetBrains Mono，微字大写宽距做信息分层
+ *
+ * 截图产物为 JPEG（无透明通道），.container 即画面本身。
+ * 所有 ark_*.html 模板用 jinja 的 include 语法内联此文件（写进 <style> 块），
+ * 保证本地 set_content 渲染时样式不依赖相对路径解析。
+ * 注意：本文件会被当作 jinja 模板解析，注释中禁止出现双花括号/百分号标签语法。
  */
 
 :root {
-    /* 背景色阶 */
-    --bg-base: #0f1419;        /* 最深底色 */
-    --bg-card: #1a2028;        /* 卡片底色 */
-    --bg-elevated: #232a35;    /* 抬升层（标题栏、表头）*/
-    --bg-row-alt: #1e2530;     /* 列表隔行底色 */
+    /* 纸面与面板 */
+    --paper: #f4f5f7;          /* 画幅底（纱罩色）*/
+    --panel: #ffffff;          /* 内容面板 */
+    --panel-2: #eceef1;        /* 轨道 / 嵌套底 */
+    --line: #d8dbe0;           /* 主边线 */
+    --hairline: #e7e9ed;       /* 分隔发丝线 */
 
-    /* 文字色阶 */
-    --text-primary: #e6ecf2;   /* 主要文字 */
-    --text-secondary: #9ba8b5; /* 次要文字（说明、单位）*/
-    --text-muted: #5f6d7c;     /* 弱化文字（时间戳、占位）*/
+    /* 墨色 */
+    --tx-0: #16181d;           /* 主文字 */
+    --tx-1: #3e444e;           /* 次级文字 */
+    --tx-2: #7a818c;           /* 标签文字 */
+    --tx-3: #a6abb5;           /* 微字（大写宽距）*/
 
-    /* 强调色（罗德岛橙）*/
-    --accent: #ff6a00;
-    --accent-dim: #b24a00;
-    --accent-glow: rgba(255, 106, 0, 0.25);
+    /* 强调 */
+    --yellow: #ffc907;         /* 信号黄（第一强调色）*/
+    --yellow-deep: #e0a800;    /* 斜纹暗部 / 黄字描边 */
+    --yellow-dim: rgba(255, 201, 7, 0.16);
+    --ink-block: #16181d;      /* 黑标签块 */
+    --blue: #0098dc;           /* 情报蓝（PRTS）*/
 
-    /* 状态色 */
-    --rarity-6: #ff8c00;       /* 6 星 - 金 */
-    --rarity-5: #d9a34a;       /* 5 星 - 黄 */
-    --rarity-4: #8a73c4;       /* 4 星 - 紫 */
-    --rarity-3: #4a90d9;       /* 3 星 - 蓝 */
-    --success: #4caf50;
-    --warning: #ffb300;
-    --danger: #e53935;
+    /* 状态 */
+    --ok: #51a029;
+    --warn: #e6a100;
+    --alert: #d9362b;
 
-    /* 描边 */
-    --border: #2a3441;
-    --border-strong: #3d4a5c;
+    /* 稀有度（游戏客观配色）*/
+    --rarity-6: #ff8c00;
+    --rarity-5: #d9a34a;
+    --rarity-4: #8a73c4;
+    --rarity-3: #4a90d9;
 
-    /* 间距 */
-    --space-xs: 4px;
-    --space-sm: 8px;
-    --space-md: 12px;
-    --space-lg: 20px;
-    --space-xl: 32px;
+    /* 字距 */
+    --tracking-micro: 0.22em;  /* 微字宽距 */
+    --tracking-label: 0.08em;
 
-    /* 圆角（克制使用，保持工业感）*/
-    --radius-sm: 2px;
-    --radius-md: 4px;
+    /* 间距（4 的倍数）*/
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 24px;
+    --space-6: 32px;
+    --space-7: 48px;
+
+    /* 容器内边距（ticker 全幅条用负边距对齐）*/
+    --pad-x: 26px;
+
+    --mono: "JetBrains Mono", "Google Sans Flex", "Consolas", monospace;
 }
 
 * {
@@ -59,83 +75,793 @@
 }
 
 body {
-    font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
-    background: var(--bg-base);
-    color: var(--text-primary);
+    font-family: "MiSans", "Google Sans Flex", "Noto Sans SC",
+        "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--paper);
+    color: var(--tx-0);
     font-size: 14px;
     line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
 }
 
-/* 等宽数字（理智、UID、统计数字等）*/
 .mono {
-    font-family: "JetBrains Mono", "Consolas", monospace;
+    font-family: var(--mono);
     font-variant-numeric: tabular-nums;
 }
 
-/* === 容器：所有卡片渲染的根节点（Playwright 截图 .container）=== */
+/* === 容器：所有卡片渲染的根节点（Playwright 截图 .container）===
+   游戏终端语言：
+   · 舰桥场景图置顶全幅铺底，纸白纱罩向下渐浓（上方艺术图清晰可见）
+   · 底缘 4px 黄黑寻访斜纹（载入条母题）
+   · 1px 内框 + 四角小方块装裱
+   · 右侧巨型菱形水印（::before）＝ 罗德岛菱形徽记
+   · 右侧竖排描边幽灵字（::after，data-ghost）*/
 .container {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--accent);  /* 左侧橙色竖条是 ArknightsUID 标志 */
-    padding: var(--space-lg);
-    width: fit-content;
-    min-width: 400px;
+    position: relative;
+    width: 560px;
+    padding: 20px var(--pad-x) 18px;
+    background-color: var(--paper);
+    background-image:
+        /* 底缘寻访斜纹（最顶层）*/
+        repeating-linear-gradient(
+            -45deg, var(--yellow) 0 6px, var(--ink-block) 6px 12px
+        ),
+        /* 四角小方块 */
+        linear-gradient(var(--tx-0), var(--tx-0)),
+        linear-gradient(var(--tx-0), var(--tx-0)),
+        linear-gradient(var(--tx-0), var(--tx-0)),
+        linear-gradient(var(--tx-0), var(--tx-0)),
+        /* 纸白纱罩：顶部微透场景，向下快速渐实至不透明 */
+        linear-gradient(180deg,
+            rgba(244, 245, 247, 0.42) 0px,
+            rgba(244, 245, 247, 0.72) 110px,
+            rgba(244, 245, 247, 0.93) 190px,
+            rgba(244, 245, 247, 0.99) 250px,
+            var(--paper) 300px),
+        /* 舰桥场景图（PRTS 公版游戏背景，base64 内联）*/
+        url("data:image/jpeg;base64,{% include "assets/bg_terminal_day.b64" %}");
+    background-size:
+        100% 4px,
+        5px 5px, 5px 5px, 5px 5px, 5px 5px,
+        100% 100%,
+        100% auto;
+    background-position:
+        bottom left,
+        9px 12px, calc(100% - 14px) 12px,
+        9px calc(100% - 18px), calc(100% - 14px) calc(100% - 18px),
+        0 0,
+        top center;
+    background-repeat: no-repeat;
+    outline: 1px solid var(--line);
+    outline-offset: -1px;
+    overflow: hidden;
 }
 
-/* === 标题栏 === */
-.header {
+/* 菱形水印：罗德岛徽记的界面化转译（双描边菱形，极淡）*/
+.container::before {
+    content: "";
+    position: absolute;
+    right: -150px;
+    top: 52%;
+    width: 330px;
+    height: 330px;
+    transform: translateY(-50%) rotate(45deg);
+    border: 1px solid rgba(22, 24, 29, 0.05);
+    outline: 1px solid rgba(22, 24, 29, 0.035);
+    outline-offset: 22px;
+    z-index: 0;
+    pointer-events: none;
+}
+
+/* 竖排幽灵字（描边大字）*/
+.container::after {
+    content: attr(data-ghost);
+    position: absolute;
+    top: 50%;
+    right: 6px;
+    transform: translateY(-50%);
+    writing-mode: vertical-rl;
+    font-family: var(--mono);
+    font-size: 46px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    color: transparent;
+    -webkit-text-stroke: 1px rgba(22, 24, 29, 0.07);
+    z-index: 0;
+    pointer-events: none;
+}
+
+.container > * {
+    position: relative;
+    z-index: 1;
+}
+
+/* === 顶部微机行：品牌 + 编号（「//」分隔微字）=== */
+.mast {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-bottom: 10px;
+    border-bottom: 1px solid rgba(22, 24, 29, 0.14);
+}
+
+.mast-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: var(--tracking-micro);
+    color: var(--tx-0);
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+/* 品牌前置黄方块 */
+.mast-brand::before {
+    content: "";
+    width: 8px;
+    height: 8px;
+    background: var(--yellow);
+    outline: 1px solid var(--ink-block);
+    outline-offset: -1px;
+    flex-shrink: 0;
+}
+
+.mast-brand em {
+    font-style: normal;
+    font-weight: 500;
+    color: var(--tx-1);
+}
+
+.mast-meta {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    color: var(--tx-1);
+    white-space: nowrap;
+}
+
+/* 工业条码（档案编号感）*/
+.mast-meta::after {
+    content: "";
+    width: 42px;
+    height: 11px;
+    background: repeating-linear-gradient(90deg,
+        var(--tx-0) 0 2px, transparent 2px 4px,
+        var(--tx-0) 4px 5px, transparent 5px 9px,
+        var(--tx-0) 9px 12px, transparent 12px 14px,
+        var(--tx-0) 14px 15px, transparent 15px 19px);
+    opacity: 0.6;
+    flex-shrink: 0;
+}
+
+/* === 标题区：微字引子 + 巨字（黄块强调）+ 寻访纹规则线 === */
+.titleblock {
+    margin-top: var(--space-5);
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    gap: var(--space-4);
+}
+
+.eyebrow {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: var(--tracking-label);
+    color: var(--tx-1);
+}
+
+/* 引子前置黄菱形（源石母题）*/
+.eyebrow::before {
+    content: "";
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    margin-right: 7px;
+    transform: rotate(45deg) translateY(-1px);
+    background: var(--yellow);
+    outline: 1px solid var(--ink-block);
+    outline-offset: -1px;
+}
+
+.title {
+    margin-top: 6px;
+    font-size: 42px;
+    font-weight: 700;
+    line-height: 1.04;
+    letter-spacing: 0.02em;
+    color: var(--tx-0);
+}
+
+/* 标题内强调字（不设底色块——官方角色档案标题为纯黑字，黄色只留给功能位）*/
+.title em {
+    font-style: normal;
+    color: var(--tx-0);
+}
+
+.title .thin {
+    font-weight: 400;
+    color: var(--tx-2);
+}
+
+/* 标题规则线：寻访斜纹段 + 发丝线 + 英文微字 */
+.title-rule {
+    margin-top: var(--space-3);
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding-bottom: var(--space-md);
-    margin-bottom: var(--space-lg);
-    border-bottom: 1px solid var(--border);
+    gap: var(--space-3);
 }
 
-.header-title {
-    font-size: 16px;
+.title-rule::before {
+    content: "";
+    width: 52px;
+    height: 5px;
+    background: repeating-linear-gradient(
+        -45deg, var(--yellow) 0 4px, var(--ink-block) 4px 8px
+    );
+    flex-shrink: 0;
+}
+
+.title-rule::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--line);
+}
+
+.title-rule .en {
+    font-family: var(--mono);
+    font-size: 9px;
+    font-weight: 500;
+    letter-spacing: 0.3em;
+    color: var(--tx-2);
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+/* === 小节标题：黄菱形 + 粗体标签 + 发丝线 + 「// EN」微字 === */
+.sect {
+    margin-top: var(--space-5);
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+}
+
+.sect-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
     font-weight: 700;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.04em;
+    color: var(--tx-0);
+    white-space: nowrap;
 }
 
-.header-subtitle {
-    font-size: 12px;
-    color: var(--text-secondary);
+.sect-label::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    transform: rotate(45deg);
+    background: var(--yellow);
+    outline: 1px solid var(--ink-block);
+    outline-offset: -1px;
+    flex-shrink: 0;
 }
 
-/* === 数据行 === */
+/* 括号标记（默认隐藏——浅色终端语言不用括号，保留类名兼容模板）*/
+.bk::before,
+.bk::after { content: none; }
+
+.sect::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--line);
+}
+
+.sect-en {
+    font-family: var(--mono);
+    font-size: 9px;
+    letter-spacing: var(--tracking-micro);
+    color: var(--tx-3);
+    text-transform: uppercase;
+    white-space: nowrap;
+    order: 3;
+}
+
+.sect-en::before {
+    content: "//";
+    margin-right: 4px;
+    color: var(--tx-3);
+}
+
+/* === 数据行：发丝线分隔，标签左 / 数值右 === */
+.rows {
+    margin-top: var(--space-3);
+    border-top: 1px solid var(--hairline);
+}
+
 .row {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: var(--space-sm) 0;
-}
-
-.row + .row {
-    border-top: 1px solid var(--border);
+    gap: var(--space-3);
+    padding: 9px 2px;
+    border-bottom: 1px solid var(--hairline);
 }
 
 .row-label {
-    color: var(--text-secondary);
-    font-size: 13px;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: var(--tracking-label);
+    color: var(--tx-2);
 }
 
 .row-value {
-    color: var(--text-primary);
-    font-weight: 500;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--tx-0);
 }
 
-.row-value.accent {
-    color: var(--accent);
+/* 关键行：黄色左条选中态（任务界面的选中语言）*/
+.row--active {
+    background: var(--yellow-dim);
+    border-left: 3px solid var(--yellow);
+    padding-left: 10px;
 }
 
-/* === 页脚 === */
-.footer {
-    margin-top: var(--space-lg);
-    padding-top: var(--space-md);
-    border-top: 1px solid var(--border);
-    font-size: 11px;
-    color: var(--text-muted);
+/* === 核心指标行：大数字 + 右侧附属信息 === */
+.hero {
+    margin-top: var(--space-5);
     display: flex;
     justify-content: space-between;
+    align-items: flex-end;
+    gap: var(--space-4);
 }
+
+/* 长标题变体（wiki 词条名等）*/
+.title--s { font-size: 32px; }
+
+/* === 大数字：理智 / 合成玉 / 总抽数等核心指标 === */
+.bignum {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 50px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1;
+    color: var(--tx-0);
+}
+
+.bignum .unit {
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    letter-spacing: 0.05em;
+    color: var(--tx-2);
+}
+
+.bignum .red { color: var(--yellow-deep); }
+
+/* === 进度条：浅灰轨道 + 信号黄斜纹填充 + 黑端帽（寻访语言）=== */
+.bar {
+    position: relative;
+    height: 8px;
+    background: var(--panel-2);
+    border: 1px solid var(--hairline);
+}
+
+.bar > i {
+    display: block;
+    height: 100%;
+    background: repeating-linear-gradient(
+        -45deg, var(--yellow) 0 5px, var(--yellow-deep) 5px 10px
+    );
+    border-right: 2px solid var(--ink-block);
+}
+
+.bar-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+}
+
+.bar-row .bar { flex: 1; }
+
+.bar-num {
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--tx-2);
+    white-space: nowrap;
+}
+
+/* === 分段网格：1px 发丝线分隔的白面板统计格 === */
+.grid {
+    display: grid;
+    gap: 1px;
+    margin-top: var(--space-3);
+    background: var(--hairline);
+    border: 1px solid var(--hairline);
+}
+
+.grid-2 { grid-template-columns: repeat(2, 1fr); }
+.grid-4 { grid-template-columns: repeat(4, 1fr); }
+
+.cell {
+    background: var(--panel);
+    padding: 10px var(--space-3);
+}
+
+.cell .cell-label {
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: var(--tracking-label);
+    color: var(--tx-3);
+    text-transform: uppercase;
+}
+
+.cell .cell-value {
+    margin-top: var(--space-1);
+    font-family: var(--mono);
+    font-variant-numeric: tabular-nums;
+    font-size: 21px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    color: var(--tx-0);
+}
+
+.cell .cell-sub {
+    margin-top: 2px;
+    font-size: 10px;
+    color: var(--tx-3);
+}
+
+/* 帮助卡命令格 */
+.cell .cell-cmd {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--tx-0);
+}
+
+.cell .cell-desc {
+    margin-top: var(--space-1);
+    font-size: 11px;
+    color: var(--tx-1);
+}
+
+.cell .cell-eg {
+    margin-top: 2px;
+    font-size: 10px;
+    color: var(--tx-3);
+}
+
+/* === 直角标签片：职业 / 类型 / 来源 === */
+.chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 22px;
+    padding: 0 9px;
+    border: 1px solid var(--line);
+    background: var(--panel);
+    color: var(--tx-1);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    white-space: nowrap;
+}
+
+.chip--ink {
+    background: var(--ink-block);
+    border-color: var(--ink-block);
+    color: #ffffff;
+}
+
+.chip--yellow {
+    background: var(--yellow);
+    border-color: var(--ink-block);
+    color: var(--tx-0);
+}
+
+.chip--blue {
+    color: var(--blue);
+    border-color: rgba(0, 152, 220, 0.45);
+    background: rgba(0, 152, 220, 0.07);
+}
+
+.chip--ghost {
+    background: transparent;
+    color: var(--tx-2);
+}
+
+/* 兼容类名：原 chip--red 归入黑标签 */
+.chip--red {
+    background: var(--ink-block);
+    border-color: var(--ink-block);
+    color: #ffffff;
+}
+
+/* 状态小方块（chip 内联指示）*/
+.chip .st {
+    width: 7px;
+    height: 7px;
+    background: var(--ok);
+    flex-shrink: 0;
+}
+
+.chip .st.is-red { background: var(--alert); }
+.chip .st.is-yellow { background: var(--yellow); }
+
+/* 标签片流 */
+.chip-flow {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+}
+
+/* === 星级：信号黄实星（官方干员页 ★★★★ 制）=== */
+.stars {
+    display: inline-flex;
+    gap: 3px;
+    align-items: center;
+}
+
+.stars > i {
+    font-style: normal;
+    font-size: 14px;
+    line-height: 1;
+    color: #d8dbe0;
+}
+
+.stars > i::before { content: "★"; }
+
+.stars > i.on { color: var(--yellow-deep); }
+
+/* === 菱形点位：专精 / 潜能等 0-3 小点（源石菱形母题）=== */
+.dms {
+    display: inline-flex;
+    gap: 6px;
+    align-items: center;
+}
+
+.dms > i {
+    width: 7px;
+    height: 7px;
+    transform: rotate(45deg);
+    background: #d8dbe0;
+}
+
+.dms > i.on {
+    background: var(--yellow);
+    outline: 1px solid var(--ink-block);
+    outline-offset: -1px;
+}
+
+/* === 干员立绘/头像切角块（编队卡斜切语言；padding 撑出 1px 切角边）=== */
+.optile {
+    position: relative;
+    width: 92px;
+    height: 92px;
+    flex-shrink: 0;
+    background: var(--ink-block);
+    padding: 1px;
+    clip-path: polygon(14px 0, 100% 0, 100% calc(100% - 14px), calc(100% - 14px) 100%, 0 100%, 0 14px);
+}
+
+.optile img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    background: var(--panel-2);
+}
+
+/* 编号徽：黑色直角块（终端编号语言）*/
+.idx {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    height: 16px;
+    padding: 0 5px;
+    background: var(--ink-block);
+    color: #ffffff;
+    font-family: var(--mono);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.idx--ghost {
+    background: var(--panel-2);
+    color: var(--tx-2);
+}
+
+/* === 技能/模组小图标（直角 + 右下黑黄斜纹角标 = 官方技能框）=== */
+.icon {
+    position: relative;
+    width: 34px;
+    height: 34px;
+    overflow: hidden;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    flex-shrink: 0;
+}
+
+.icon img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.icon::after {
+    content: "";
+    position: absolute;
+    right: 0;
+    bottom: 0;
+    width: 10px;
+    height: 10px;
+    background: repeating-linear-gradient(
+        -45deg, var(--ink-block) 0 2px, var(--yellow) 2px 4px
+    );
+    clip-path: polygon(100% 0, 100% 100%, 0 100%);
+}
+
+/* === 正文块：浅面板 + 信号黄左条（官方引言格式）=== */
+.prose {
+    margin-top: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    background: var(--panel);
+    border: 1px solid var(--hairline);
+    border-left: 3px solid var(--yellow);
+    font-size: 12px;
+    line-height: 1.8;
+    color: var(--tx-1);
+}
+
+.prose strong { color: var(--tx-0); }
+
+/* 情报蓝变体（PRTS 特性/情报）*/
+.prose--blue {
+    border-left-color: var(--blue);
+    background: rgba(0, 152, 220, 0.05);
+}
+
+/* === 插图：关卡地图等整幅图片（白面板 + 边线 + 内衬）=== */
+.figure {
+    margin-top: var(--space-3);
+    border: 1px solid var(--line);
+    background: var(--panel);
+    padding: 4px;
+}
+
+.figure img {
+    display: block;
+    width: 100%;
+}
+
+/* === 堆叠条：稀有度/分类分布 === */
+.stack {
+    display: flex;
+    height: 10px;
+    border: 1px solid var(--hairline);
+    background: var(--panel-2);
+    overflow: hidden;
+}
+
+.stack > i {
+    display: block;
+    height: 100%;
+}
+
+/* === 页脚：品牌行 + 全幅微字 ticker === */
+.foot {
+    margin-top: var(--space-5);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.foot-brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.14em;
+    color: var(--tx-0);
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.foot-brand::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    background: var(--yellow);
+    outline: 1px solid var(--ink-block);
+    outline-offset: -1px;
+    flex-shrink: 0;
+}
+
+.foot-meta {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    color: var(--tx-2);
+    white-space: nowrap;
+}
+
+/* 全幅微字带：左右顶到画幅边缘，上下发丝线夹住 */
+.ticker {
+    margin: var(--space-4) calc(var(--pad-x) * -1) -8px;
+    padding: 6px var(--pad-x);
+    border-top: 1px solid var(--hairline);
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-4);
+    font-family: var(--mono);
+    font-size: 8px;
+    letter-spacing: 0.26em;
+    color: var(--tx-3);
+    text-transform: uppercase;
+    white-space: nowrap;
+    overflow: hidden;
+}
+
+/* === 物品图标（PRTS 带框道具图）：材料行 / 专精材料 === */
+.iicon {
+    width: 26px;
+    height: 26px;
+    flex-shrink: 0;
+}
+
+.iicon img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.iicon--lg { width: 56px; height: 56px; }
+
+/* 材料组：图标 + 名称 + 数量（专精卡右侧可换行）*/
+.mats {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 6px var(--space-3);
+    max-width: 76%;
+}
+
+.mat {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--tx-0);
+    white-space: nowrap;
+}
+
+.mat .cnt {
+    font-family: var(--mono);
+    font-weight: 700;
+    color: var(--yellow-deep);
+}
+
+/* === 工具类 === */
+.u-upper { text-transform: uppercase; }
+.u-mute  { color: var(--tx-3); }
+.u-red   { color: var(--alert); }
+.u-blue  { color: var(--blue); }
+.u-yellow { color: var(--yellow-deep); }

@@ -1,0 +1,66 @@
+<!--
+  ark_drop_rate.html —— 材料掉率卡（#18）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_push.show_drop_rate 组装）：
+    item_name: str          材料名
+    rows: [{
+        stage_code: str,    关卡代号（如 1-7）
+        zone: str,          所属章节/区域
+        rate: float,        每把期望件数
+        ap_expect: float,   单件期望理智
+        times: int,         样本把数
+        rate_pct: int,      相对最高掉率的百分比 0-100（进度条宽）
+    }]
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="DROP">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 材料掉率 DROP RATE</em></span>
+            <span class="mast-meta"><span class="idx">18</span>YITULIU</span>
+        </div>
+
+        <div class="titleblock" style="align-items: center;">
+            <div style="display: flex; align-items: center; gap: 14px;">
+                {% if item_icon %}<span class="iicon iicon--lg"><img src="{{ item_icon }}" alt=""></span>{% endif %}
+                <div>
+                    <div class="eyebrow">掉落关卡 · 按掉率降序</div>
+                    <h1 class="title title--s"><em>{{ item_name }}</em></h1>
+                </div>
+            </div>
+        </div>
+        <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">DROP RATES</span></div>
+
+        <div class="sect">
+            <span class="sect-label">掉落关卡</span>
+            <span class="sect-en">STAGES // 样本 &gt; 300</span>
+        </div>
+        <div class="rows">
+            {% for r in rows %}
+            <div class="row" style="display: block;">
+                <div class="bar-row" style="margin-bottom: 6px;">
+                    <span class="row-value" style="font-size: 13px;">{{ r.stage_code }}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 6px;">{{ r.zone }}</span></span>
+                    <span style="flex: 1;"></span>
+                    <span class="bar-num">{{ "%.3f" | format(r.rate) }} 件 · {{ "%.0f" | format(r.ap_expect) }} 理智/件 · {{ "{:,}".format(r.times) }} 把</span>
+                </div>
+                <div class="bar">
+                    <i style="width: {{ r.rate_pct }}%;"></i>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 掉率</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// DROP RATES // ARK.YITULIU.CN</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

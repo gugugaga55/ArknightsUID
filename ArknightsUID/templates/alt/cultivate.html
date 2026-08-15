@@ -1,0 +1,71 @@
+{#-
+  alt/cultivate.html —— 养成需求清单卡（「罗德岛作战终端」探索稿 #4，新功能 UI）
+  上下文：
+    name, profession,
+    current: {evolve_phase, main_skill_lvl, masteries[], equip_levels[]}
+    gap: {materials: [{name, rarity, need, owned, lack}], materials_total,
+          exp_books: [{name, lack}], gold_lack}
+    version
+-#}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "alt/alt_head.html" %}</head>
+<body>
+<div class="terminal container">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span class="tag tag--bracket">Cultivation Plan</span>
+        <span class="tag">目标 · 毕业 E2/M3</span>
+    </div>
+
+    <div class="headline">
+        <div>
+            <span class="tag tag--orange">{{ profession }}</span>
+            <div class="title-cn">{{ name }} · 养成需求</div>
+            <div class="title-en">UPGRADE REQUIREMENT</div>
+        </div>
+        <div class="diamond-row">
+            <i class="diamond"></i><i class="diamond diamond--hollow"></i><i class="diamond"></i>
+        </div>
+    </div>
+
+    <div class="readout-grid" style="grid-template-columns:repeat(4,1fr);margin-top:16px;">
+        <div class="cell"><div class="num">E{{ current.evolve_phase }}<span class="dim" style="font-size:11px;color:var(--ink-dim);">→2</span></div><div class="lbl">精英化</div></div>
+        <div class="cell"><div class="num">SL{{ current.main_skill_lvl }}<span style="font-size:11px;color:var(--ink-dim);">→7</span></div><div class="lbl">主技能</div></div>
+        <div class="cell"><div class="num">M{% for m in current.masteries %}{{ m }}{% if not loop.last %}/{% endif %}{% endfor %}</div><div class="lbl">专精→3</div></div>
+        <div class="cell"><div class="num">{% if gap.gold_lack %}{{ gap.gold_lack }}{% else %}0{% endif %}</div><div class="lbl">龙门币缺口</div></div>
+    </div>
+
+    {% if gap.materials %}
+    <div class="section"><i class="diamond"></i><span class="tag">材料缺口 · {{ gap.materials_total }} 种（共 {{ gap.materials | length }} 项显示）</span></div>
+    <div class="rows">
+        {% for row in gap.materials %}
+        <div class="row">
+            <span class="row-name">{{ row.name }}{% if row.rarity %}<span class="sub">{{ row.rarity }}</span>{% endif %}</span>
+            <span class="row-num"><span class="lack">缺 {{ row.lack }}</span> <span class="dim">/ 需{{ row.need }} 有{{ row.owned }}</span></span>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="section"><i class="diamond"></i><span class="tag">材料缺口</span></div>
+    <div class="rows"><div class="row"><span class="row-name" style="color:var(--orange);">材料需求已满足 —— 该干员已达成目标练度</span><span class="row-num dim">CLEAR</span></div></div>
+    {% endif %}
+
+    {% if gap.exp_books %}
+    <div class="section"><i class="diamond"></i><span class="tag">作战记录 · EXP</span></div>
+    <div class="rows">
+        {% for row in gap.exp_books %}
+        <div class="row">
+            <span class="row-name">{{ row.name }}</span>
+            <span class="row-num"><span class="lack">缺 {{ row.lack }}</span></span>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="footer">
+        <span class="tag">不含等级经验与金币曲线 · Terminal/04</span>
+        <span class="stamp">{{ version }}</span>
+    </div>
+</div>
+</body>
+</html>

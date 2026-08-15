@@ -1,0 +1,123 @@
+<!--
+  ark_wiki_operator.html —— PRTS 干员资料卡（#10）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_wiki._build_operator_context 提供）：
+    title/name: str
+    rarity: str           1-6（已 +1，人读值）
+    profession/branch/position/faction/tags/obtain: str
+    trait: str            特性
+    summary: str
+    talents: [{slot, name, unlock, description}]
+    skills: [{name, skill_type, range,
+              levels: [{level, description, sp_init, sp_cost, duration}],
+              mastery_costs: [{mastery, materials: [str]}]}]
+    source_url/version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="OPERATOR">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 干员资料 PRTS FILE</em></span>
+            <span class="mast-meta"><span class="idx">10</span>PRTS.WIKI</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">{{ profession }}{% if branch %} · {{ branch }}{% endif %}{% if position %} · {{ position }}{% endif %}</div>
+                <h1 class="title title--s">{{ name }}</h1>
+                {% if rarity.isdigit() %}
+                <div class="stars" style="margin-top: var(--space-2);">
+                    {% for i in range(6) %}<i class="{{ 'on' if i < (rarity | int) else '' }}"></i>{% endfor %}
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">OPERATOR FILE</span></div>
+
+        <div class="rows" style="margin-top: var(--space-4);">
+            {% if faction %}
+            <div class="row">
+                <span class="row-label">所属势力 FACTION</span>
+                <span class="row-value" style="font-size: 13px;">{{ faction }}</span>
+            </div>
+            {% endif %}
+            {% if tags %}
+            <div class="row">
+                <span class="row-label">标签 TAGS</span>
+                <span class="row-value" style="font-size: 13px;">{{ tags }}</span>
+            </div>
+            {% endif %}
+            {% if obtain %}
+            <div class="row">
+                <span class="row-label">获得方式 OBTAIN</span>
+                <span class="row-value" style="font-size: 12px; text-align: right; max-width: 68%;">{{ obtain }}</span>
+            </div>
+            {% endif %}
+        </div>
+
+        {% if trait %}
+        <div class="prose prose--blue"><strong>特性</strong>　{{ trait }}</div>
+        {% endif %}
+
+        {% if talents %}
+        <div class="sect">
+            <span class="sect-label bk">天赋</span>
+            <span class="sect-en">TALENTS // {{ talents | length }}</span>
+        </div>
+        <div class="rows">
+            {% for t in talents %}
+            <div class="row" style="display: block;">
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                    <span class="row-value" style="font-size: 13px;">{% if t.slot %}{{ t.slot}} · {% endif %}{{ t.name }}</span>
+                    {% if t.unlock %}<span class="bar-num">{{ t.unlock }}</span>{% endif %}
+                </div>
+                {% if t.description %}
+                <div style="margin-top: 4px; font-size: 11px; color: var(--tx-1); line-height: 1.7;">{{ t.description }}</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if skills %}
+        <div class="sect">
+            <span class="sect-label bk">技能</span>
+            <span class="sect-en">SKILLS // {{ skills | length }}</span>
+        </div>
+        <div class="rows">
+            {% for s in skills %}
+            <div class="row" style="display: block;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span class="row-value" style="font-size: 13px;">{{ s.name }}</span>
+                    {% if s.skill_type %}<span class="chip chip--ink" style="height: 20px;">{{ s.skill_type }}</span>{% endif %}
+                </div>
+                {% if s.levels %}
+                <div style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px;">
+                    {% for lv in s.levels %}
+                    {% if loop.index0 in (0, 3, 6, 7, 9) %}
+                    <span class="chip chip--ghost mono" style="height: 20px; font-size: 10px;">{{ lv.level }}{% if lv.sp_cost %} · {{ lv.sp_cost }}耗{% endif %}{% if lv.duration %} · {{ lv.duration }}s{% endif %}</span>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+                {% endif %}
+                {% for mc in s.mastery_costs %}
+                <div style="margin-top: 4px; font-size: 10px; color: var(--tx-3);">{{ mc.mastery }}：{{ mc.materials | join("、") }}</div>
+                {% endfor %}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 数据来源 PRTS Wiki</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// PRTS // OPERATOR ARCHIVE</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

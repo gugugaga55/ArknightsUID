@@ -1,0 +1,69 @@
+{#-
+  alt/char.html —— 干员档案卡（「罗德岛作战终端」探索稿 #2）
+  上下文：
+    name, rarity(1-6), profession(中文+EN), avatar(base64),
+    level, max_level, elite, potential, favor, main_skill_lvl,
+    skills: [{icon, name, specialize(0-3)}], equips: [{name, stage}], version
+-#}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "alt/alt_head.html" %}</head>
+<body>
+<div class="terminal container">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span class="tag tag--bracket">Personnel File</span>
+        <span class="tag">{{ profession }}</span>
+    </div>
+
+    <div class="headline" style="align-items:stretch;">
+        <div class="portrait">{% if avatar %}<img src="{{ avatar }}" alt="">{% endif %}</div>
+        <div style="flex:1;min-width:0;padding-left:16px;">
+            <span class="tag tag--orange">{{ rarity }}-STAR OPERATOR</span>
+            <div class="title-cn">{{ name }}</div>
+            <div class="title-en">RHODES ISLAND OPERATOR</div>
+            <div class="diamond-row" style="margin-top:8px;">
+                {% for i in range(rarity) %}<i class="diamond" style="width:7px;height:7px;"></i>{% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <div class="readout-grid" style="grid-template-columns:repeat(5,1fr);">
+        <div class="cell"><div class="num">{{ level }}</div><div class="lbl">等级/{{ max_level }}</div></div>
+        <div class="cell"><div class="num">E{{ elite }}</div><div class="lbl">精英化</div></div>
+        <div class="cell"><div class="num">P{{ potential }}</div><div class="lbl">潜能</div></div>
+        <div class="cell"><div class="num">{{ favor }}</div><div class="lbl">信赖%</div></div>
+        <div class="cell"><div class="num">SL{{ main_skill_lvl }}</div><div class="lbl">主技能</div></div>
+    </div>
+
+    <div class="section"><i class="diamond"></i><span class="tag">技能与专精 · Skills / Mastery</span></div>
+    <div class="rows">
+        {% for sk in skills %}
+        <div class="row">
+            <span class="row-name" style="display:inline-flex;align-items:center;gap:8px;">
+                {% if sk.icon %}<img src="{{ sk.icon }}" alt="" style="width:22px;height:22px;border:1px solid var(--panel-line);clip-path:polygon(0 0,100% 0,100% calc(100% - 6px),calc(100% - 6px) 100%,0 100%);">{% endif %}
+                {{ sk.name }}
+            </span>
+            <span class="pips">{% for i in range(3) %}<i class="{{ 'on' if i < sk.specialize else '' }}"></i>{% endfor %}</span>
+        </div>
+        {% endfor %}
+    </div>
+
+    {% if equips %}
+    <div class="section"><i class="diamond"></i><span class="tag">模组 · Modules</span></div>
+    <div class="rows">
+        {% for eq in equips %}
+        <div class="row">
+            <span class="row-name">{{ eq.name }}</span>
+            <span class="row-num">STAGE <span class="lack">{{ eq.stage }}</span>/3</span>
+        </div>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="footer">
+        <span class="tag">ArknightsUID · Terminal/02</span>
+        <span class="stamp">{{ version }}</span>
+    </div>
+</div>
+</body>
+</html>

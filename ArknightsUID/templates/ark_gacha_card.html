@@ -1,0 +1,83 @@
+<!--
+  ark_gacha_card.html —— 抽卡记录统计卡（#8）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文：
+    name: str, uid: str
+    total: int            总抽数
+    six_count: int        六星数量
+    six_rate: str         六星率（如 "2.67"）
+    avg_six: str          平均多少抽出六星（如 "37.5"）
+    pity: int             距上次六星已垫抽数
+    pity_max: int         保底阈值
+    recent: [{name: str, pool: str, pull: int}]   最近六星（pull=该六星是第几抽出的/垫了几抽）
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="GACHA">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 抽卡报告 GACHA REPORT</em></span>
+            <span class="mast-meta"><span class="idx">08</span>UID {{ uid }}</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">{{ name }} · 抽卡记录统计</div>
+                <h1 class="title">抽卡<em>报告</em></h1>
+                <div class="title-rule"><span class="en">GACHA REPORT</span></div>
+            </div>
+        </div>
+
+        <div class="grid grid-4" style="margin-top: var(--space-5);">
+            <div class="cell">
+                <div class="cell-label">总抽数 PULLS</div>
+                <div class="cell-value">{{ total }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">六星 6★</div>
+                <div class="cell-value">{{ six_count }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">六星率 RATE</div>
+                <div class="cell-value">{{ six_rate }}<span style="font-size: 12px;">%</span></div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">平均 AVG</div>
+                <div class="cell-value">{{ avg_six }}</div>
+            </div>
+        </div>
+
+        <div class="sect">
+            <span class="sect-label bk">保底进度</span>
+            <span class="sect-en">PITY // {{ pity }} / {{ pity_max }}</span>
+        </div>
+        <div class="bar is-yellow" style="margin-top: var(--space-3);">
+            <i style="width: {{ (pity * 100 / pity_max) | round | int }}%;"></i>
+        </div>
+
+        <div class="sect">
+            <span class="sect-label bk">最近六星</span>
+            <span class="sect-en">RECENT // {{ recent | length }}</span>
+        </div>
+        <div class="rows">
+            {% for r in recent %}
+            <div class="row">
+                <span class="row-value" style="font-size: 13px;">{{ r.name }}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 6px;">{{ r.pool }}</span></span>
+                <span class="bar-num">{{ r.pull }} 抽</span>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 抽卡</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// GACHA REPORT</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

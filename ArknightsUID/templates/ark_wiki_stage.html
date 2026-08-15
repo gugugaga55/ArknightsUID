@@ -1,0 +1,116 @@
+<!--
+  ark_wiki_stage.html —— PRTS 关卡资料卡（#12）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_wiki._build_stage_context 提供）：
+    title: str            关卡代号（如 1-7）
+    name: str             关卡名
+    stage_id/stage_type/difficulty/recommended_level/ap_cost/enemy_count: str
+    description: str
+    drops: [str]          常规掉落
+    extra_drops: [str]    额外物资
+    enemies: [{name, count}]
+    assault_diffs: [str]  突袭差异
+    map_image: str        地图 base64（可为空）
+    map_url/source_url/version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="STAGE">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 关卡情报 STAGE FILE</em></span>
+            <span class="mast-meta"><span class="idx">12</span>{{ stage_id or "PRTS.WIKI" }}</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">{{ name }}{% if stage_type %} · {{ stage_type }}{% endif %}{% if difficulty %} · {{ difficulty }}{% endif %}</div>
+                <h1 class="title">{{ title }}</h1>
+            </div>
+        </div>
+        <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">STAGE FILE</span></div>
+
+        <div class="grid grid-4" style="margin-top: var(--space-4);">
+            <div class="cell">
+                <div class="cell-label">推荐等级 LV</div>
+                <div class="cell-value" style="font-size: 15px;">{{ recommended_level or "-" }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">理智消耗 AP</div>
+                <div class="cell-value" style="font-size: 15px;">{{ ap_cost or "-" }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">敌人数量 FOES</div>
+                <div class="cell-value" style="font-size: 15px;">{{ enemy_count or "-" }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">突袭 ASSAULT</div>
+                <div class="cell-value" style="font-size: 15px;">{{ "有" if assault_diffs else "-" }}</div>
+            </div>
+        </div>
+
+        {% if description %}
+        <div class="prose">{{ description }}</div>
+        {% endif %}
+
+        {% if drops %}
+        <div class="sect">
+            <span class="sect-label bk">常规掉落</span>
+            <span class="sect-en">DROPS // {{ drops | length }}</span>
+        </div>
+        <div class="chip-flow">
+            {% for d in drops %}<span class="chip">{{ d }}</span>{% endfor %}
+        </div>
+        {% endif %}
+
+        {% if extra_drops %}
+        <div class="sect">
+            <span class="sect-label bk">额外物资</span>
+            <span class="sect-en">EXTRA // {{ extra_drops | length }}</span>
+        </div>
+        <div class="chip-flow">
+            {% for d in extra_drops %}<span class="chip chip--ghost">{{ d }}</span>{% endfor %}
+        </div>
+        {% endif %}
+
+        {% if enemies %}
+        <div class="sect">
+            <span class="sect-label bk">敌人</span>
+            <span class="sect-en">ENEMIES // {{ enemies | length }}</span>
+        </div>
+        <div class="rows">
+            {% for e in enemies %}
+            <div class="row">
+                <span class="row-value" style="font-size: 13px;">{{ e.name }}</span>
+                <span class="bar-num">×{{ e.count }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if assault_diffs %}
+        <div class="sect">
+            <span class="sect-label bk">突袭差异</span>
+            <span class="sect-en">ASSAULT</span>
+        </div>
+        <div class="prose">{{ assault_diffs | join("；") }}</div>
+        {% endif %}
+
+        {% if map_image %}
+        <div class="figure">
+            <img src="{{ map_image }}" alt="关卡地图">
+        </div>
+        {% endif %}
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 数据来源 PRTS Wiki</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// PRTS // STAGE INTEL</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

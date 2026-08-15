@@ -1,0 +1,16 @@
+{#-
+  alt/alt_head.html —— 「罗德岛作战终端」设计基座 head（独立探索稿，非生产模板）
+
+  设计语言：源自明日方舟游戏内 UI 的自主提炼（作战面板深炭底 / 罗德岛橙高亮 /
+  45° 斜切角 / 部署网格 / 等宽数据读数 / 军事模板风拉丁标签 / 源石菱形分隔）。
+  与生产「纸面信号」体系（白底信号黄）刻意区隔，供对比评审。
+
+  上下文变量：
+    font_css_url: str   字体 CSS 地址（默认 loli 镜像）
+-#}
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link rel="stylesheet" href="{{ font_css_url or 'https://fonts.loli.net/css2?family=Noto+Sans+SC:wght@400;500;700;900&family=JetBrains+Mono:wght@400;700&display=swap' }}">
+<style>
+{% include "alt/alt_base.css" %}
+</style>

@@ -1,0 +1,46 @@
+<!--
+  ark_announce.html —— 官方公告列表卡（#17）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_push.show_ark_announcements 组装）：
+    anns: [{title: str, date: str, url: str}]   公告列表（date 可空）
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="NOTICE">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 官方公告 NOTICES</em></span>
+            <span class="mast-meta"><span class="idx">17</span>SKLAND</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">森空岛 · 官方公告</div>
+                <h1 class="title">公告<em>列表</em></h1>
+                <div class="title-rule"><span class="en">OFFICIAL NOTICES</span></div>
+            </div>
+        </div>
+
+        <div class="rows" style="margin-top: var(--space-5);">
+            {% for ann in anns %}
+            <div class="row" style="align-items: flex-start;">
+                <span class="idx idx--ghost" style="margin-top: 3px;">{{ "%02d" | format(loop.index) }}</span>
+                <span class="row-value" style="flex: 1; min-width: 0; margin-left: var(--space-3); font-size: 13px; font-weight: 600; line-height: 1.6;">{{ ann.title }}</span>
+                <span class="bar-num">{{ ann.date }}</span>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 公告</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// OFFICIAL NOTICES // SKLAND WEB</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

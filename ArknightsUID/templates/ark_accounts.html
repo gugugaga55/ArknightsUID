@@ -1,0 +1,63 @@
+<!--
+  ark_accounts.html —— 绑定账号列表卡（#22）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_account.show_ark_accounts 组装）：
+    accounts: [{index: int, nickname: str, uid: str, usable: bool, is_default: bool}]
+        凭据完整的账号（uid 已脱敏；is_default = ark切换 设置的默认账号）
+    orphan_uids: [str]      有 UID 但缺凭据的记录（已脱敏，可空）
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="ACCOUNTS">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 账号管理 ACCOUNTS</em></span>
+            <span class="mast-meta"><span class="idx">22</span>SKLAND</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">森空岛 · 绑定账号</div>
+                <h1 class="title">账号<em>列表</em></h1>
+                <div class="title-rule"><span class="en">BOUND ACCOUNTS</span></div>
+            </div>
+        </div>
+
+        {% if accounts %}
+        <div class="rows" style="margin-top: var(--space-5);">
+            {% for a in accounts %}
+            <div class="row">
+                <span class="row-value" style="font-size: 13px;"><span class="idx idx--ghost" style="margin-right: var(--space-2);">{{ "%02d" | format(a.index) }}</span>{{ a.nickname }}<span class="u-mute mono" style="font-size: 10px; font-weight: 400; margin-left: 8px;">UID {{ a.uid }}</span></span>
+                {% if a.is_default %}<span class="chip chip--yellow">默认</span>{% endif %}
+                {% if a.usable %}<span class="chip">可用</span>{% else %}<span class="chip chip--ink">凭据失效</span>{% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        <div class="prose">多账号查询：ark理智 序号 / ark理智 UID；ark切换 序号 设置默认账号。</div>
+        {% elif orphan_uids %}
+        <div class="rows" style="margin-top: var(--space-5);">
+            {% for uid in orphan_uids %}
+            <div class="row">
+                <span class="row-value mono" style="font-size: 13px;">UID {{ uid }}</span>
+                <span class="chip chip--ink">凭据缺失</span>
+            </div>
+            {% endfor %}
+        </div>
+        <div class="prose">已找到 UID，但缺少对应凭据记录，请重新绑定森空岛账号。</div>
+        {% else %}
+        <div class="prose" style="margin-top: var(--space-5);">未找到明日方舟账号，请先使用 ark绑定 或 ark扫码登录。</div>
+        {% endif %}
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 账号</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// BOUND ACCOUNTS // SKLAND</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

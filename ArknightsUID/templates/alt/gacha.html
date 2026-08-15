@@ -1,0 +1,57 @@
+{#-
+  alt/gacha.html —— 寻访记录报告卡（「罗德岛作战终端」探索稿 #3）
+  上下文：
+    name, uid, total, six_count, six_rate, avg_six, pity, pity_max,
+    recent: [{name, pool, pull}], version
+-#}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "alt/alt_head.html" %}</head>
+<body>
+<div class="terminal container">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+        <span class="tag tag--bracket">Headhunting Report</span>
+        <span class="tag" style="font-variant-numeric:tabular-nums;">UID {{ uid }}</span>
+    </div>
+
+    <div class="headline">
+        <div>
+            <span class="tag tag--orange">{{ name }} · 寻访记录分析</span>
+            <div class="title-cn">寻访报告</div>
+            <div class="title-en">RECRUITMENT RECORD</div>
+        </div>
+        <div class="diamond-row">
+            <i class="diamond"></i><i class="diamond"></i><i class="diamond diamond--hollow"></i>
+        </div>
+    </div>
+
+    <div class="readout-grid" style="margin-top:16px;">
+        <div class="cell"><div class="num">{{ total }}</div><div class="lbl">总寻访 Pulls</div></div>
+        <div class="cell"><div class="num" style="color:var(--orange);">{{ six_count }}</div><div class="lbl">六星 6★</div></div>
+        <div class="cell"><div class="num">{{ six_rate }}<span style="font-size:11px;">%</span></div><div class="lbl">六星率 Rate</div></div>
+        <div class="cell"><div class="num">{{ avg_six }}</div><div class="lbl">均抽/星 Avg</div></div>
+    </div>
+
+    <div class="readout" style="margin-top:8px;">
+        <div class="readout-label">Pity · 距上一六星</div>
+        <div class="readout-value" style="font-size:30px;">{{ pity }}<span class="unit">/ {{ pity_max }} PULLS</span></div>
+        <div class="bar"><i style="width: {{ (pity * 100 / pity_max) | round | int }}%;"></i></div>
+    </div>
+
+    <div class="section"><i class="diamond"></i><span class="tag">最近六星 · Recent 6★</span></div>
+    <div class="rows">
+        {% for r in recent %}
+        <div class="row">
+            <span class="row-name">{{ r.name }}<span class="sub">{{ r.pool }}</span></span>
+            <span class="row-num"><span class="dim">第</span> <span class="lack">{{ r.pull }}</span> <span class="dim">抽</span></span>
+        </div>
+        {% endfor %}
+    </div>
+
+    <div class="footer">
+        <span class="tag">ArknightsUID · Terminal/03</span>
+        <span class="stamp">{{ version }}</span>
+    </div>
+</div>
+</body>
+</html>

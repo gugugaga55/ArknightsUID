@@ -1,0 +1,88 @@
+<!--
+  ark_wiki_enemy.html —— PRTS 敌方资料卡（#11）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_wiki._build_enemy_context 提供）：
+    title/name/index/rank/description: str
+    damage_type/attack_type/move_type/kind: str
+    has_stats: bool
+    max_hp/atk/defense/res/weight: str
+    abilities: [str]
+    source_url/version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="ENEMY">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 敌方档案 ENEMY FILE</em></span>
+            <span class="mast-meta"><span class="idx">11</span>{% if index %}NO.{{ index }}{% else %}PRTS.WIKI{% endif %}</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">{% if kind %}{{ kind }}{% endif %}{% if rank %} · {{ rank }}{% endif %}</div>
+                <h1 class="title title--s">{{ name }}</h1>
+            </div>
+        </div>
+        <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">ENEMY FILE</span></div>
+
+        <div class="chip-flow" style="margin-top: var(--space-4);">
+            {% if damage_type %}<span class="chip chip--red">伤害 · {{ damage_type }}</span>{% endif %}
+            {% if attack_type %}<span class="chip chip--ink">攻击 · {{ attack_type }}</span>{% endif %}
+            {% if move_type %}<span class="chip chip--ink">移动 · {{ move_type }}</span>{% endif %}
+        </div>
+
+        {% if has_stats %}
+        <div class="grid grid-4" style="margin-top: var(--space-4);">
+            <div class="cell">
+                <div class="cell-label">生命 HP</div>
+                <div class="cell-value" style="font-size: 16px;">{{ max_hp }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">攻击 ATK</div>
+                <div class="cell-value" style="font-size: 16px;">{{ atk }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">防御 DEF</div>
+                <div class="cell-value" style="font-size: 16px;">{{ defense }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">法抗 RES</div>
+                <div class="cell-value" style="font-size: 16px;">{{ res }}</div>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if weight %}
+        <div class="rows" style="margin-top: var(--space-4);">
+            <div class="row">
+                <span class="row-label">重量 WEIGHT</span>
+                <span class="row-value mono" style="font-size: 13px;">{{ weight }}</span>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if abilities %}
+        <div class="sect">
+            <span class="sect-label bk">能力</span>
+            <span class="sect-en">ABILITIES // {{ abilities | length }}</span>
+        </div>
+        <div class="prose">{{ abilities | join("；") }}</div>
+        {% endif %}
+
+        {% if description %}
+        <div class="prose">{{ description }}</div>
+        {% endif %}
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 数据来源 PRTS Wiki</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// PRTS // ENEMY INTEL</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>
