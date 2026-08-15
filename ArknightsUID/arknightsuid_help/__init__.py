@@ -9,7 +9,7 @@ register_help("ArknightsUID", "ark帮助")
 
 HELP_TEXT = """「明日方舟」ArknightsUID
 
-复用 EndUID 森空岛登录，不会回显 cred/token。
+复用 EndUID 森空岛登录，不会回显登录凭据。
 
 ark账号 / ark我的方舟 - 查看可复用账号
 ark绑定列表 - 查看 EndUID 记录的明日方舟 UID
