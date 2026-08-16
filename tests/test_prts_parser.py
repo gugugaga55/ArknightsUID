@@ -695,6 +695,40 @@ class EnemyLevelInheritTest(unittest.TestCase):
         self.assertEqual(lv2.res, "10")
         self.assertEqual(lv2.weight, "3")
 
+    def test_skill_fields_merged_into_readable_abilities(self) -> None:
+        """技能N/效果/初始/消耗 重组为单条；等级2 孤儿效果回查技能名。"""
+        wikitext = """
+{{敌人信息/common2
+|名称=测试敌人
+}}
+{{敌人信息/levelcontent
+|index=0
+|最大生命值=1000
+|技能0=投枪
+|技能0效果=锁定目标造成伤害
+|技能0初始=15
+|技能0消耗=20
+|天赋=免疫脉冲波
+}}
+{{敌人信息/levelcontent
+|index=1
+|最大生命值=2000
+|技能0效果=强化投枪
+}}
+"""
+        enemy = prts_client.parse_enemy_wikitext(
+            prts_client.PageWikitext(title="测试敌人", wikitext=wikitext)
+        )
+        self.assertIsNotNone(enemy)
+        assert enemy is not None
+        abilities = enemy.levels[0].abilities
+        # 技能合并为单条（SP 参数入括号），天赋原样保留
+        self.assertEqual(
+            abilities, ["技能·投枪：锁定目标造成伤害（初始15·消耗20）", "天赋：免疫脉冲波"]
+        )
+        # 等级2 差异块孤儿效果回查上一级技能名
+        self.assertEqual(enemy.levels[1].abilities, ["技能·投枪：强化投枪"])
+
     def test_level_select_helpers(self) -> None:
         """final_level / select_owner_level 公共助手（wiki 与练度卡共用）。"""
         levels = [

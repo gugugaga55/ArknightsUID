@@ -774,6 +774,67 @@ def _inherit_level_stats(levels: list[EnemyLevel]) -> None:
                 )
 
 
+def _merge_level_abilities(
+    fields: dict[str, str], prev_fields: dict[str, str] | None = None
+) -> list[str]:
+    """等级块机制字段重组：技能N/效果/初始/消耗 → 单条可读机制。
+
+    PRTS 逐字段存（技能0：投枪 / 技能0效果：… / 技能0初始：15 / 技能0消耗：20），
+    平铺会碎成 SP 参数各占一行；合并为「技能·投枪：效果（初始15/消耗20）」。
+    等级 2+ 差异块常只有 技能N效果 没有技能名，从上一级字段回查（prev_fields）。
+    其余 能力/天赋/特殊 字段原样保留（键名：值），顺序与 wikitext 一致。
+    """
+    abilities: list[str] = []
+    consumed: set[str] = set()
+
+    def _skill_param(sid: str, suffix: str) -> str:
+        return fields.get(f"技能{sid}{suffix}", "")
+
+    for key, value in fields.items():
+        match = re.fullmatch(r"技能(\d+)", key)
+        if not match:
+            continue
+        sid = match.group(1)
+        name = value or (prev_fields or {}).get(key, "")
+        effect = _skill_param(sid, "效果")
+        parts = []
+        for label, suffix in (("初始", "初始"), ("消耗", "消耗"), ("持续", "持续")):
+            param = _skill_param(sid, suffix)
+            if param:
+                parts.append(f"{label}{param}")
+        suffix_text = f"（{'·'.join(parts)}）" if parts else ""
+        if name and effect:
+            abilities.append(f"技能·{name}：{effect}{suffix_text}")
+        elif name or effect:
+            text = f"{name}：{effect}" if name else effect
+            abilities.append(f"技能·{text}{suffix_text}".rstrip("："))
+        consumed.update(
+            {
+                key,
+                f"技能{sid}效果",
+                f"技能{sid}初始",
+                f"技能{sid}消耗",
+                f"技能{sid}持续",
+            }
+        )
+
+    for key, value in fields.items():
+        if key in consumed:
+            continue
+        # 差异块的孤儿效果字段（上一级有技能名）：补名成完整条目
+        orphan = re.fullmatch(r"技能(\d+)效果", key)
+        if orphan and value:
+            sid = orphan.group(1)
+            name = (prev_fields or {}).get(f"技能{sid}", "")
+            abilities.append(
+                f"技能·{name}：{value}" if name else f"{key}：{value}"
+            )
+            continue
+        if any(mark in key for mark in ("能力", "技能", "天赋", "特殊")) and value:
+            abilities.append(f"{key}：{value}")
+    return abilities
+
+
 def parse_enemy_wikitext(page: PageWikitext) -> EnemyInfo | None:
     common = _first_template_fields(page.wikitext, ("敌人信息/common2", "敌人信息"))
     level_blocks = _template_lines(page.wikitext, ("敌人信息/levelcontent",))
@@ -781,12 +842,11 @@ def parse_enemy_wikitext(page: PageWikitext) -> EnemyInfo | None:
         return None
 
     levels: list[EnemyLevel] = []
+    prev_fields: dict[str, str] | None = None
     for block in level_blocks:
         fields = _fields_from_template(block)
-        abilities = []
-        for key, value in fields.items():
-            if any(mark in key for mark in ("能力", "技能", "天赋", "特殊")) and value:
-                abilities.append(f"{key}：{value}")
+        abilities = _merge_level_abilities(fields, prev_fields)
+        prev_fields = fields
         levels.append(
             EnemyLevel(
                 index=fields.get("index", ""),

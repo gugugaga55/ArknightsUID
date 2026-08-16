@@ -309,7 +309,8 @@ def _format_enemy(enemy: EnemyInfo) -> str:
         if stats:
             lines.append("属性：" + "，".join(stats))
         if level.abilities:
-            lines.append("能力：" + _clip("；".join(level.abilities), 280))
+            # 合并后的机制条目（技能·名：效果（初始/消耗）+ 天赋/能力），逐条成行
+            lines.append("机制：" + _clip("\n".join(level.abilities), 600))
         # 等级2变体（差异字段已在解析层从等级1继承补全）
         if len(enemy.levels) > 1:
             lv2 = enemy.levels[1]
@@ -326,7 +327,7 @@ def _format_enemy(enemy: EnemyInfo) -> str:
             if stats2:
                 lines.append("等级2：" + "，".join(stats2))
             if lv2.abilities:
-                lines.append("等级2机制：" + _clip("；".join(lv2.abilities), 200))
+                lines.append("等级2机制：" + _clip("\n".join(lv2.abilities), 300))
 
     _append_source(lines, enemy.source_url)
     return "\n".join(lines)
