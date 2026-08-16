@@ -636,9 +636,18 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
                 )
             return None
 
-        with mock.patch(
-            "ArknightsUID.arknightsuid_wiki.query_enemy",
-            side_effect=fake_query_enemy,
+        async def fake_icon(name: str) -> str:
+            return "BASE64ICON" if name == "士兵" else ""
+
+        with (
+            mock.patch(
+                "ArknightsUID.arknightsuid_wiki.query_enemy",
+                side_effect=fake_query_enemy,
+            ),
+            mock.patch(
+                "ArknightsUID.arknightsuid_wiki.enemy_icon_b64",
+                side_effect=fake_icon,
+            ),
         ):
             context = await _build_stage_context(stage)
 
@@ -647,6 +656,9 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(rows[0]["atk"], "200")
         self.assertEqual(rows[0]["defense"], "100")
         self.assertEqual(rows[0]["res"], "0")
+        # 头像命中上卡，查不到的敌人空串降级（模板只显示名字）
+        self.assertEqual(rows[0]["icon"], "BASE64ICON")
+        self.assertEqual(rows[1]["icon"], "")
         # 查不到的敌人不携带数值键（模板只显示名字）
         self.assertNotIn("hp", rows[1])
         # 文本回退同样带基础数值

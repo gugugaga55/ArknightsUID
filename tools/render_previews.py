@@ -366,10 +366,10 @@ MOCK_CONTEXTS = {
             {"name": "基础加固建材", "icon": ""},
         ],
         "enemies": [
-            {"name": "士兵", "count": 18, "level": "", "hp": "1650", "atk": "200", "defense": "100", "res": "0"},
-            {"name": "弩手", "count": 12, "level": "", "hp": "1550", "atk": "240", "defense": "100", "res": "0"},
-            {"name": "暴徒", "count": 8, "level": "", "hp": "5250", "atk": "700", "defense": "100", "res": "0"},
-            {"name": "机动盾兵", "count": 6, "level": "", "hp": "4000", "atk": "200", "defense": "1000", "res": "0"},
+            {"name": "士兵", "count": 18, "level": "", "icon": "", "hp": "1650", "atk": "200", "defense": "100", "res": "0"},
+            {"name": "弩手", "count": 12, "level": "", "icon": "", "hp": "1550", "atk": "240", "defense": "100", "res": "0"},
+            {"name": "暴徒", "count": 8, "level": "", "icon": "", "hp": "5250", "atk": "700", "defense": "100", "res": "0"},
+            {"name": "机动盾兵", "count": 6, "level": "", "icon": "", "hp": "4000", "atk": "200", "defense": "1000", "res": "0"},
         ],
         "assault_diffs": ["敌人的生命值与攻击力提升 20%"],
         "map_image": "",
@@ -645,6 +645,11 @@ async def _enrich_icons(name: str, context: dict) -> None:
             context["map_image"] = await get_image_b64_with_cache(
                 image_url, CACHE_PATH / "wiki" / "map"
             )
+        # 敌人头像（头像_敌人_{名}.png，失败空串降级）
+        from ArknightsUID.utils.gamedata.itemicon import enemy_icon_b64
+
+        for row in context.get("enemies", []):
+            row["icon"] = await enemy_icon_b64(row["name"])
     elif name in ("ark_recruit.html", "ark_gacha_card.html"):
         # 行内小头像：精确名反查 charId → 初始头像
         from ArknightsUID.utils.gamedata.charinfo import load_char_index

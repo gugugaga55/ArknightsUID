@@ -8,8 +8,9 @@
     description: str
     drops: [str]          常规掉落
     extra_drops: [str]    额外物资
-    enemies: [{name, count, level, hp, atk, defense, res}]
-          基础数值取敌人页一级数据（完整数值/技能效果走 ark敌人 详情卡）
+    enemies: [{name, count, level, icon, hp, atk, defense, res}]
+          头像按名散列直链（头像_敌人_{名}.png，缺失空串降级）；
+          基础数值取敌人页一级数据（详细数值/技能效果走 ark敌人 详情卡）
     assault_diffs: [str]  突袭差异
     map_image: str        地图 base64（PRTS 文件 {代号}_{关卡名}_地图.png，可为空）
     map_url: str          PRTS.Map 交互地图链接（可为空）
@@ -85,7 +86,10 @@
             {% for e in enemies %}
             <div class="row" style="display: block;">
                 <div style="display: flex; justify-content: space-between; align-items: baseline;">
-                    <span class="row-value" style="font-size: 13px;">{{ e.name }}</span>
+                    <span style="display: inline-flex; align-items: center; gap: 6px; min-width: 0;">
+                        {% if e.icon %}<span class="iicon" style="width: 20px; height: 20px;"><img src="{{ e.icon }}" alt=""></span>{% endif %}
+                        <span class="row-value" style="font-size: 13px;">{{ e.name }}</span>
+                    </span>
                     <span class="bar-num">×{{ e.count }}</span>
                 </div>
                 {% if e.hp or e.atk or e.defense or e.res %}

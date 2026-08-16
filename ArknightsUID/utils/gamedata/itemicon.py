@@ -12,13 +12,43 @@ from __future__ import annotations
 
 import hashlib
 import re
+import time
 import urllib.parse
+from pathlib import Path
 
 from gsuid_core.logger import logger
 
 from ._table_cache import GAMEDATA_CACHE_DIR
 
 ITEM_ICON_CACHE_DIR = GAMEDATA_CACHE_DIR / "item_icons"
+
+# 图标失败负缓存（1h）：URL 按名字散列构造、不查文件存在性，名字对不上
+# 时（如带修饰的敌人名「源石虫·α」）每次都打 CDN；关卡敌人数值一次最多
+# 取 10 个头像，不缓存会把失败请求放大。1h 平衡瞬时网络失败的误伤。
+_ICON_MISS_TTL = 3600.0
+
+
+async def _fetch_icon_with_negcache(url: str, cache_dir: Path) -> str:
+    """图标下载 + 失败 .miss 负缓存（与立绘 char_portrait_b64 同款机制）。"""
+    try:
+        from ..render import get_image_b64_with_cache
+    except Exception:
+        return ""
+    miss_path = cache_dir / f"{url.split('/')[-1]}.miss"
+    try:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        if miss_path.exists():
+            if time.time() - miss_path.stat().st_mtime < _ICON_MISS_TTL:
+                return ""
+            miss_path.unlink()
+        b64 = await get_image_b64_with_cache(url, cache_dir)
+        if b64:
+            return b64
+        miss_path.write_text("", encoding="utf-8")
+        return ""
+    except Exception:
+        return ""
+
 
 # 材料名字符串里的数量分隔符（PRTS 文本 "技巧概要·卷3 ×8" / "D32钢x6" 等写法）
 _COUNT_SPLIT = re.compile(r"^(.*?)\s*[×xX\*]\s*(\d+)\s*$")
@@ -38,17 +68,11 @@ def prts_item_icon_url(item_name: str) -> str:
 
 
 async def item_icon_b64(item_name: str) -> str:
-    """材料名 → base64 data URL（带磁盘缓存；失败/空名返回空串）。"""
+    """材料名 → base64 data URL（带磁盘缓存 + 失败负缓存；失败/空名返回空串）。"""
     url = prts_item_icon_url(item_name)
     if not url:
         return ""
-    try:
-        from ..render import get_image_b64_with_cache
-
-        return await get_image_b64_with_cache(url, ITEM_ICON_CACHE_DIR)
-    except Exception as exc:
-        logger.debug(f"[ArknightsUID] 物品图标下载失败 {item_name}: {exc}")
-        return ""
+    return await _fetch_icon_with_negcache(url, ITEM_ICON_CACHE_DIR)
 
 
 def split_material_text(text: str) -> tuple[str, str]:
@@ -73,17 +97,11 @@ def prts_enemy_icon_url(enemy_name: str) -> str:
 
 
 async def enemy_icon_b64(enemy_name: str) -> str:
-    """敌人头像 base64（带磁盘缓存；失败/空名返回空串）。"""
+    """敌人头像 base64（带磁盘缓存 + 失败负缓存；失败/空名返回空串）。"""
     url = prts_enemy_icon_url(enemy_name)
     if not url:
         return ""
-    try:
-        from ..render import get_image_b64_with_cache
-
-        return await get_image_b64_with_cache(url, ITEM_ICON_CACHE_DIR)
-    except Exception as exc:
-        logger.debug(f"[ArknightsUID] 敌人头像下载失败 {enemy_name}: {exc}")
-        return ""
+    return await _fetch_icon_with_negcache(url, ITEM_ICON_CACHE_DIR)
 
 
 def prts_profession_icon_url(profession_name: str) -> str:

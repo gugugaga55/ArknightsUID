@@ -87,5 +87,80 @@ class RecruitLogicTest(unittest.TestCase):
         self.assertEqual(len(matched), 1)
 
 
+
+class IconNegativeCacheTest(unittest.IsolatedAsyncioTestCase):
+    """图标失败负缓存（.miss，1h）：名字对不上文件时不再重复打 CDN。
+
+    场景：关卡敌人数值一次取最多 10 个头像，带修饰的敌人名（源石虫·α）
+    按散列直链查不到文件，不缓存会每次查询都重试。
+    """
+
+    async def test_missing_icon_negatively_cached(self) -> None:
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+
+        import ArknightsUID.utils.gamedata.itemicon as icon_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+            calls: list[str] = []
+
+            async def fail_get(url, cache_dir, *args, **kwargs):
+                calls.append(url)
+                return ""
+
+            with (
+                mock.patch.object(icon_mod, "ITEM_ICON_CACHE_DIR", cache),
+                mock.patch(
+                    "ArknightsUID.utils.render.get_image_b64_with_cache", fail_get
+                ),
+            ):
+                self.assertEqual(await icon_mod.enemy_icon_b64("源石虫·α"), "")
+                self.assertEqual(await icon_mod.enemy_icon_b64("源石虫·α"), "")
+            # 第二次命中负缓存，不再请求
+            self.assertEqual(len(calls), 1)
+            self.assertTrue(
+                (cache / f"{icon_mod.prts_enemy_icon_url('源石虫·α').split('/')[-1]}.miss").exists()
+            )
+
+    async def test_existing_icon_skips_miss_marker(self) -> None:
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+
+        import ArknightsUID.utils.gamedata.itemicon as icon_mod
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+
+            async def ok_get(url, cache_dir, *args, **kwargs):
+                return "B64"
+
+            with (
+                mock.patch.object(icon_mod, "ITEM_ICON_CACHE_DIR", cache),
+                mock.patch(
+                    "ArknightsUID.utils.render.get_image_b64_with_cache", ok_get
+                ),
+            ):
+                self.assertEqual(await icon_mod.item_icon_b64("固源岩组"), "B64")
+            marker = cache / f"{icon_mod.prts_item_icon_url('固源岩组').split('/')[-1]}.miss"
+            self.assertFalse(marker.exists())
+
+    async def test_empty_name_returns_empty_without_request(self) -> None:
+        from unittest import mock
+
+        import ArknightsUID.utils.gamedata.itemicon as icon_mod
+
+        async def boom(url, cache_dir, *args, **kwargs):
+            raise AssertionError("空名不应触发下载")
+
+        with mock.patch(
+            "ArknightsUID.utils.render.get_image_b64_with_cache", boom
+        ):
+            self.assertEqual(await icon_mod.enemy_icon_b64("  "), "")
+            self.assertEqual(await icon_mod.item_icon_b64(""), "")
+
+
 if __name__ == "__main__":
     unittest.main()

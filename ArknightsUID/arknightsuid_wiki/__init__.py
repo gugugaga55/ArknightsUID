@@ -792,13 +792,17 @@ async def _enemy_basic_stats(name: str) -> dict:
 
 
 async def _enrich_stage_enemies(stage: StageInfo, limit: int = 10) -> list[dict]:
-    """敌方情报条目 + 基础数值（并发受限）；失败条目静默降级为仅名字。"""
+    """敌方情报条目 + 头像 + 基础数值（并发受限）；失败条目静默降级为仅名字。"""
     targets = stage.enemies[:limit]
     semaphore = asyncio.Semaphore(_ENEMY_FETCH_CONCURRENCY)
 
     async def _fetch(name: str) -> dict:
         async with semaphore:
-            return await _enemy_basic_stats(name)
+            # 头像按名散列直链（与敌人详情卡同源，失败负缓存）；
+            # 数值查敌人页（parse_page 24h 缓存）
+            stats = await _enemy_basic_stats(name)
+            stats["icon"] = await enemy_icon_b64(name)
+            return stats
 
     try:
         stats_list = await asyncio.gather(
@@ -809,8 +813,10 @@ async def _enrich_stage_enemies(stage: StageInfo, limit: int = 10) -> list[dict]
     rows: list[dict] = []
     for enemy, stats in zip(targets, stats_list):
         row = {"name": enemy.name, "count": enemy.count, "level": enemy.level}
-        if isinstance(stats, dict) and stats:
+        if isinstance(stats, dict):
             row.update(stats)
+        if not row.get("icon"):
+            row["icon"] = ""
         rows.append(row)
     return rows
 
