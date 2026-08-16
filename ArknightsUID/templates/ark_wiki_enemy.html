@@ -79,10 +79,17 @@
 
         {% if abilities %}
         <div class="sect">
-            <span class="sect-label bk">能力</span>
+            <span class="sect-label bk">机制</span>
             <span class="sect-en">ABILITIES // {{ abilities | length }}</span>
         </div>
-        <div class="prose">{{ abilities | join("；") }}</div>
+        <div class="prose" style="white-space: pre-line;">{{ abilities | join("\n") }}</div>
+        {% endif %}
+        {% if lv2_abilities %}
+        <div class="sect">
+            <span class="sect-label bk">等级2机制</span>
+            <span class="sect-en">LV2 ABILITIES // {{ lv2_abilities | length }}</span>
+        </div>
+        <div class="prose" style="white-space: pre-line;">{{ lv2_abilities | join("\n") }}</div>
         {% endif %}
 
         {% if description %}

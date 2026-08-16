@@ -325,6 +325,8 @@ def _format_enemy(enemy: EnemyInfo) -> str:
             ]
             if stats2:
                 lines.append("等级2：" + "，".join(stats2))
+            if lv2.abilities:
+                lines.append("等级2机制：" + _clip("；".join(lv2.abilities), 200))
 
     _append_source(lines, enemy.source_url)
     return "\n".join(lines)
@@ -367,7 +369,10 @@ def _format_stage(stage: StageInfo, enemies_ctx: list[dict] | None = None) -> st
                 if row.get(key)
             ]
             stat_text = f"（{'·'.join(stats)}）" if stats else ""
-            enemies.append(f"{row['name']}{suffix}{stat_text}")
+            entry = f"{row['name']}{suffix}{stat_text}"
+            if row.get("mechanics"):
+                entry += f"｜机制：{_clip(row['mechanics'], 50)}"
+            enemies.append(entry)
         lines.append("敌人：" + "、".join(enemies))
     if stage.assault_diffs:
         lines.append("突袭差异：" + "；".join(stage.assault_diffs))
@@ -760,6 +765,10 @@ async def _build_enemy_context(enemy: EnemyInfo) -> dict:
         "lv2_res": level2.res if level2 else "",
         "weight": level.weight if level else "",
         "abilities": list(level.abilities) if level else [],
+        # 等级2 变体独立机制（差异块未写则与等级1一致，不重复展示）
+        "lv2_abilities": (
+            list(level2.abilities) if level2 and level2.abilities else []
+        ),
         "icon": await enemy_icon_b64(enemy.name or enemy.title),
         "source_url": enemy.source_url,
         "version": ArknightsUID_version,
@@ -785,6 +794,8 @@ async def _enemy_basic_stats(name: str) -> dict:
                 "atk": lv.atk,
                 "defense": lv.defense,
                 "res": lv.res,
+                # 机制（等级块的天赋/能力/技能字段；完整内容走 ark敌人 详情卡）
+                "abilities": [a for a in (lv.abilities or []) if a],
             }
     except Exception:
         logger.debug(f"[ArknightsUID] 关卡敌人数值获取失败：{name}", exc_info=True)
@@ -817,6 +828,13 @@ async def _enrich_stage_enemies(stage: StageInfo, limit: int = 10) -> list[dict]
             row.update(stats)
         if not row.get("icon"):
             row["icon"] = ""
+        # 机制压缩为一行（多行条目展平；完整机制在敌人详情卡）
+        abilities = row.pop("abilities", None) or []
+        if abilities:
+            flat = "；".join(str(a).replace("\n", "；") for a in abilities)
+            row["mechanics"] = _clip(flat, 120)
+        else:
+            row["mechanics"] = ""
         rows.append(row)
     return rows
 

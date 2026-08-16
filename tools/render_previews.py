@@ -338,9 +338,12 @@ MOCK_CONTEXTS = {
         "lv2_res": "60",
         "weight": "6",
         "abilities": [
-            "行军姿态：防御力大幅提升，阻挡数+1",
+            "行军姿态：防御力大幅提升，阻挡数+1，法术抗性提升",
             "毁灭姿态：攻击力大幅提升，攻击造成范围伤害",
             "被击败时释放冲击波，对全场造成真实伤害",
+        ],
+        "lv2_abilities": [
+            "狂怒姿态：攻击速度与移动速度大幅提升，防御力降低",
         ],
         "source_url": "https://prts.wiki/w/爱国者",
         "version": VERSION,
@@ -366,10 +369,12 @@ MOCK_CONTEXTS = {
             {"name": "基础加固建材", "icon": ""},
         ],
         "enemies": [
-            {"name": "士兵", "count": 18, "level": "", "icon": "", "hp": "1650", "atk": "200", "defense": "100", "res": "0"},
+            {"name": "士兵", "count": 18, "level": "", "icon": "", "hp": "1650", "atk": "200", "defense": "100", "res": "0",
+             "mechanics": "无特殊机制"},
             {"name": "弩手", "count": 12, "level": "", "icon": "", "hp": "1550", "atk": "240", "defense": "100", "res": "0"},
             {"name": "暴徒", "count": 8, "level": "", "icon": "", "hp": "5250", "atk": "700", "defense": "100", "res": "0"},
-            {"name": "机动盾兵", "count": 6, "level": "", "icon": "", "hp": "4000", "atk": "200", "defense": "1000", "res": "0"},
+            {"name": "机动盾兵", "count": 6, "level": "", "icon": "", "hp": "4000", "atk": "200", "defense": "1000", "res": "0",
+             "mechanics": "天赋：受到攻击时获得护盾，可抵挡一次伤害"},
         ],
         "assault_diffs": ["敌人的生命值与攻击力提升 20%"],
         "map_image": "",

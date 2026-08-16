@@ -97,6 +97,9 @@
                     HP {{ e.hp or "-" }} · 攻 {{ e.atk or "-" }} · 防 {{ e.defense or "-" }} · 抗 {{ e.res or "-" }}
                 </div>
                 {% endif %}
+                {% if e.mechanics %}
+                <div style="margin-top: 2px; font-size: 10px; color: var(--tx-2); line-height: 1.6;">⚙ {{ e.mechanics }}</div>
+                {% endif %}
             </div>
             {% endfor %}
         </div>

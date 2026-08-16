@@ -535,9 +535,15 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
             title="爱国者",
             name="爱国者",
             levels=[
-                EnemyLevel(max_hp="45000", atk="1600", defense="500", res="45"),
-                # 等级2 变体（差异字段已在解析层从等级1继承补全）
-                EnemyLevel(max_hp="60000", atk="2000", defense="500", res="45"),
+                EnemyLevel(
+                    max_hp="45000", atk="1600", defense="500", res="45",
+                    abilities=["行军姿态：防御力大幅提升，阻挡数+1"],
+                ),
+                # 等级2 变体（差异字段已在解析层从等级1继承补全）+ 独立机制
+                EnemyLevel(
+                    max_hp="60000", atk="2000", defense="500", res="45",
+                    abilities=["毁灭姿态：攻击造成范围伤害"],
+                ),
             ],
         )
         context = await _build_enemy_context(enemy)
@@ -546,9 +552,19 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context["lv2_atk"], "2000")
         self.assertEqual(context["lv2_defense"], "500")
         self.assertEqual(context["lv2_res"], "45")
+        self.assertEqual(
+            context["abilities"], ["行军姿态：防御力大幅提升，阻挡数+1"]
+        )
+        self.assertEqual(context["lv2_abilities"], ["毁灭姿态：攻击造成范围伤害"])
         text = _format_enemy(enemy)
         self.assertIn("等级2：", text)
         self.assertIn("生命 60000", text)
+        self.assertIn("等级2机制：毁灭姿态：攻击造成范围伤害", text)
+        html_render = ark_templates.get_template("ark_wiki_enemy.html").render(
+            font_css_url="about:blank", **context
+        )
+        self.assertIn("毁灭姿态", html_render)
+        self.assertIn("等级2机制", html_render)
 
     async def test_build_stage_context_without_map_file(self) -> None:
         """地图文件不存在/解析失败：map_image 留空，其余字段不受影响。"""
@@ -631,7 +647,13 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
                     title="士兵",
                     name="士兵",
                     levels=[
-                        EnemyLevel(max_hp="1650", atk="200", defense="100", res="0")
+                        EnemyLevel(
+                            max_hp="1650",
+                            atk="200",
+                            defense="100",
+                            res="0",
+                            abilities=["天赋：不会攻击飞行单位"],
+                        )
                     ],
                 )
             return None
@@ -662,8 +684,12 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         # 查不到的敌人不携带数值键（模板只显示名字）
         self.assertNotIn("hp", rows[1])
         # 文本回退同样带基础数值
+        # 机制压缩行（多行条目展平）
+        self.assertEqual(rows[0]["mechanics"], "天赋：不会攻击飞行单位")
+        self.assertEqual(rows[1]["mechanics"], "")
         text = _format_stage(stage, rows)
         self.assertIn("士兵x18（HP1650·攻200·防100·抗0）", text)
+        self.assertIn("机制：天赋：不会攻击飞行单位", text)
         self.assertIn("查无此敌x1", text)
         # 无增强数据时回退纯名单（不带空括号）
         plain = _format_stage(stage)
