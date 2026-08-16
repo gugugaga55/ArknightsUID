@@ -192,6 +192,22 @@ class AliasIndexTest(unittest.TestCase):
         self.assertEqual(index["char_123_silverash"]["rarity"], 6)  # TIER_6 → 6
         self.assertEqual(index["char_123_silverash"]["appellation"], "SilverAsh")
 
+    def test_build_char_index_keeps_alters_excludes_traps(self) -> None:
+        """异格干员（isSpChar，寻访可得）进索引；装置/召唤物（TRAP/TOKEN）排除。"""
+        table = {
+            "char_1035_wisdel": {
+                "name": "维什戴尔", "appellation": "Wis'adel",
+                "rarity": "TIER_6", "profession": "SNIPER",
+                "isSpChar": True, "itemObtainApproach": "招募寻访",
+            },
+            "trap_305_izwsdl": {
+                "name": "变格维什戴尔", "rarity": "TIER_1", "profession": "TRAP",
+            },
+        }
+        index = build_char_index(table)
+        self.assertIn("char_1035_wisdel", index)
+        self.assertNotIn("trap_305_izwsdl", index)
+
     def test_exact_chinese_name(self) -> None:
         index = self._index()
         matched = match_entries("银灰", index)

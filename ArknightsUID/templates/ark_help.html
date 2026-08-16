@@ -22,6 +22,9 @@
                 <h1 class="title">指令<em>帮助</em></h1>
                 <div class="title-rule"><span class="en">COMMAND MANUAL</span></div>
             </div>
+            {% if figure %}
+            <img class="figure-float" src="{{ figure }}" alt="">
+            {% endif %}
         </div>
 
         {% for group in groups %}

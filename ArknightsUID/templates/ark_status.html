@@ -38,8 +38,9 @@
             <div class="bignum">{{ ap_current }}<span class="unit"> / {{ ap_max }} AP</span></div>
             <span class="bar-num">{{ ap_full_at }} 回满</span>
         </div>
-        <div class="bar" style="margin-top: var(--space-3);">
+        <div class="bar bar--lg" style="margin-top: var(--space-3);">
             <i style="width: {{ ap_pct }}%;"></i>
+            <span class="bar-txt">{{ ap_pct }}%</span>
         </div>
 
         <div class="sect">

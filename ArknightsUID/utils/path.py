@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from gsuid_core.data_store import get_res_path
@@ -36,8 +37,12 @@ RESOURCE_PATH: Path = Path(__file__).parents[1] / "resources"
 
 
 def init_dir() -> None:
-    """确保所有运行时目录存在。"""
-    for p in [
+    """确保所有运行时目录存在，并收紧到 700。
+
+    目录内存玩家数据（player_info/抽卡记录）与凭据相关缓存，
+    同机其他本地用户不应可读（gsuid_core 建目录默认受 umask 影响为 755）。
+    """
+    dirs = [
         MAIN_PATH,
         PLAYER_PATH,
         CACHE_BASE,
@@ -47,8 +52,14 @@ def init_dir() -> None:
         EQUIP_CACHE_PATH,
         BAKE_PATH,
         WIKI_CACHE_PATH,
-    ]:
+    ]
+    for p in dirs:
         p.mkdir(parents=True, exist_ok=True)
+    for p in dirs:
+        try:
+            os.chmod(p, 0o700)
+        except OSError:
+            pass  # 无所有权等环境下跳过，不阻断插件加载
 
 
 # 导入时立即初始化，保证后续读写不会因目录缺失失败

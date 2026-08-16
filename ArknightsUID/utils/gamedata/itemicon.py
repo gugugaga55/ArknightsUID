@@ -57,3 +57,57 @@ def split_material_text(text: str) -> tuple[str, str]:
     if match:
         return match.group(1).strip(), match.group(2)
     return text.strip(), ""
+
+
+def prts_enemy_icon_url(enemy_name: str) -> str:
+    """敌人名 → PRTS 敌人头像 URL（`头像_敌人_{名字}.png`，同一 md5 规则）。"""
+    name = enemy_name.strip()
+    if not name:
+        return ""
+    filename = f"头像_敌人_{name}.png"
+    digest = hashlib.md5(filename.encode("utf-8")).hexdigest()
+    return (
+        f"https://media.prts.wiki/{digest[0]}/{digest[:2]}/"
+        f"{urllib.parse.quote(filename)}"
+    )
+
+
+async def enemy_icon_b64(enemy_name: str) -> str:
+    """敌人头像 base64（带磁盘缓存；失败/空名返回空串）。"""
+    url = prts_enemy_icon_url(enemy_name)
+    if not url:
+        return ""
+    try:
+        from ..render import get_image_b64_with_cache
+
+        return await get_image_b64_with_cache(url, ITEM_ICON_CACHE_DIR)
+    except Exception as exc:
+        logger.debug(f"[ArknightsUID] 敌人头像下载失败 {enemy_name}: {exc}")
+        return ""
+
+
+def prts_profession_icon_url(profession_name: str) -> str:
+    """职业名 → PRTS 职业图标 URL（`图标_职业_{职业名}.png`，同一 md5 规则）。"""
+    name = profession_name.strip()
+    if not name:
+        return ""
+    filename = f"图标_职业_{name}.png"
+    digest = hashlib.md5(filename.encode("utf-8")).hexdigest()
+    return (
+        f"https://media.prts.wiki/{digest[0]}/{digest[:2]}/"
+        f"{urllib.parse.quote(filename)}"
+    )
+
+
+async def profession_icon_b64(profession_name: str) -> str:
+    """职业图标 base64（带磁盘缓存；失败/空名返回空串）。"""
+    url = prts_profession_icon_url(profession_name)
+    if not url:
+        return ""
+    try:
+        from ..render import get_image_b64_with_cache
+
+        return await get_image_b64_with_cache(url, ITEM_ICON_CACHE_DIR)
+    except Exception as exc:
+        logger.debug(f"[ArknightsUID] 职业图标下载失败 {profession_name}: {exc}")
+        return ""

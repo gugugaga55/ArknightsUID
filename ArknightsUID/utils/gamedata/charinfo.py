@@ -42,8 +42,15 @@ _TIER_MAP = {f"TIER_{i}": i for i in range(1, 8)}
 
 
 def _is_obtainable(char: dict[str, Any]) -> bool:
-    """可获得的干员（含 6 星与非常规渠道，比公招口径宽）。"""
-    if char.get("isNotObtainable") or char.get("isSpChar"):
+    """可获得的干员（含异格与 6 星，比公招口径宽；排除装置/召唤物）。
+
+    isSpChar 是「异格」标记而非不可得标记——维什戴尔、浊心斯卡蒂等异格
+    干员均为招募寻访获得，必须进索引；真正要排除的是 TRAP/TOKEN 职业的
+    装置与召唤物（其 isNotObtainable 为空，仅靠职业识别）。
+    """
+    if char.get("isNotObtainable"):
+        return False
+    if char.get("profession") in ("TRAP", "TOKEN"):
         return False
     return bool(char.get("name")) and char.get("rarity") in _TIER_MAP
 
@@ -88,8 +95,16 @@ async def load_skill_names() -> dict[str, str]:
         return {}
     names: dict[str, str] = {}
     for skill_id, skill in skill_table.items():
-        if isinstance(skill, dict) and skill.get("name"):
-            names[skill_id] = skill["name"]
+        if not isinstance(skill, dict):
+            continue
+        # skill_table 的名称在 levels[0].name（顶层无 name 字段）
+        name = skill.get("name")
+        if not name:
+            levels = skill.get("levels") or []
+            if levels and isinstance(levels[0], dict):
+                name = levels[0].get("name")
+        if name:
+            names[skill_id] = str(name)
     return names
 
 

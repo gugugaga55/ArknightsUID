@@ -41,7 +41,21 @@ async def persist_ark_login(
     if not roles:
         return None, "未找到明日方舟账号（该森空岛账号下没有 gameId=1 的方舟角色）。"
 
+    # uid 会作为磁盘缓存目录段（PLAYER_PATH / uid），入库前强制纯数字，
+    # 阻断被污染的 API 响应构造路径逃逸
+    valid_roles: list[dict[str, str]] = []
     for role in roles:
+        if str(role.get("role_id") or "").isdigit():
+            valid_roles.append(role)
+        else:
+            logger.warning(
+                "[ArknightsUID·绑定] 跳过非法 role_id（非纯数字），"
+                f"疑似响应被污染：{str(role.get('role_id'))[:12]!r}"
+            )
+    if not valid_roles:
+        return None, "森空岛返回的账号数据异常，已拒绝写入。"
+
+    for role in valid_roles:
         # insert_data 内部 upsert：存在（按 uid）则 update，否则 insert。重复登录幂等。
         await ArkUser.insert_data(
             user_id=user_id,
@@ -60,9 +74,9 @@ async def persist_ark_login(
         # insert_uid 自动去重（多 uid 用 _ 拼接），重复绑返回 -2 无害
         await ArkBind.insert_uid(user_id, bot_id, role["role_id"], group_id=group_id)
     logger.info(
-        f"[ArknightsUID·绑定] 用户 {user_id} 写入 {len(roles)} 个方舟角色"
+        f"[ArknightsUID·绑定] 用户 {user_id} 写入 {len(valid_roles)} 个方舟角色"
     )
-    return roles, None
+    return valid_roles, None
 
 
 async def remove_ark_login(user_id: str, bot_id: str, uid: str = "") -> int:

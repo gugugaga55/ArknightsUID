@@ -35,10 +35,10 @@ HELP_GROUPS = [
             {"cmd": "ark理智 / ark便签", "desc": "理智与基础状态卡", "eg": "ark理智 2"},
             {"cmd": "ark日常 / ark每日", "desc": "日常周常进度卡", "eg": "ark日常"},
             {"cmd": "ark剿灭", "desc": "剿灭合成玉进度卡", "eg": "ark剿灭"},
-            {"cmd": "ark基建", "desc": "基建总览：无人机/制造/宿舍/换班", "eg": "ark基建"},
+            {"cmd": "ark基建", "desc": "基建总览：无人机/制造/训练/换班", "eg": "ark基建"},
             {"cmd": "ark练度统计", "desc": "全干员练度统计卡", "eg": "ark练度统计"},
             {"cmd": "arkBOX", "desc": "BOX 稀有度/精英化分析卡", "eg": "arkBOX"},
-            {"cmd": "ark练度卡 <干员>", "desc": "单干员练度卡（支持别名）", "eg": "ark练度卡 银灰"},
+            {"cmd": "ark练度卡 <干员>", "desc": "单干员练度卡（技能效果/别名）", "eg": "ark练度卡 银灰"},
             {"cmd": "ark肉鸽", "desc": "集成战略进度卡", "eg": "ark肉鸽"},
             {"cmd": "ark签到", "desc": "森空岛每日签到", "eg": "ark签到 2"},
         ],
@@ -57,10 +57,10 @@ HELP_GROUPS = [
         "en": "PRTS",
         "cmds": [
             {"cmd": "arkwiki <词条>", "desc": "PRTS 百科查询", "eg": "arkwiki 源石"},
-            {"cmd": "ark干员 <干员名>", "desc": "干员资料卡（支持别名）", "eg": "ark干员 银灰"},
+            {"cmd": "ark干员 <干员名>", "desc": "干员资料卡（技能详情/我的练度，支持别名）", "eg": "ark干员 银灰"},
             {"cmd": "ark专精材料 <干员名>", "desc": "技能专精材料清单卡", "eg": "ark专精材料 阿米娅"},
             {"cmd": "ark材料 / ark敌人", "desc": "材料 / 敌方资料卡", "eg": "ark材料 固源岩"},
-            {"cmd": "ark关卡 <关卡>", "desc": "关卡资料卡（含地图）", "eg": "ark关卡 1-7"},
+            {"cmd": "ark关卡 <关卡>", "desc": "关卡资料卡（敌方数值/地图）", "eg": "ark关卡 1-7"},
             {"cmd": "ark公招 <标签>", "desc": "公招标签组合查询", "eg": "ark公招 高级资深干员"},
             {"cmd": "ark日历", "desc": "活动/卡池日历", "eg": "ark日历"},
         ],
@@ -76,6 +76,8 @@ HELP_GROUPS = [
             {"cmd": "订阅方舟活动", "desc": "群聊订阅新动态推送", "eg": "订阅方舟活动"},
             {"cmd": "ark订阅理智 [序号]", "desc": "理智回满推送提醒", "eg": "ark订阅理智"},
             {"cmd": "ark取消订阅理智", "desc": "取消理智回满推送", "eg": "ark取消订阅理智"},
+            {"cmd": "ark订阅训练 [序号]", "desc": "专精训练完成提醒", "eg": "ark订阅训练"},
+            {"cmd": "ark取消订阅训练", "desc": "取消专精训练推送", "eg": "ark取消订阅训练"},
         ],
     },
 ]
@@ -99,8 +101,17 @@ HELP_TEXT = _help_text()
 
 @help_sv.on_fullmatch(("帮助", "help", "方舟帮助"), block=True)
 async def send_ark_help(bot: Bot, ev: Event) -> None:
+    figure = ""
+    try:
+        # 帮助卡装饰干员立绘（透明 PNG 浮空图；失败空串降级）
+        from ..utils.player.context import char_portrait_b64
+
+        figure = await char_portrait_b64("char_002_amiya", 5)
+    except Exception:
+        figure = ""
     context = {
         "version": ArknightsUID_version,
         "groups": HELP_GROUPS,
+        "figure": figure,
     }
     await send_card_or_text(bot, ev, "ark_help.html", context, HELP_TEXT)

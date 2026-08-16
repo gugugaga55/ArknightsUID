@@ -1,18 +1,21 @@
-"""理智回满推送（订阅 + 定时轮询 + 到点提醒）。
+"""理智回满推送 + 专精训练完成推送（订阅 + 定时轮询 + 到点提醒）。
 
 - `ark订阅理智 [序号|UID]`：订阅当前默认账号（或指定账号）的理智回满提醒
 - `ark取消订阅理智 [序号|UID]`：取消（不带参数取消全部）
 - 定时轮询（10 分钟）：逐订阅账号拉 player_info（带 5 分钟磁盘缓存），
   推算当前理智，回满即推送一次；用后（理智降回上限以下）自动重新武装
+- `ark订阅训练 [序号|UID]` / `ark取消订阅训练`：专精训练完成提醒（30 分钟
+  轮询训练室 remainSecs，归零推送一次；换干员开新一轮后自动重新武装）
 
-推送状态（notified 标记）落 MAIN_PATH/sanity_push_state.json，
-键为 f"{bot_id}|{user_id}|{uid}"。订阅本身存 gs_subscribe（single 模式，
-uid = 游戏 UID，同用户可多账号分别订阅）。
+推送状态（notified 标记）落 MAIN_PATH/sanity_push_state.json 与
+training_push_state.json，键为 f"{bot_id}|{user_id}|{uid}"。订阅本身存
+gs_subscribe（single 模式，uid = 游戏 UID，同用户可多账号分别订阅）。
 """
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import random
 import re
 from pathlib import Path
@@ -32,7 +35,9 @@ try:
     from ArknightsUID.ArknightsUID.utils.player import (
         effective_ap,
         fetch_cached_player_info,
+        parse_building,
         parse_player_info,
+        training_remaining_secs,
     )
 except ModuleNotFoundError:
     from ArknightsUID.utils.enduid.adapter import (
@@ -42,7 +47,9 @@ except ModuleNotFoundError:
     from ArknightsUID.utils.player import (
         effective_ap,
         fetch_cached_player_info,
+        parse_building,
         parse_player_info,
+        training_remaining_secs,
     )
 
 try:
@@ -56,6 +63,11 @@ TASK_NAME = "订阅理智推送"
 _STATE_PATH: Path = MAIN_PATH / "sanity_push_state.json"
 # 轮询间隔：理智 6 分钟回 1 点，10 分钟粒度平均多溢出 ~0.8 点，可接受
 POLL_MINUTES = 10
+
+TRAIN_TASK_NAME = "订阅训练推送"
+_TRAIN_STATE_PATH: Path = MAIN_PATH / "training_push_state.json"
+# 专精训练动辄数小时，30 分钟粒度的完成提醒误差可接受（player_info 5 分钟缓存）
+TRAIN_POLL_MINUTES = 30
 
 
 def _state_key(bot_id: str, user_id: str, uid: str) -> str:
@@ -76,6 +88,16 @@ def evaluate_sanity(ap: int, ap_max: int, notified: bool) -> tuple[bool, bool]:
     return is_full, is_full and not notified
 
 
+def _write_state_atomic(path: Path, state: dict) -> None:
+    """临时文件 + os.replace 原子落盘：写一半崩溃不至于把状态文件写坏
+    （坏文件会被当空态，导致全部订阅重复推送一次）。"""
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(
+        json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    os.replace(tmp, path)
+
+
 def load_push_state() -> dict[str, dict]:
     try:
         state = json.loads(_STATE_PATH.read_text(encoding="utf-8"))
@@ -89,9 +111,7 @@ def load_push_state() -> dict[str, dict]:
 def save_push_state(state: dict[str, dict]) -> None:
     try:
         _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _STATE_PATH.write_text(
-            json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        _write_state_atomic(_STATE_PATH, state)
     except Exception as exc:
         logger.warning(
             f"[ArknightsUID·理智推送] 状态写入失败: {exc.__class__.__name__}"
@@ -196,14 +216,15 @@ async def check_sanity_push() -> None:
         return
     logger.info(f"[ArknightsUID·理智推送] 检查 {len(datas)} 个订阅..")
 
-    state = load_push_state()
-    dirty = False
+    # 只记本轮变更，落盘前重读合并——避免覆盖轮询期间 (退)订阅写盘的状态
+    changes: dict[str, dict] = {}
     for subscribe in datas:
         uid = str(subscribe.uid or "")
         if not uid:
             continue
         key = _state_key(subscribe.bot_id, subscribe.user_id, uid)
-        notified = bool(state.get(key, {}).get("notified"))
+        prev = load_push_state().get(key, {})
+        notified = bool(prev.get("notified"))
 
         credential = await resolve_credential(
             subscribe.user_id, subscribe.bot_id, uid=uid
@@ -241,9 +262,202 @@ async def check_sanity_push() -> None:
                     f"[ArknightsUID·理智推送] 推送失败: {exc.__class__.__name__}"
                 )
         if bool(is_full) != notified:
-            state[key] = {"notified": is_full}
-            dirty = True
+            changes[key] = {"notified": is_full}
         await asyncio.sleep(random.uniform(1, 2))
 
-    if dirty:
-        save_push_state(state)
+    if changes:
+        fresh = load_push_state()
+        fresh.update(changes)
+        save_push_state(fresh)
+
+
+# ==================== 专精训练完成推送 ====================
+
+
+def evaluate_training(
+    trainee_id: str, remaining: int, prev_notified: bool, prev_trainee: str
+) -> tuple[bool, dict]:
+    """训练推送状态机的纯函数核心。返回 (should_push, new_state)。
+
+    - 无在训干员：复位状态（新一轮训练可再次触发）
+    - 剩余未知（remainSecs<0，接口未给/空闲哨兵穿透）：状态保持，不推送
+    - 换了在训干员：视为新一轮，notified 复位
+    - 剩余归零且未通知过：推送一次；完成后停在 notified，直到换人/空闲
+    """
+    if not trainee_id:
+        return False, {"notified": False, "trainee": ""}
+    if remaining < 0:
+        return False, {"notified": prev_notified, "trainee": prev_trainee}
+    notified = prev_notified and prev_trainee == trainee_id
+    done = remaining <= 0
+    return done and not notified, {"notified": done, "trainee": trainee_id}
+
+
+def _load_train_state() -> dict[str, dict]:
+    try:
+        state = json.loads(_TRAIN_STATE_PATH.read_text(encoding="utf-8"))
+        if isinstance(state, dict):
+            return state
+    except Exception:
+        pass
+    return {}
+
+
+def _save_train_state(state: dict[str, dict]) -> None:
+    try:
+        _TRAIN_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _write_state_atomic(_TRAIN_STATE_PATH, state)
+    except Exception as exc:
+        logger.warning(
+            f"[ArknightsUID·训练推送] 状态写入失败: {exc.__class__.__name__}"
+        )
+
+
+@notify_sv.on_command(
+    (
+        "订阅训练",
+        "订阅专精训练",
+        "训练推送",
+    ),
+    block=True,
+)
+async def subscribe_training_push(bot: Bot, ev: Event) -> None:
+    uid, index = _extract_target(ev.text)
+    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
+    if isinstance(credential, str):
+        return await _send_text(bot, ev, credential)
+
+    await gs_subscribe.add_subscribe(
+        "single", task_name=TRAIN_TASK_NAME, event=ev, uid=credential.uid
+    )
+    state = _load_train_state()
+    state.pop(_state_key(ev.bot_id, ev.user_id, credential.uid), None)
+    _save_train_state(state)
+
+    shown = credential.nickname or hide_uid(credential.uid)
+    await _send_text(
+        bot, ev,
+        f"已订阅专精训练完成推送：{shown}\n"
+        f"训练完成会在这里提醒一次；换干员开新一轮后自动恢复提醒。\n"
+        f"取消：ark取消订阅训练",
+    )
+
+
+@notify_sv.on_command(
+    (
+        "取消订阅训练",
+        "取消训练推送",
+        "退订训练推送",
+    ),
+    block=True,
+)
+async def unsubscribe_training_push(bot: Bot, ev: Event) -> None:
+    uid, index = _extract_target(ev.text)
+    if uid or index:
+        credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
+        if isinstance(credential, str):
+            return await _send_text(bot, ev, credential)
+        target_uid = credential.uid
+        await gs_subscribe.delete_subscribe(
+            "single", task_name=TRAIN_TASK_NAME, event=ev, uid=target_uid
+        )
+        state = _load_train_state()
+        state.pop(_state_key(ev.bot_id, ev.user_id, target_uid), None)
+        _save_train_state(state)
+        return await _send_text(bot, ev, "已取消该账号的专精训练推送。")
+
+    await gs_subscribe.delete_subscribe(
+        "single", task_name=TRAIN_TASK_NAME, event=ev
+    )
+    prefix = f"{ev.bot_id}|{ev.user_id}|"
+    state = _load_train_state()
+    for key in [k for k in state if k.startswith(prefix)]:
+        state.pop(key, None)
+    _save_train_state(state)
+    await _send_text(bot, ev, "已取消全部专精训练推送。")
+
+
+def format_training_push_message(
+    name: str, trainee_name: str, uid_masked: str
+) -> str:
+    return (
+        "「明日方舟」专精训练完成\n"
+        f"{name or '博士'}（UID {uid_masked}）训练室的 "
+        f"{trainee_name or '干员'} 专精训练已完成\n"
+        "上号领取并安排下一位吧～"
+    )
+
+
+@scheduler.scheduled_job(
+    "interval", minutes=TRAIN_POLL_MINUTES, id="ark_training_push"
+)
+async def check_training_push() -> None:
+    """定时检查各订阅账号训练室，完成推送一次（换训干员后重新武装）。"""
+    datas = await gs_subscribe.get_subscribe(TRAIN_TASK_NAME)
+    if not datas:
+        return
+    logger.info(f"[ArknightsUID·训练推送] 检查 {len(datas)} 个订阅..")
+
+    # 只记本轮变更，落盘前重读合并（与理智推送同款竞态防护）
+    changes: dict[str, dict] = {}
+    for subscribe in datas:
+        uid = str(subscribe.uid or "")
+        if not uid:
+            continue
+        key = _state_key(subscribe.bot_id, subscribe.user_id, uid)
+        prev = _load_train_state().get(key, {})
+        prev_notified = bool(prev.get("notified"))
+        prev_trainee = str(prev.get("trainee") or "")
+
+        credential = await resolve_credential(
+            subscribe.user_id, subscribe.bot_id, uid=uid
+        )
+        if isinstance(credential, str):
+            logger.warning(
+                f"[ArknightsUID·训练推送] 账号不可用 user={subscribe.user_id}: {credential}"
+            )
+            continue
+
+        response = await fetch_cached_player_info(credential)
+        if isinstance(response, str):
+            logger.warning(
+                f"[ArknightsUID·训练推送] 拉取失败 uid={hide_uid(uid)}: {response}"
+            )
+            continue
+        data = parse_player_info(response)
+        building = parse_building(data) if data is not None else None
+        if building is None:
+            continue
+
+        should_push, new_state = evaluate_training(
+            building.training_trainee_id,
+            training_remaining_secs(building),
+            prev_notified,
+            prev_trainee,
+        )
+        if should_push:
+            message = format_training_push_message(
+                (data.name if data else "") or credential.nickname,
+                building.training_trainee,
+                hide_uid(uid),
+            )
+            try:
+                await subscribe.send(message)
+                logger.info(
+                    f"[ArknightsUID·训练推送] 已推送 user={subscribe.user_id} "
+                    f"uid={hide_uid(uid)} trainee={building.training_trainee}"
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"[ArknightsUID·训练推送] 推送失败: {exc.__class__.__name__}"
+                )
+                # 发送失败不落 notified，下轮重试
+                new_state = {"notified": False, "trainee": prev_trainee}
+        if new_state != prev:
+            changes[key] = new_state
+        await asyncio.sleep(random.uniform(1, 2))
+
+    if changes:
+        fresh = _load_train_state()
+        fresh.update(changes)
+        _save_train_state(fresh)

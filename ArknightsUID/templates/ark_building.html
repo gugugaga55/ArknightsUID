@@ -11,6 +11,7 @@
     dormitories: [{label, comfort, comfort_pct}]
     clue_own: int, clue_board: [str], clue_daily_reward: bool
     training_trainee: str（空 = 未在训练）
+    training_remain: str（"剩约H小时M分"/"已完成"，空 = 未在训练/未知）
     tired_chars: [{name, room, morale}]  低心情干员（心情 < 12，升序前 8）
     tired_more: int
     version: str
@@ -79,7 +80,11 @@
             <div class="row">
                 <span class="row-label">{{ m.label }} <span class="mono u-mute">Lv{{ m.level }}</span></span>
                 <span class="row-value">{{ m.formula }} <span class="mono u-mute">{{ m.speed_pct }}%</span></span>
-                <span class="row-value u-mute" style="font-size: 10px;">{{ m.members | join(" · ") }}</span>
+                <span style="display: inline-flex; gap: 4px;">
+                    {% for mb in m.members %}
+                    <span class="aicon" title="{{ mb.name }}">{% if mb.avatar %}<img src="{{ mb.avatar }}" alt="{{ mb.name }}">{% endif %}</span>
+                    {% endfor %}
+                </span>
             </div>
             {% endfor %}
         </div>
@@ -99,7 +104,12 @@
                     <span class="bar-num">{{ t.stock }} / {{ t.stock_limit }}</span>
                 </div>
                 <div class="bar"><i style="width: {{ (t.stock * 100 / t.stock_limit) | round | int if t.stock_limit else 0 }}%;"></i></div>
-                <div style="margin-top: 4px; font-size: 10px; color: var(--tx-3);">{{ t.members | join(" · ") }}</div>
+                <div style="margin-top: 6px; display: flex; align-items: center; gap: 4px;">
+                    {% for mb in t.members %}
+                    <span class="aicon" title="{{ mb.name }}">{% if mb.avatar %}<img src="{{ mb.avatar }}" alt="{{ mb.name }}">{% endif %}</span>
+                    {% endfor %}
+                    <span style="font-size: 10px; color: var(--tx-3); margin-left: 4px;">{{ t.members | map(attribute="name") | join(" · ") }}</span>
+                </div>
             </div>
             {% endfor %}
         </div>
@@ -128,7 +138,7 @@
         <div class="rows" style="margin-top: 0; border-top: 0;">
             <div class="row">
                 <span class="row-label">训练室 TRAINING</span>
-                <span class="row-value">{{ training_trainee }} 专精训练中</span>
+                <span class="row-value">{{ training_trainee }} 专精训练中{% if training_remain %} · {{ training_remain }}{% endif %}</span>
             </div>
         </div>
         {% endif %}

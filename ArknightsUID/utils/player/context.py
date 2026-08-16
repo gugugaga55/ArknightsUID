@@ -13,7 +13,14 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import quote
 
-from .building import BuildingData, TRADING_STRATEGY_NAMES
+from gsuid_core.logger import logger
+
+from .building import (
+    TRADING_STRATEGY_NAMES,
+    BuildingData,
+    training_remaining_secs,
+    training_status_text,
+)
 from .parse import (
     CAMPAIGN_STAGE_KILL_CAP,
     PROFESSION_ORDER,
@@ -73,6 +80,81 @@ def skill_icon_url(skill_id: str) -> str:
     if not skill_id:
         return ""
     return f"{_HYCDN}/char_skill/{quote(skill_id, safe='')}.png"
+
+
+def skin_portrait_url(skin_id: str) -> str:
+    """皮肤立绘 URL（portrait 路径，编码规则同 skin_avatar_url）。"""
+    if not skin_id:
+        return ""
+    skin_id = re.sub(r"@(\d+)$", r"#\1", skin_id)
+    encoded = skin_id.replace("@", "%40").replace("#", "%23")
+    return f"{_HYCDN}/char_skin/portrait/{encoded}.png"
+
+
+def equip_icon_url(equip_id: str) -> str:
+    """模组图标 URL（PRTS torappu 资产，按 uniequip id 直取）。"""
+    if not equip_id:
+        return ""
+    return f"https://torappu.prts.wiki/assets/uniequip_img/{quote(equip_id, safe='')}.png"
+
+
+def base_avatar_url(char_id: str) -> str:
+    """干员初始头像（avatar/{charId}#1，公招/寻访列表的小头像用）。"""
+    if not char_id:
+        return ""
+    return f"{_HYCDN}/char_skin/avatar/{char_id}%231.png"
+
+
+async def char_avatar_b64(char_id: str) -> str:
+    """干员初始头像 base64（磁盘缓存，失败空串降级）。"""
+    url = base_avatar_url(char_id)
+    if not url:
+        return ""
+    try:
+        from ..path import AVATAR_CACHE_PATH
+        from ..render import get_image_b64_with_cache
+
+        return await get_image_b64_with_cache(url, AVATAR_CACHE_PATH)
+    except Exception:
+        return ""
+
+
+# 立绘 404 负缓存时效：避免每个缺档位每次查询都重打 CDN（404 日志刷屏）。
+# 取 1h 而非更长：瞬时网络失败也会落标记，太长会误伤可恢复的缺图。
+_PORTRAIT_MISS_TTL = 3600.0
+
+
+async def char_portrait_b64(char_id: str, rarity: int = 0) -> str:
+    """干员立绘 base64：portrait/{charId}#N，按稀有度 E2→E1→初始 逐档回退。
+
+    4★ 及以上才有 E2 立绘（#3）；404/下载失败自动降档，全部失败返回空串。
+    缺失档位写 .miss 标记（1h 负缓存），期间直接跳过不再请求。
+    """
+    if not char_id:
+        return ""
+    order = ("3", "2", "1") if rarity >= 4 else (("2", "1") if rarity == 3 else ("1",))
+    try:
+        from ..path import CHAR_CACHE_PATH
+        from ..render import get_image_b64_with_cache
+
+        CHAR_CACHE_PATH.mkdir(parents=True, exist_ok=True)
+        for tier in order:
+            miss_path = CHAR_CACHE_PATH / f"{char_id}%23{tier}.miss"
+            if miss_path.exists():
+                try:
+                    if time.time() - miss_path.stat().st_mtime < _PORTRAIT_MISS_TTL:
+                        continue
+                    miss_path.unlink()
+                except OSError:
+                    continue
+            url = f"{_HYCDN}/char_skin/portrait/{char_id}%23{tier}.png"
+            b64 = await get_image_b64_with_cache(url, CHAR_CACHE_PATH)
+            if b64:
+                return b64
+            miss_path.write_text("", encoding="utf-8")
+    except Exception:
+        logger.debug("[ArknightsUID] 干员立绘获取失败", exc_info=True)
+    return ""
 
 
 def build_status_context(
@@ -287,7 +369,9 @@ async def build_building_context(
                 else "未在生产"
             ),
             "speed_pct": round(room.speed * 100) if room.speed > 0 else 100,
-            "members": [m.name for m in room.members],
+            "members": [
+                {"name": m.name, "char_id": m.char_id} for m in room.members
+            ],
         }
         for i, room in enumerate(building.manufactures, start=1)
     ]
@@ -300,7 +384,9 @@ async def build_building_context(
             ),
             "stock": room.stock_count,
             "stock_limit": room.stock_limit,
-            "members": [m.name for m in room.members],
+            "members": [
+                {"name": m.name, "char_id": m.char_id} for m in room.members
+            ],
         }
         for i, room in enumerate(building.tradings, start=1)
     ]
@@ -336,6 +422,9 @@ async def build_building_context(
         "clue_board": building.clue_board,
         "clue_daily_reward": building.clue_daily_reward,
         "training_trainee": building.training_trainee,
+        "training_remain": training_status_text(
+            training_remaining_secs(building)
+        ),
         "tired_chars": tired,
         "tired_more": max(0, len(building.tired_chars) - 8),
         "version": version,
@@ -343,28 +432,51 @@ async def build_building_context(
 
 
 async def build_char_card_context(
-    entry: CharEntry, version: str
+    entry: CharEntry, version: str, skill_effects: dict[str, dict] | None = None
 ) -> dict[str, Any]:
-    """ark_char_card.html（#5 单干员卡）。头像/技能图标走 hycdn 下载缓存。"""
+    """ark_char_card.html（#5 单干员卡）。立绘/头像/技能图标走 hycdn 下载缓存。
+
+    skill_effects：技能名 → {current, current_level, final, final_level}
+    （PRTS 逐级描述，由调用方从 wiki 层取；缺省只展示专精点）。
+    """
     avatar = ""
+    portrait = ""
     icon_by_id: dict[str, str] = {}
+    equip_icon_by_id: dict[str, str] = {}
     try:
         from ..render import get_image_b64_with_cache
-        from ..path import AVATAR_CACHE_PATH, SKILL_CACHE_PATH
+        from ..path import (
+            AVATAR_CACHE_PATH,
+            CHAR_CACHE_PATH,
+            EQUIP_CACHE_PATH,
+            SKILL_CACHE_PATH,
+        )
 
-        avatar_url = skin_avatar_url(entry.skin_id or entry.char_id)
-        if avatar_url:
-            avatar = await get_image_b64_with_cache(avatar_url, AVATAR_CACHE_PATH)
+        # 立绘优先（玩家当前穿戴皮肤），头像兜底
+        portrait_url = skin_portrait_url(entry.skin_id or entry.char_id)
+        if portrait_url:
+            portrait = await get_image_b64_with_cache(portrait_url, CHAR_CACHE_PATH)
+        if not portrait:
+            avatar_url = skin_avatar_url(entry.skin_id or entry.char_id)
+            if avatar_url:
+                avatar = await get_image_b64_with_cache(avatar_url, AVATAR_CACHE_PATH)
         for skill in entry.skills:
             icon_url = skill_icon_url(skill.skill_id)
             if icon_url:
                 icon_by_id[skill.skill_id] = await get_image_b64_with_cache(
                     icon_url, SKILL_CACHE_PATH
                 )
+        for eq in entry.equips:
+            if eq.equip_id:
+                equip_icon_by_id[eq.equip_id] = await get_image_b64_with_cache(
+                    equip_icon_url(eq.equip_id), EQUIP_CACHE_PATH
+                )
     except Exception:
-        # 渲染层或网络不可用：无图也照出卡（模板对空 avatar/icon 有降级）
+        # 渲染层或网络不可用：无图也照出卡（模板对空 portrait/avatar/icon 有降级）
+        portrait = ""
         avatar = ""
         icon_by_id = {}
+        equip_icon_by_id = {}
 
     # 技能名来自 skill_table（gamedata，惰性加载；失败退回 skillId 原文）
     skill_names: dict[str, str] = {}
@@ -375,16 +487,28 @@ async def build_char_card_context(
     except Exception:
         skill_names = {}
 
-    skills = [
-        {
-            "icon": icon_by_id.get(skill.skill_id, ""),
-            "name": skill_names.get(skill.skill_id) or skill.skill_id,
-            "specialize": skill.specialize_level,
-        }
-        for skill in entry.skills
-    ]
+    effects = skill_effects or {}
+    skills: list[dict[str, Any]] = []
+    for skill in entry.skills:
+        name = skill_names.get(skill.skill_id) or skill.skill_id
+        effect = effects.get(name, {})
+        skills.append(
+            {
+                "icon": icon_by_id.get(skill.skill_id, ""),
+                "name": name,
+                "specialize": skill.specialize_level,
+                "current": effect.get("current", ""),
+                "current_level": effect.get("current_level", ""),
+                "final": effect.get("final", ""),
+                "final_level": effect.get("final_level", ""),
+            }
+        )
     equips = [
-        {"name": equip_display_name(eq.equip_id), "stage": eq.level}
+        {
+            "name": equip_display_name(eq.equip_id),
+            "stage": eq.level,
+            "icon": equip_icon_by_id.get(eq.equip_id, ""),
+        }
         for eq in entry.equips
         if eq.equip_id
     ]
@@ -393,6 +517,7 @@ async def build_char_card_context(
         "rarity": entry.rarity_display,
         "profession": f"{entry.profession_name} {entry.profession}".strip(),
         "avatar": avatar,
+        "portrait": portrait,
         "level": entry.level,
         "max_level": entry.max_level(),
         "elite": entry.evolve_phase,

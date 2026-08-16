@@ -35,7 +35,7 @@
         <div class="rows">
             {% for r in rows %}
             <div class="row">
-                <span class="row-value" style="font-size: 13px;"><span class="mono" style="color: {{ rcolor.get(r.rarity, '#a6abb5') }}; font-weight: 700; margin-right: 6px;">{{ r.rarity }}★</span>{{ r.name }}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 6px;">{{ r.profession }}</span></span>
+                <span class="row-value" style="display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px;">{% if r.avatar %}<span class="aicon"><img src="{{ r.avatar }}" alt=""></span>{% endif %}<span class="mono" style="color: {{ rcolor.get(r.rarity, '#a6abb5') }}; font-weight: 700;">{{ r.rarity }}★</span>{{ r.name }}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 4px;">{{ r.profession }}</span></span>
                 <span class="bar-num" style="max-width: 46%; text-align: right;">{{ r.tags }}</span>
             </div>
             {% endfor %}

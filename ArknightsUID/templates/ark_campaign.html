@@ -30,8 +30,9 @@
             <div class="bignum">{{ reward_current }}<span class="unit"> / {{ reward_total }} 合成玉</span></div>
             <span class="bar-num">{{ reward_pct }}%</span>
         </div>
-        <div class="bar is-yellow" style="margin-top: var(--space-3);">
+        <div class="bar bar--lg" style="margin-top: var(--space-3);">
             <i style="width: {{ reward_pct }}%;"></i>
+            <span class="bar-txt">{{ reward_current }} / {{ reward_total }}</span>
         </div>
 
         <div class="sect">

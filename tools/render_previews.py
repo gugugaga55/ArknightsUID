@@ -168,9 +168,15 @@ MOCK_CONTEXTS = {
         "favor": 200,
         "main_skill_lvl": 7,
         "skills": [
-            {"icon": asset_b64("skill_amiya_1"), "name": "战术咏唱·γ型", "specialize": 3},
-            {"icon": asset_b64("skill_amiya_2"), "name": "精神爆发", "specialize": 3},
-            {"icon": asset_b64("skill_amiya_3"), "name": "奇美拉", "specialize": 1},
+            {"icon": asset_b64("skill_amiya_1"), "name": "战术咏唱·γ型", "specialize": 3,
+             "current": "攻击速度+60", "current_level": "专3",
+             "final": "", "final_level": ""},
+            {"icon": asset_b64("skill_amiya_2"), "name": "精神爆发", "specialize": 3,
+             "current": "每秒消耗最大生命2%，攻击力+200%", "current_level": "专3",
+             "final": "", "final_level": ""},
+            {"icon": asset_b64("skill_amiya_3"), "name": "奇美拉", "specialize": 1,
+             "current": "攻击力+170%，攻击间隔增大", "current_level": "专1",
+             "final": "攻击力+220%，攻击间隔增大，攻击范围扩大", "final_level": "专3"},
         ],
         "equips": [
             {"name": "暗语", "stage": 3},
@@ -256,9 +262,17 @@ MOCK_CONTEXTS = {
         "summary": "罗德岛的公开领袖，年纪轻轻却肩负着沉重的责任。",
         "talents": [
             {"slot": "第一天赋", "name": "情绪吸收", "unlock": "精英化1",
-             "description": "攻击范围内的敌人被击败时，自身技力回复速度提升。"},
+             "description": "精英化1：技力回复速度+0.2/秒 / 精英化2：技力回复速度+0.45/秒",
+             "stages": [
+                 {"condition": "精英化1", "effect": "技力回复速度+0.2/秒"},
+                 {"condition": "精英化2", "effect": "技力回复速度+0.45/秒"},
+             ],
+             "potential": {"condition": "精英化2", "effect": "技力回复速度+0.45/秒（+0.05/秒）"}},
             {"slot": "第二天赋", "name": "奇美拉适性", "unlock": "精英化2",
-             "description": "技能【奇美拉】结束时不再强制退场，改为眩晕。"},
+             "description": "精英化2：技能【奇美拉】结束时不再强制退场，改为眩晕5秒",
+             "stages": [
+                 {"condition": "精英化2", "effect": "技能【奇美拉】结束时不再强制退场，改为眩晕5秒"},
+             ]},
         ],
         "skills": [
             {
@@ -266,12 +280,14 @@ MOCK_CONTEXTS = {
                 "skill_type": "自动回复 · 手动触发",
                 "range": "",
                 "levels": [
-                    {"level": "1", "description": "", "sp_init": "0", "sp_cost": "40", "duration": "30"},
-                    {"level": "4", "description": "", "sp_init": "0", "sp_cost": "37", "duration": "30"},
-                    {"level": "7", "description": "", "sp_init": "0", "sp_cost": "34", "duration": "30"},
-                    {"level": "专精1", "description": "", "sp_init": "0", "sp_cost": "33", "duration": "30"},
-                    {"level": "专精3", "description": "", "sp_init": "0", "sp_cost": "30", "duration": "30"},
+                    {"level": "1", "description": "攻击速度+15", "sp_init": "0", "sp_cost": "40", "duration": "30"},
+                    {"level": "4", "description": "攻击速度+30", "sp_init": "0", "sp_cost": "37", "duration": "30"},
+                    {"level": "7", "description": "攻击速度+45", "sp_init": "0", "sp_cost": "34", "duration": "30"},
+                    {"level": "专精1", "description": "攻击速度+50", "sp_init": "0", "sp_cost": "33", "duration": "30"},
+                    {"level": "专精3", "description": "攻击速度+60", "sp_init": "0", "sp_cost": "30", "duration": "30"},
                 ],
+                "current": {"level": "专精1", "description": "攻击速度+50", "sp_init": "0", "sp_cost": "33", "duration": "30", "meta": "33耗·30s"},
+                "final": {"level": "专精3", "description": "攻击速度+60", "sp_init": "0", "sp_cost": "30", "duration": "30", "meta": "30耗·30s"},
                 "mastery_costs": [
                     {"mastery": "专精1", "materials": ["技巧概要·卷3", "固源岩组"]},
                     {"mastery": "专精3", "materials": ["技巧概要·卷3", "D32钢", "提纯源岩"]},
@@ -282,13 +298,21 @@ MOCK_CONTEXTS = {
                 "skill_type": "自动回复 · 手动触发",
                 "range": "",
                 "levels": [
-                    {"level": "1", "description": "", "sp_init": "0", "sp_cost": "80", "duration": "25"},
-                    {"level": "7", "description": "", "sp_init": "0", "sp_cost": "74", "duration": "25"},
-                    {"level": "专精3", "description": "", "sp_init": "0", "sp_cost": "68", "duration": "25"},
+                    {"level": "1", "description": "每秒消耗最大生命3%，攻击力+120%", "sp_init": "0", "sp_cost": "80", "duration": "25"},
+                    {"level": "7", "description": "每秒消耗最大生命3%，攻击力+160%", "sp_init": "0", "sp_cost": "74", "duration": "25"},
+                    {"level": "专精3", "description": "每秒消耗最大生命2%，攻击力+200%", "sp_init": "0", "sp_cost": "68", "duration": "25"},
                 ],
+                "current": {"level": "7", "description": "每秒消耗最大生命3%，攻击力+160%", "sp_init": "0", "sp_cost": "74", "duration": "25", "meta": "74耗·25s"},
+                "final": {"level": "专精3", "description": "每秒消耗最大生命2%，攻击力+200%", "sp_init": "0", "sp_cost": "68", "duration": "25", "meta": "68耗·25s"},
                 "mastery_costs": [],
             },
         ],
+        "owner": {
+            "uid": "12****89",
+            "main_skill_lvl": 7,
+            "skills": {"战术咏唱·γ型": 1, "精神爆发": 0},
+            "training_remain": "剩约2小时15分",
+        },
         "source_url": "https://prts.wiki/w/阿米娅",
         "version": VERSION,
     },
@@ -307,6 +331,11 @@ MOCK_CONTEXTS = {
         "atk": "1200",
         "defense": "1500",
         "res": "60",
+        "has_level2": True,
+        "lv2_hp": "60000",
+        "lv2_atk": "1600",
+        "lv2_defense": "1500",
+        "lv2_res": "60",
         "weight": "6",
         "abilities": [
             "行军姿态：防御力大幅提升，阻挡数+1",
@@ -326,13 +355,21 @@ MOCK_CONTEXTS = {
         "ap_cost": "6",
         "enemy_count": "44",
         "description": "切尔诺伯格的废墟中，整合运动的暴徒正在集结。注意敌人的远程单位会从侧翼出现。",
-        "drops": ["固源岩", "源岩", "破损装置", "酯原料"],
-        "extra_drops": ["初级作战记录", "基础加固建材"],
+        "drops": [
+            {"name": "固源岩", "icon": ""},
+            {"name": "源岩", "icon": ""},
+            {"name": "破损装置", "icon": ""},
+            {"name": "酯原料", "icon": ""},
+        ],
+        "extra_drops": [
+            {"name": "初级作战记录", "icon": ""},
+            {"name": "基础加固建材", "icon": ""},
+        ],
         "enemies": [
-            {"name": "士兵", "count": 18},
-            {"name": "弩手", "count": 12},
-            {"name": "暴徒", "count": 8},
-            {"name": "机动盾兵", "count": 6},
+            {"name": "士兵", "count": 18, "level": "", "hp": "1650", "atk": "200", "defense": "100", "res": "0"},
+            {"name": "弩手", "count": 12, "level": "", "hp": "1550", "atk": "240", "defense": "100", "res": "0"},
+            {"name": "暴徒", "count": 8, "level": "", "hp": "5250", "atk": "700", "defense": "100", "res": "0"},
+            {"name": "机动盾兵", "count": 6, "level": "", "hp": "4000", "atk": "200", "defense": "1000", "res": "0"},
         ],
         "assault_diffs": ["敌人的生命值与攻击力提升 20%"],
         "map_image": "",
@@ -523,13 +560,18 @@ MOCK_CONTEXTS = {
         "labor_max": 200,
         "labor_pct": 65,
         "manufactures": [
-            {"label": "制造站", "level": 3, "formula": "赤金×1", "speed_pct": 163, "members": ["温蒂", "森蚺", "澄闪"]},
-            {"label": "制造站2", "level": 3, "formula": "赤金×1", "speed_pct": 111, "members": ["红云", "泡泡"]},
-            {"label": "制造站3", "level": 3, "formula": "高级作战记录×1", "speed_pct": 103, "members": ["夜烟"]},
+            {"label": "制造站", "level": 3, "formula": "赤金×1", "speed_pct": 163,
+             "members": [{"name": "温蒂", "char_id": ""}, {"name": "森蚺", "char_id": ""}, {"name": "澄闪", "char_id": ""}]},
+            {"label": "制造站2", "level": 3, "formula": "赤金×1", "speed_pct": 111,
+             "members": [{"name": "红云", "char_id": ""}, {"name": "泡泡", "char_id": ""}]},
+            {"label": "制造站3", "level": 3, "formula": "高级作战记录×1", "speed_pct": 103,
+             "members": [{"name": "夜烟", "char_id": ""}]},
         ],
         "tradings": [
-            {"label": "贸易站", "level": 3, "strategy": "龙门币", "stock": 8, "stock_limit": 12, "members": ["能天使", "德克萨斯", "拉普兰德"]},
-            {"label": "贸易站2", "level": 3, "strategy": "合成玉", "stock": 2, "stock_limit": 10, "members": ["雪雉", "崖心"]},
+            {"label": "贸易站", "level": 3, "strategy": "龙门币", "stock": 8, "stock_limit": 12,
+             "members": [{"name": "能天使", "char_id": ""}, {"name": "德克萨斯", "char_id": ""}, {"name": "拉普兰德", "char_id": ""}]},
+            {"label": "贸易站2", "level": 3, "strategy": "合成玉", "stock": 2, "stock_limit": 10,
+             "members": [{"name": "雪雉", "char_id": ""}, {"name": "崖心", "char_id": ""}]},
         ],
         "power_count": 3,
         "power_levels": [3, 3, 3],
@@ -543,6 +585,7 @@ MOCK_CONTEXTS = {
         "clue_board": ["企鹅物流", "喀兰贸易", "莱茵生命"],
         "clue_daily_reward": True,
         "training_trainee": "史尔特尔",
+        "training_remain": "剩约2小时15分",
         "tired_chars": [
             {"name": "阿米娅", "room": "控制中枢", "morale": 0.0},
             {"name": "濯尘芙蓉", "room": "控制中枢", "morale": 0.0},
@@ -587,6 +630,106 @@ async def _enrich_icons(name: str, context: dict) -> None:
                     mat["icon"] = await item_icon_b64(mat["name"])
     elif name == "ark_drop_rate.html":
         context["item_icon"] = await item_icon_b64(context["item_name"])
+    elif name == "ark_wiki_enemy.html":
+        from ArknightsUID.utils.gamedata.itemicon import enemy_icon_b64
+
+        context["icon"] = await enemy_icon_b64(context["name"])
+    elif name in ("ark_recruit.html", "ark_gacha_card.html"):
+        # 行内小头像：精确名反查 charId → 初始头像
+        from ArknightsUID.utils.gamedata.charinfo import load_char_index
+        from ArknightsUID.utils.player.context import char_avatar_b64
+
+        char_index = await load_char_index()
+        rows_key = "rows" if name == "ark_recruit.html" else "recent"
+        for row in context.get(rows_key, []):
+            hit = next(
+                (cid for cid, info in char_index.items()
+                 if info.get("name") == row.get("name")),
+                "",
+            )
+            row["avatar"] = await char_avatar_b64(hit) if hit else ""
+
+    # 立绘是独立增强位（与材料图标 elif 链不冲突，可同时命中）
+    if name in ("ark_char_card.html", "ark_cultivate.html", "ark_wiki_mastery.html", "ark_wiki_operator.html"):
+        from ArknightsUID.utils.player.context import char_portrait_b64
+
+        context["portrait"] = await char_portrait_b64("char_002_amiya", 5)
+
+    if name == "ark_char_card.html":
+        # 模组图标（PRTS torappu 资产）
+        from ArknightsUID.utils.path import EQUIP_CACHE_PATH
+        from ArknightsUID.utils.player.context import equip_icon_url
+        from ArknightsUID.utils.render import get_image_b64_with_cache
+
+        for eq in context.get("equips", []):
+            eq["icon"] = await get_image_b64_with_cache(
+                equip_icon_url("uniequip_002_amiya"), EQUIP_CACHE_PATH
+            )
+
+    if name in ("ark_wiki_operator.html", "ark_wiki_mastery.html"):
+        # 技能图标：技能名反查 skill_id → hycdn
+        from ArknightsUID.utils.gamedata.charinfo import load_skill_names
+        from ArknightsUID.utils.path import SKILL_CACHE_PATH
+        from ArknightsUID.utils.player.context import skill_icon_url
+        from ArknightsUID.utils.render import get_image_b64_with_cache
+
+        skill_names = await load_skill_names()
+        for s in context.get("skills", []):
+            sid = next((k for k, v in skill_names.items() if v == s.get("name")), "")
+            if sid:
+                s["icon"] = await get_image_b64_with_cache(
+                    skill_icon_url(sid), SKILL_CACHE_PATH
+                )
+
+    if name == "ark_wiki_stage.html":
+        # 掉落物图标（PRTS 带框道具图）
+        for row in context.get("drops", []) + context.get("extra_drops", []):
+            row["icon"] = await item_icon_b64(row["name"])
+
+    if name == "ark_char_stat.html":
+        # 职业图标（PRTS 图标_职业_*）
+        from ArknightsUID.utils.gamedata.itemicon import profession_icon_b64
+
+        for p in context.get("professions", []):
+            p["icon"] = await profession_icon_b64(p["name"])
+
+    if name == "ark_box_analysis.html":
+        # 六星头像墙（当前皮肤头像）
+        from ArknightsUID.utils.player.context import char_avatar_b64
+
+        six_ids = [
+            ("char_1035_wisdel", "维什戴尔"),
+            ("char_4133_logos", "逻各斯"),
+            ("char_2013_cerber", "刻俄柏"),
+            ("char_134_ifrit", "伊芙利特"),
+            ("char_180_amgoat", "艾雅法拉"),
+            ("char_4121_zuole", "左乐"),
+        ]
+        six_rows = []
+        for cid, cname in six_ids:
+            six_rows.append({"name": cname, "avatar": await char_avatar_b64(cid)})
+        context["six_rows"] = six_rows
+
+    if name == "ark_help.html":
+        # 装饰浮空立绘（阿米娅，透明 PNG）
+        from ArknightsUID.utils.player.context import char_portrait_b64
+
+        context["figure"] = await char_portrait_b64("char_002_amiya", 5)
+
+    if name == "ark_building.html":
+        # 房间成员头像：名称反查 charId → 初始头像
+        from ArknightsUID.utils.gamedata.charinfo import load_char_index
+        from ArknightsUID.utils.player.context import char_avatar_b64
+
+        char_index = await load_char_index()
+        for room in context.get("manufactures", []) + context.get("tradings", []):
+            for m in room.get("members", []):
+                hit = next(
+                    (cid for cid, info in char_index.items()
+                     if info.get("name") == m.get("name")),
+                    "",
+                )
+                m["avatar"] = await char_avatar_b64(hit) if hit else ""
 
 
 async def main() -> int:

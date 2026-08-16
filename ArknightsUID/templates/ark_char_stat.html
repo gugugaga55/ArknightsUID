@@ -53,7 +53,7 @@
         <div class="rows">
             {% for p in professions %}
             <div class="row">
-                <span class="row-value" style="font-size: 13px;">{{ p.name }}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 6px;">{{ p.en }}</span></span>
+                <span class="row-value" style="display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px;">{% if p.icon %}<span class="iicon" style="width: 20px; height: 20px;"><img src="{{ p.icon }}" alt=""></span>{% endif %}{{ p.name }}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 4px;">{{ p.en }}</span></span>
                 <span class="bar-num">{{ p.count }} / {{ p.e2 }} / {{ p.maxlvl }}</span>
             </div>
             {% endfor %}

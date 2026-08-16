@@ -165,11 +165,19 @@ class OperatorSkill:
 
 
 @dataclass(slots=True)
+class TalentStage:
+    condition: str = ""  # 精英1 / 精英2 / 精英2 X模组3级 ...
+    effect: str = ""     # 含具体数值
+
+
+@dataclass(slots=True)
 class OperatorTalent:
     slot: str = ""              # 第一天赋 / 第二天赋
     name: str = ""
     unlock: str = ""            # 精英1 / 精英2 X模组2级 ...
     description: str = ""
+    stages: list[TalentStage] = field(default_factory=list)
+    potential: TalentStage | None = None  # 满潜强化效果（最高档）
 
 
 @dataclass(slots=True)
@@ -705,6 +713,24 @@ async def query_stage(query: str) -> StageInfo | None:
     return None
 
 
+# 等级变体块可从上一级继承的数值字段（index/描述/能力不继承）
+_LEVEL_STAT_FIELDS = (
+    "max_hp", "atk", "defense", "res", "move_speed", "attack_interval",
+    "attack_radius", "weight", "stun_res", "silence_res", "sleep_res",
+    "freeze_res", "levitate_res",
+)
+
+
+def _inherit_level_stats(levels: list[EnemyLevel]) -> None:
+    """等级 2+ 变体块的空数值字段从上一级继承（PRTS 只写差异字段）。"""
+    for previous, current in zip(levels, levels[1:]):
+        for field_name in _LEVEL_STAT_FIELDS:
+            if not getattr(current, field_name):
+                setattr(
+                    current, field_name, getattr(previous, field_name)
+                )
+
+
 def parse_enemy_wikitext(page: PageWikitext) -> EnemyInfo | None:
     common = _first_template_fields(page.wikitext, ("敌人信息/common2", "敌人信息"))
     level_blocks = _template_lines(page.wikitext, ("敌人信息/levelcontent",))
@@ -738,6 +764,10 @@ def parse_enemy_wikitext(page: PageWikitext) -> EnemyInfo | None:
             )
         )
 
+    # PRTS 的等级 2+ 变体块只写与上一级的差异字段（实测 爱国者 等级2 缺
+    # 防御/法抗），空数值字段从上一级继承补全；能力/描述不继承（语义独立）。
+    _inherit_level_stats(levels)
+
     return EnemyInfo(
         title=page.title,
         name=common.get("名称", page.title),
@@ -753,6 +783,38 @@ def parse_enemy_wikitext(page: PageWikitext) -> EnemyInfo | None:
         levels=levels,
         source_url=page_url(page.title),
     )
+
+
+def final_level(levels: list[SkillLevelDetail]) -> SkillLevelDetail | None:
+    """满级展示级：最后一个带描述的等级（专3 优先；无专精技能回退 7 级）。"""
+    for lv in reversed(levels):
+        if lv.description:
+            return lv
+    return None
+
+
+def select_owner_level(
+    levels: list[SkillLevelDetail], specialize: int, main_lvl: int
+) -> SkillLevelDetail | None:
+    """玩家当前技能等级 → 对应级详情：专N 优先，否则按技能等级（1-7）。
+
+    按等级标签匹配（解析层产出 "1"-"7"/"专1"-"专3"），不依赖 1-7+专1-3
+    的十级满布局；选中级无描述（如无专精技能的专精位）时向前回退到最近
+    的非空级。
+    """
+    if 1 <= specialize <= 3:
+        label = f"专{specialize}"
+    elif 1 <= main_lvl <= 7:
+        label = str(main_lvl)
+    else:
+        return None
+    for index, lv in enumerate(levels):
+        if lv.level != label:
+            continue
+        while index >= 0 and not levels[index].description:
+            index -= 1
+        return levels[index] if index >= 0 else None
+    return None
 
 
 def parse_operator_wikitext(page: PageWikitext) -> OperatorInfo | None:
@@ -839,19 +901,31 @@ def parse_operator_wikitext(page: PageWikitext) -> OperatorInfo | None:
         base_name = fields.get("天赋1", "")
         if not base_name:
             continue
-        # 天赋1-4：基础 + 模组逐级（条件/效果），全收集
+        # 天赋1-4：基础 + 模组逐级（条件/效果），全收集；数值在效果字段内
+        stages: list[TalentStage] = []
         descriptions: list[str] = []
         for i in range(1, 5):
             cond = fields.get(f"天赋{i}条件", "")
             eff = fields.get(f"天赋{i}效果", "")
             if eff:
+                stages.append(TalentStage(condition=cond, effect=eff))
                 descriptions.append(f"{cond}：{eff}" if cond else eff)
+        # 潜能增强（满潜强化，同样按 1-4 档）：取最高档作展示
+        potential: TalentStage | None = None
+        for i in range(1, 5):
+            eff = fields.get(f"潜能增强_天赋{i}效果", "")
+            if eff:
+                potential = TalentStage(
+                    condition=fields.get(f"潜能增强_天赋{i}条件", ""), effect=eff
+                )
         talents.append(
             OperatorTalent(
                 slot=slot,
                 name=base_name,
                 unlock=fields.get("天赋1条件", ""),
                 description=" / ".join(descriptions),
+                stages=stages,
+                potential=potential,
             )
         )
 
@@ -1070,12 +1144,15 @@ async def query_base_skill(name: str) -> tuple[str, str] | None:
     name = name.strip()
     if not name:
         return None
+    # 技能名来自 wiki 干员页（外部可编辑），MySQL 语义下单引号 doubling、
+    # 反斜杠成对，防止 where 条件被拼接注入
+    safe_name = name.replace("\\", "\\\\").replace("'", "''")
     data = await _api(
         {
             "action": "cargoquery",
             "tables": "building_skill2",
             "fields": "name,room,icon,description",
-            "where": f"name='{name}'",
+            "where": f"name='{safe_name}'",
             "limit": "1",
         },
         cache_seconds=86400,

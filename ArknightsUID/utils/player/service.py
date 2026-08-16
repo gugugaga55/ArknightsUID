@@ -16,6 +16,7 @@ from gsuid_core.logger import logger
 
 from ..path import PLAYER_PATH
 from ..player_store import (
+    assert_uid_segment,
     player_json_exists,
     read_player_json,
     resolve_player_path,
@@ -31,12 +32,21 @@ _PLAYER_INFO_NAME = "player_info.json"
 
 
 def _cache_path(uid: str) -> Path:
-    return PLAYER_PATH / uid / _PLAYER_INFO_NAME
+    return PLAYER_PATH / assert_uid_segment(uid) / _PLAYER_INFO_NAME
+
+
+def _cache_path_safe(uid: str) -> Path | None:
+    """读路径专用：uid 非法（历史脏数据/EndUID 透传）返回 None 当缓存缺失，
+    不抛异常——assert_uid_segment 的防御意图是挡路径注入，不是打断读流程。"""
+    try:
+        return _cache_path(uid)
+    except (ValueError, TypeError):
+        return None
 
 
 def _cache_age_seconds(uid: str) -> float | None:
-    """缓存年龄；无缓存返回 None。"""
-    resolved = resolve_player_path(_cache_path(uid))
+    """缓存年龄；无缓存/uid 非法返回 None。"""
+    resolved = resolve_player_path(_cache_path_safe(uid))
     if resolved is None:
         return None
     try:
@@ -46,11 +56,14 @@ def _cache_age_seconds(uid: str) -> float | None:
 
 
 async def read_cached_player_info(uid: str, max_age: float = DEFAULT_TTL) -> dict[str, Any] | None:
-    """读 TTL 内的缓存信封；不新鲜或不存在返回 None。"""
+    """读 TTL 内的缓存信封；不新鲜、不存在或 uid 非法返回 None。"""
     age = _cache_age_seconds(uid)
     if age is None or age > max_age:
         return None
-    data = await read_player_json(_cache_path(uid))
+    path = _cache_path_safe(uid)
+    if path is None:
+        return None
+    data = await read_player_json(path)
     if isinstance(data, dict) and data.get("code") == 0:
         return data
     return None

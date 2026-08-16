@@ -16,10 +16,13 @@ sys.path.insert(0, str(Path(__file__).parents[1]))
 from ArknightsUID.utils.player import (
     MORALE_LOW_THRESHOLD,
     TRADING_STRATEGY_NAMES,
+    BuildingData,
     build_building_context,
+    format_training_remaining,
     morale_points,
     parse_building,
     parse_player_info,
+    training_remaining_secs,
 )
 from ArknightsUID.utils.render import ark_templates  # noqa: F401  模板存在性
 from ArknightsUID.version import ArknightsUID_version
@@ -119,6 +122,11 @@ def _building_payload() -> dict[str, Any]:
             "trainer": None,
             "remainPoint": -1,
             "speed": 1,
+            # 训练中快照：lastUpdateTime 时刻还剩 7200s（语义见
+            # training_remaining_secs 头注释，待真实凭据训练中样本校准）
+            "lastUpdateTime": 1700000000,
+            "remainSecs": 7200,
+            "slotState": 2,
         },
         "tiredChars": [],
         "furniture": {"total": 225},
@@ -234,6 +242,38 @@ class ParseBuildingTest(unittest.TestCase):
 
     def test_training_trainee_resolved(self) -> None:
         self.assertEqual(self.building.training_trainee, "芬")
+        self.assertEqual(self.building.training_trainee_id, "char_123_fang")
+
+    def test_training_remaining_folded_from_snapshot(self) -> None:
+        """remainSecs 按 lastUpdateTime 快照折算：随时间流逝递减，下限 0。"""
+        b = self.building
+        self.assertEqual(b.training_remain_secs, 7200)
+        self.assertEqual(training_remaining_secs(b, now=1700000000), 7200)
+        self.assertEqual(training_remaining_secs(b, now=1700000000 + 3600), 3600)
+        self.assertEqual(training_remaining_secs(b, now=1700000000 + 99999), 0)
+
+    def test_training_remaining_idle_and_without_snapshot(self) -> None:
+        # 空闲/未知（dump 实测空闲态 remainSecs=-1）→ -1，文案为空
+        idle = BuildingData(training_remain_secs=-1, training_last_update=1)
+        self.assertEqual(training_remaining_secs(idle, now=2), -1)
+        self.assertEqual(format_training_remaining(-1), "")
+        # lastUpdateTime 缺失：remainSecs 直接当作当前剩余
+        no_snap = BuildingData(training_remain_secs=600, training_last_update=0)
+        self.assertEqual(training_remaining_secs(no_snap, now=1700000000), 600)
+
+    def test_format_training_remaining(self) -> None:
+        self.assertEqual(format_training_remaining(0), "已完成")
+        self.assertEqual(format_training_remaining(600), "约10分钟")
+        self.assertEqual(format_training_remaining(5400), "约1小时30分")
+        self.assertEqual(format_training_remaining(86400 + 3600), "约1天1小时")
+
+    def test_training_status_text_full_phrase(self) -> None:
+        """完整短语（含「剩」前缀/已完成），调用方不再自行拼接避免「剩已完成」。"""
+        from ArknightsUID.utils.player import training_status_text
+
+        self.assertEqual(training_status_text(-1), "")
+        self.assertEqual(training_status_text(0), "已完成")
+        self.assertEqual(training_status_text(5400), "剩约1小时30分")
 
     def test_tired_chars_from_working_rooms_only(self) -> None:
         """低心情聚合：控制中枢/制造/贸易/发电计入，宿舍与会客室不计。"""
@@ -298,7 +338,8 @@ class BuildingContextTest(unittest.IsolatedAsyncioTestCase):
             "name", "uid", "control_level", "labor_value", "labor_max", "labor_pct",
             "manufactures", "tradings", "power_count", "power_levels",
             "dormitories", "clue_own", "clue_board", "clue_daily_reward",
-            "training_trainee", "tired_chars", "tired_more", "version",
+            "training_trainee", "training_remain", "tired_chars", "tired_more",
+            "version",
         ):
             self.assertIn(key, context)
         self.assertEqual(context["labor_pct"], 65)
@@ -324,6 +365,8 @@ class BuildingContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("无人机", html)
         self.assertIn("企鹅物流", html)
         self.assertIn("低心情干员", html)
+        # 训练室行带剩余时间（fixture 快照久远 → 折算为已完成）
+        self.assertIn("专精训练中 · 已完成", html)
 
 
 if __name__ == "__main__":

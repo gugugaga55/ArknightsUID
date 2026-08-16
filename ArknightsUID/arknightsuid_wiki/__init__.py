@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -19,8 +20,11 @@ try:
     from ArknightsUID.ArknightsUID.utils.prts.client import (
         EnemyInfo,
         OperatorInfo,
+        OperatorSkill,
+        SkillLevelDetail,
         StageInfo,
         WikiPageSummary,
+        final_level,
         query_activities,
         query_enemy,
         query_gacha_pools,
@@ -29,14 +33,18 @@ try:
         query_page,
         query_stage,
         search_pages,
+        select_owner_level,
     )
 except ModuleNotFoundError:
     from ArknightsUID.utils.prts.client import (
         ActivityInfo,
         EnemyInfo,
         OperatorInfo,
+        OperatorSkill,
+        SkillLevelDetail,
         StageInfo,
         WikiPageSummary,
+        final_level,
         query_activities,
         query_enemy,
         query_gacha_pools,
@@ -45,18 +53,23 @@ except ModuleNotFoundError:
         query_page,
         query_stage,
         search_pages,
+        select_owner_level,
     )
 
 try:
     from ArknightsUID.ArknightsUID.utils.gamedata.itemicon import (
+        enemy_icon_b64,
         item_icon_b64,
         split_material_text,
     )
+    from ArknightsUID.ArknightsUID.utils.player.context import char_avatar_b64
 except ModuleNotFoundError:
     from ArknightsUID.utils.gamedata.itemicon import (
+        enemy_icon_b64,
         item_icon_b64,
         split_material_text,
     )
+    from ArknightsUID.utils.player.context import char_avatar_b64
 
 try:
     from ArknightsUID.ArknightsUID.utils.gamedata.recruit import (
@@ -105,6 +118,106 @@ def _format_remaining(target_ts: float, now_ts: float) -> str:
     if hours:
         return f"剩{hours}小时{mins}分"
     return f"剩{mins}分钟"
+
+
+def _final_level(levels: list[SkillLevelDetail]) -> SkillLevelDetail | None:
+    """满级展示级（公共实现见 prts.client.final_level，此处保留旧名供调用/测试）。"""
+    return final_level(levels)
+
+
+def _owner_level(
+    levels: list[SkillLevelDetail], specialize: int, main_lvl: int
+) -> SkillLevelDetail | None:
+    """玩家当前等级选择（公共实现见 prts.client.select_owner_level）。"""
+    return select_owner_level(levels, specialize, main_lvl)
+
+
+def _skill_level_context(lv: SkillLevelDetail) -> dict:
+    parts = []
+    if lv.sp_cost:
+        parts.append(f"{lv.sp_cost}耗")
+    if lv.duration:
+        parts.append(f"{lv.duration}s")
+    return {
+        "level": lv.level,
+        "description": lv.description,
+        "sp_init": lv.sp_init,
+        "sp_cost": lv.sp_cost,
+        "duration": lv.duration,
+        "meta": "·".join(parts),
+    }
+
+
+def _format_level_line(lv: SkillLevelDetail) -> str:
+    """单级详情行：`专3：描述（90耗·30持）`，长描述截断。"""
+    parts = []
+    if lv.sp_cost:
+        parts.append(f"{lv.sp_cost}耗")
+    if lv.duration:
+        parts.append(f"{lv.duration}持")
+    suffix = f"（{'·'.join(parts)}）" if parts else ""
+    return f"{lv.level}：{_clip(lv.description, 140)}{suffix}"
+
+
+async def _build_owner_context(op: OperatorInfo, ev: Event) -> dict | None:
+    """已绑定账号对该干员的练度状态（技能等级 + 在训剩余）；拿不到返回 None。
+
+    干员查询是资料查询，账号只是增强信息：未绑定/未持有/接口失败一律静默
+    降级为通用 PRTS 展示，不向用户报账号侧错误。
+    """
+    try:
+        from ..utils.enduid.adapter import hide_uid, resolve_credential
+        from ..utils.gamedata.charinfo import (
+            load_char_index,
+            load_skill_names,
+            resolve_char,
+        )
+        from ..utils.player import (
+            fetch_cached_player_info,
+            parse_building,
+            parse_player_info,
+            training_remaining_secs,
+            training_status_text,
+        )
+
+        credential = await resolve_credential(ev.user_id, ev.bot_id)
+        if isinstance(credential, str):
+            return None
+        response = await fetch_cached_player_info(credential)
+        if not isinstance(response, dict):
+            return None
+        data = parse_player_info(response)
+        if data is None:
+            return None
+        index = await load_char_index()
+        hit = resolve_char(op.name or op.title, index) if index else None
+        if not hit:
+            return None
+        char_id = hit[0]
+        entry = next((c for c in data.chars if c.char_id == char_id), None)
+        if entry is None:
+            return None
+        skill_names = await load_skill_names()
+        skills: dict[str, int] = {}
+        for skill in entry.skills:
+            name = skill_names.get(skill.skill_id)
+            if name:
+                skills[name] = skill.specialize_level
+        training_remain = ""
+        building = parse_building(data)
+        if building and building.training_trainee_id == char_id:
+            training_remain = training_status_text(
+                training_remaining_secs(building)
+            )
+        return {
+            "uid": hide_uid(credential.uid),
+            "main_skill_lvl": entry.main_skill_lvl,
+            "skills": skills,
+            "training_remain": training_remain,
+        }
+    except Exception:
+        logger.debug("[ArknightsUID] 玩家练度增强获取失败，走通用展示", exc_info=True)
+        return None
 
 
 def _format_page(kind: str, page: WikiPageSummary) -> str:
@@ -195,12 +308,27 @@ def _format_enemy(enemy: EnemyInfo) -> str:
             lines.append("属性：" + "，".join(stats))
         if level.abilities:
             lines.append("能力：" + _clip("；".join(level.abilities), 280))
+        # 等级2变体（差异字段已在解析层从等级1继承补全）
+        if len(enemy.levels) > 1:
+            lv2 = enemy.levels[1]
+            stats2 = [
+                f"{label} {value}"
+                for label, value in (
+                    ("生命", lv2.max_hp),
+                    ("攻击", lv2.atk),
+                    ("防御", lv2.defense),
+                    ("法抗", lv2.res),
+                )
+                if value
+            ]
+            if stats2:
+                lines.append("等级2：" + "，".join(stats2))
 
     _append_source(lines, enemy.source_url)
     return "\n".join(lines)
 
 
-def _format_stage(stage: StageInfo) -> str:
+def _format_stage(stage: StageInfo, enemies_ctx: list[dict] | None = None) -> str:
     title = stage.code or stage.title
     if stage.name and stage.name not in title:
         title = f"{title} {stage.name}"
@@ -223,11 +351,21 @@ def _format_stage(stage: StageInfo) -> str:
         lines.append("常规掉落：" + "、".join(stage.drops[:8]))
     if stage.extra_drops:
         lines.append("额外物资：" + "、".join(stage.extra_drops[:8]))
-    if stage.enemies:
+    if stage.enemies or enemies_ctx:
+        # enemies_ctx 来自 _build_stage_context（含基础数值）；缺失时回退纯名单
+        rows = enemies_ctx or [
+            {"name": e.name, "count": e.count} for e in stage.enemies[:10]
+        ]
         enemies = []
-        for enemy in stage.enemies[:10]:
-            suffix = f"x{enemy.count}" if enemy.count else ""
-            enemies.append(f"{enemy.name}{suffix}")
+        for row in rows:
+            suffix = f"x{row['count']}" if row.get("count") else ""
+            stats = [
+                f"{label}{row[key]}"
+                for label, key in (("HP", "hp"), ("攻", "atk"), ("防", "defense"), ("抗", "res"))
+                if row.get(key)
+            ]
+            stat_text = f"（{'·'.join(stats)}）" if stats else ""
+            enemies.append(f"{row['name']}{suffix}{stat_text}")
         lines.append("敌人：" + "、".join(enemies))
     if stage.assault_diffs:
         lines.append("突袭差异：" + "；".join(stage.assault_diffs))
@@ -237,7 +375,7 @@ def _format_stage(stage: StageInfo) -> str:
     return "\n".join(lines)
 
 
-def _format_operator(op: OperatorInfo) -> str:
+def _format_operator(op: OperatorInfo, owner: dict | None = None) -> str:
     rarity = f"{int(op.rarity) + 1}星" if op.rarity.isdigit() else op.rarity
     lines = [f"「明日方舟」干员：{op.name or op.title}"]
     basics = []
@@ -262,16 +400,43 @@ def _format_operator(op: OperatorInfo) -> str:
         for t in op.talents:
             head = f"  {t.slot}·{t.name}" if t.slot and t.name else f"  {t.name or t.slot}"
             lines.append(head)
-            if t.description:
+            # 逐阶段（精英1/精英2/模组级）各带具体数值，与卡片展示一致
+            if t.stages:
+                for st in t.stages:
+                    label = f"{st.condition}：" if st.condition else ""
+                    lines.append(f"    {label}{_clip(st.effect, 150)}")
+            elif t.description:
                 lines.append(f"    {_clip(t.description, 200)}")
+            if t.potential:
+                lines.append(f"    满潜：{_clip(t.potential.effect, 150)}")
+
+    if owner:
+        bits = [f"技能等级 {owner.get('main_skill_lvl') or '?'}/7"]
+        if owner.get("training_remain"):
+            bits.append(f"专精训练{owner['training_remain']}")
+        lines.append(f"我的练度（UID {owner.get('uid', '')}）：{'，'.join(bits)}")
 
     if op.skills:
         lines.append("【技能】")
+        owner_skills = owner.get("skills") if owner else None
         for s in op.skills:
             head = f"  {s.name}"
             if s.skill_type:
                 head += f"（{s.skill_type}）"
             lines.append(head)
+            # 玩家当前级（专N 或 Lv.main）+ 满级（专3/无专精回退 7 级）详情
+            current_lv: SkillLevelDetail | None = None
+            if owner_skills and s.name in owner_skills:
+                current_lv = _owner_level(
+                    s.levels,
+                    int(owner_skills[s.name]),
+                    int(owner.get("main_skill_lvl") or 0),
+                )
+            if current_lv is not None and current_lv.description:
+                lines.append(f"    当前 {_format_level_line(current_lv)}")
+            final_lv = _final_level(s.levels)
+            if final_lv is not None and final_lv is not current_lv:
+                lines.append(f"    {_format_level_line(final_lv)}")
             # 关键级 L1/L4/L7/专1/专3 展示成长曲线（全量交给模板）
             shown = []
             for idx in (0, 3, 6, 7, 9):
@@ -391,13 +556,105 @@ async def _build_page_context(page: WikiPageSummary) -> dict:
     }
 
 
-async def _build_operator_context(op: OperatorInfo) -> dict:
-    """干员富信息卡片上下文（技能全量逐级 + 天赋 + 专精材料）。
+async def _skill_icon_b64(skill_name: str) -> str:
+    """技能名 → skill_id（skill_table 反查）→ hycdn 图标 base64（失败空串）。"""
+    if not skill_name:
+        return ""
+    try:
+        from ..utils.gamedata.charinfo import load_skill_names
+        from ..utils.path import SKILL_CACHE_PATH
+        from ..utils.player.context import skill_icon_url
+        from ..utils.render import get_image_b64_with_cache
+
+        names = await load_skill_names()
+        skill_id = next((sid for sid, n in names.items() if n == skill_name), "")
+        if not skill_id:
+            return ""
+        return await get_image_b64_with_cache(skill_icon_url(skill_id), SKILL_CACHE_PATH)
+    except Exception:
+        return ""
+
+
+async def _operator_portrait_b64(name: str) -> str:
+    """干员名 → hycdn 立绘 base64（gamedata 索引反查 charId，精英档位回退）。
+
+    立绘路径 char_skin/portrait/{charId}#N.png（N=3 E2 / 2 E1 / 1 初始），
+    逐档回退逻辑在共享助手 char_portrait_b64；索引缺失/下载失败返回空串降级。
+    """
+    try:
+        from ..utils.gamedata.charinfo import load_char_index, resolve_char
+        from ..utils.player.context import char_portrait_b64
+
+        index = await load_char_index()
+        if not index:
+            return ""
+        hit = resolve_char(name, index)
+        if not hit:
+            return ""
+        char_id, _ = hit
+        rarity = int(index.get(char_id, {}).get("rarity") or 0)
+        return await char_portrait_b64(char_id, rarity)
+    except Exception:
+        logger.debug("[ArknightsUID] 干员立绘获取失败", exc_info=True)
+        return ""
+
+
+async def _build_operator_context(op: OperatorInfo, owner: dict | None = None) -> dict:
+    """干员富信息卡片上下文（技能全量逐级 + 天赋 + 专精材料 + 立绘）。
 
     rarity 在 PRTS 存 0-5，展示时 +1 转为 1-6 星人读值。
-    skills.levels 全量保留（1-7 + 专1-3 正好 10 级，不裁剪）。
+    skills.levels 全量保留（1-7 + 专1-3 正好 10 级，不裁剪）；另给
+    current（玩家当前级，需 owner）/ final（满级展示级）两条详情，模板
+    直接渲染描述文本（伤害数值在描述里，此前两版渲染均未展示）。
     """
     rarity = str(int(op.rarity) + 1) if op.rarity.isdigit() else op.rarity
+    owner_skills = owner.get("skills") if owner else None
+    skills_ctx: list[dict] = []
+    for s in op.skills:
+        current_lv: SkillLevelDetail | None = None
+        if owner_skills and s.name in owner_skills:
+            current_lv = _owner_level(
+                s.levels,
+                int(owner_skills[s.name]),
+                int((owner or {}).get("main_skill_lvl") or 0),
+            )
+        final_lv = _final_level(s.levels)
+        skills_ctx.append(
+            {
+                "name": s.name,
+                "skill_type": s.skill_type,
+                "range": s.range_,
+                "icon": await _skill_icon_b64(s.name),
+                "levels": [
+                    {
+                        "level": lv.level,
+                        "description": lv.description,
+                        "sp_init": lv.sp_init,
+                        "sp_cost": lv.sp_cost,
+                        "duration": lv.duration,
+                    }
+                    for lv in s.levels
+                ],
+                "current": (
+                    _skill_level_context(current_lv)
+                    if current_lv is not None and current_lv.description
+                    else None
+                ),
+                "final": (
+                    None
+                    if (current_lv is not None and current_lv is final_lv)
+                    else (
+                        _skill_level_context(final_lv)
+                        if final_lv is not None and final_lv.description
+                        else None
+                    )
+                ),
+                "mastery_costs": [
+                    {"mastery": mc.mastery, "materials": list(mc.materials)}
+                    for mc in s.mastery_costs
+                ],
+            }
+        )
     return {
         "title": op.title,
         "name": op.name or op.title,
@@ -410,34 +667,24 @@ async def _build_operator_context(op: OperatorInfo) -> dict:
         "obtain": op.obtain,
         "trait": op.trait,
         "summary": _clip(op.summary),
-        "skills": [
-            {
-                "name": s.name,
-                "skill_type": s.skill_type,
-                "range": s.range_,
-                "levels": [
-                    {
-                        "level": lv.level,
-                        "description": lv.description,
-                        "sp_init": lv.sp_init,
-                        "sp_cost": lv.sp_cost,
-                        "duration": lv.duration,
-                    }
-                    for lv in s.levels
-                ],
-                "mastery_costs": [
-                    {"mastery": mc.mastery, "materials": list(mc.materials)}
-                    for mc in s.mastery_costs
-                ],
-            }
-            for s in op.skills
-        ],
+        "portrait": await _operator_portrait_b64(op.name or op.title),
+        "owner": owner,
+        "skills": skills_ctx,
         "talents": [
             {
                 "slot": t.slot,
                 "name": t.name,
                 "unlock": t.unlock,
                 "description": t.description,
+                "stages": [
+                    {"condition": st.condition, "effect": st.effect}
+                    for st in t.stages
+                ],
+                "potential": (
+                    {"condition": t.potential.condition, "effect": t.potential.effect}
+                    if t.potential
+                    else None
+                ),
             }
             for t in op.talents
         ],
@@ -487,6 +734,7 @@ async def _build_operator_context(op: OperatorInfo) -> dict:
 
 async def _build_enemy_context(enemy: EnemyInfo) -> dict:
     level = enemy.levels[0] if enemy.levels else None
+    level2 = enemy.levels[1] if enemy.levels and len(enemy.levels) > 1 else None
     return {
         "title": enemy.title,
         "name": enemy.name or enemy.title,
@@ -502,11 +750,67 @@ async def _build_enemy_context(enemy: EnemyInfo) -> dict:
         "atk": level.atk if level else "",
         "defense": level.defense if level else "",
         "res": level.res if level else "",
+        # 等级2变体（PRTS 只写差异字段，空值已在解析层从等级1继承）
+        "has_level2": bool(level2),
+        "lv2_hp": level2.max_hp if level2 else "",
+        "lv2_atk": level2.atk if level2 else "",
+        "lv2_defense": level2.defense if level2 else "",
+        "lv2_res": level2.res if level2 else "",
         "weight": level.weight if level else "",
         "abilities": list(level.abilities) if level else [],
+        "icon": await enemy_icon_b64(enemy.name or enemy.title),
         "source_url": enemy.source_url,
         "version": ArknightsUID_version,
     }
+
+
+# 关卡敌方情报批量取数值的并发上限（PRTS 页面请求，页面缓存 24h）
+_ENEMY_FETCH_CONCURRENCY = 4
+
+
+async def _enemy_basic_stats(name: str) -> dict:
+    """敌人名 → 一级基础数值 {hp, atk, defense, res}；查不到返回空 dict。
+
+    关卡敌方情报只给名字，基础数值需逐个查敌人页（parse_page 自带 24h
+    缓存，重复查询走本地）。完整数值/技能效果归敌人详情卡（ark敌人）。
+    """
+    try:
+        enemy = await query_enemy(name)
+        if enemy and enemy.levels:
+            lv = enemy.levels[0]
+            return {
+                "hp": lv.max_hp,
+                "atk": lv.atk,
+                "defense": lv.defense,
+                "res": lv.res,
+            }
+    except Exception:
+        logger.debug(f"[ArknightsUID] 关卡敌人数值获取失败：{name}", exc_info=True)
+    return {}
+
+
+async def _enrich_stage_enemies(stage: StageInfo, limit: int = 10) -> list[dict]:
+    """敌方情报条目 + 基础数值（并发受限）；失败条目静默降级为仅名字。"""
+    targets = stage.enemies[:limit]
+    semaphore = asyncio.Semaphore(_ENEMY_FETCH_CONCURRENCY)
+
+    async def _fetch(name: str) -> dict:
+        async with semaphore:
+            return await _enemy_basic_stats(name)
+
+    try:
+        stats_list = await asyncio.gather(
+            *(_fetch(e.name) for e in targets), return_exceptions=True
+        )
+    except Exception:
+        stats_list = [{} for _ in targets]
+    rows: list[dict] = []
+    for enemy, stats in zip(targets, stats_list):
+        row = {"name": enemy.name, "count": enemy.count, "level": enemy.level}
+        if isinstance(stats, dict) and stats:
+            row.update(stats)
+        rows.append(row)
+    return rows
 
 
 async def _build_stage_context(stage: StageInfo) -> dict:
@@ -523,6 +827,14 @@ async def _build_stage_context(stage: StageInfo) -> dict:
         except Exception:
             logger.exception("[ArknightsUID] 关卡地图转 base64 失败，模板降级")
             map_b64 = ""
+
+    async def _drop_rows(names: list[str], limit: int = 8) -> list[dict]:
+        """掉落物名 → {name, icon}（PRTS 带框道具图标，失败空串降级）。"""
+        rows = []
+        for name in names[:limit]:
+            rows.append({"name": name, "icon": await item_icon_b64(name)})
+        return rows
+
     return {
         "title": title,
         "name": stage.name,
@@ -533,9 +845,9 @@ async def _build_stage_context(stage: StageInfo) -> dict:
         "ap_cost": stage.ap_cost,
         "enemy_count": stage.enemy_count,
         "description": _clip(stage.description, 220),
-        "drops": list(stage.drops[:8]),
-        "extra_drops": list(stage.extra_drops[:8]),
-        "enemies": [{"name": e.name, "count": e.count} for e in stage.enemies[:10]],
+        "drops": await _drop_rows(list(stage.drops)),
+        "extra_drops": await _drop_rows(list(stage.extra_drops)),
+        "enemies": await _enrich_stage_enemies(stage),
         "assault_diffs": list(stage.assault_diffs),
         "map_image": map_b64,
         "map_url": stage.map_url,
@@ -588,10 +900,11 @@ async def send_operator_page(bot: Bot, ev: Event) -> None:
     query = await _resolve_alias(query)
     op = await query_operator(query)
     if op and (op.skills or op.talents):
-        # 富解析成功（有技能/天赋）→ OperatorInfo 卡片
-        context = await _build_operator_context(op)
+        # 已绑定账号时叠加玩家练度（当前技能级 vs 满级对比、在训剩余）
+        owner = await _build_owner_context(op, ev)
+        context = await _build_operator_context(op, owner)
         return await _render_or_text(
-            bot, ev, "ark_wiki_operator.html", context, _format_operator(op)
+            bot, ev, "ark_wiki_operator.html", context, _format_operator(op, owner)
         )
     # 回退：非干员页 或 富解析拿不到技能/天赋 → 通用 WikiPageSummary 格式
     page = await query_page(query)
@@ -626,12 +939,17 @@ async def send_mastery_materials(bot: Bot, ev: Event) -> None:
                     {"name": name, "count": count, "icon": await item_icon_b64(name)}
                 )
             costs_ctx.append({"mastery": mc.mastery, "materials": mats})
-        skills_ctx.append({"name": s.name, "mastery_costs": costs_ctx})
+        skills_ctx.append({
+            "name": s.name,
+            "icon": await _skill_icon_b64(s.name),
+            "mastery_costs": costs_ctx,
+        })
     context = {
         "name": op.name or op.title,
         "rarity": rarity,
         "profession": op.profession,
         "skills": skills_ctx,
+        "portrait": await _operator_portrait_b64(op.name or op.title),
         "source_url": op.source_url,
         "version": ArknightsUID_version,
     }
@@ -678,7 +996,8 @@ async def send_stage_page(bot: Bot, ev: Event) -> None:
         return await _send_text(bot, ev, f"未找到关卡：{query}")
     context = await _build_stage_context(stage)
     await _render_or_text(
-        bot, ev, "ark_wiki_stage.html", context, _format_stage(stage)
+        bot, ev, "ark_wiki_stage.html", context,
+        _format_stage(stage, context.get("enemies")),
     )
 
 
@@ -719,6 +1038,7 @@ async def send_recruit_query(bot: Bot, ev: Event) -> None:
                 "name": entry["name"],
                 "profession": entry["profession"],
                 "tags": "/".join(entry["tags"][:3]) if entry["tags"] else "",
+                "avatar": await char_avatar_b64(str(entry.get("id", ""))),
             }
             for entry in matched[:20]
         ],

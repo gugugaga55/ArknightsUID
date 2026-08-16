@@ -43,7 +43,10 @@ try:
         fetch_cached_player_info,
         parse_building,
         parse_player_info,
+        training_remaining_secs,
+        training_status_text,
     )
+    from ArknightsUID.ArknightsUID.utils.reply_safety import safe_external_message
     from ArknightsUID.ArknightsUID.version import ArknightsUID_version
 except ModuleNotFoundError:
     from ArknightsUID.utils.account_switch import (
@@ -80,35 +83,16 @@ except ModuleNotFoundError:
         fetch_cached_player_info,
         parse_building,
         parse_player_info,
+        training_remaining_secs,
+        training_status_text,
     )
+    from ArknightsUID.utils.reply_safety import safe_external_message
     from ArknightsUID.version import ArknightsUID_version
 
 account_sv = SV("ArknightsUID账号", priority=5)
 
-_sensitive_fields = (
-    r"cookie|cred|token|hg_token|skland_user_id"
-    # 扩充常见高敏感字段，覆盖驼峰/下划线/空格变体，避免外部消息夹带泄漏。
-    r"|access[_ ]?token|refresh[_ ]?token"
-    r"|secret|password|passwd"
-)
-_SENSITIVE_ASSIGNMENT_RE = re.compile(
-    rf"(?i)\b(?:{_sensitive_fields})\b\s*[:=]\s*"
-    rf"(?:\"[^\"]*\"|'[^']*'|[^,，;；\s]+)"
-)
-_SENSITIVE_FIELD_RE = re.compile(rf"(?i)\b(?:{_sensitive_fields})\b")
-_SENTINEL_VALUE_RE = re.compile(r"(?i)\bSENTINEL_[A-Z0-9_]*\b")
-
-
-def _safe_external_message(value: Any) -> str:
-    if value in (None, ""):
-        return ""
-    text = str(value)
-    text = _SENSITIVE_ASSIGNMENT_RE.sub("已隐藏敏感内容", text)
-    text = _SENSITIVE_FIELD_RE.sub("已隐藏敏感内容", text)
-    text = _SENTINEL_VALUE_RE.sub("已隐藏敏感内容", text)
-    text = re.sub(r"(?:已隐藏敏感内容[\s,，;；]*){2,}", "已隐藏敏感内容", text)
-    text = re.sub(r"\s{2,}", " ", text).strip()
-    return text or "已隐藏敏感内容"
+# 外部消息脱敏统一实现在 utils/reply_safety；保留旧名供既有调用/测试使用
+_safe_external_message = safe_external_message
 
 
 def _extract_uid(text: str) -> str:
@@ -496,7 +480,57 @@ def _format_box(credential: ArkCredential, data: PlayerData) -> str:
     return "\n".join(lines)
 
 
-def _format_char_card_text(entry: CharEntry) -> str:
+async def _char_skill_effects(entry: CharEntry) -> dict[str, dict]:
+    """练度卡技能效果增强：PRTS 当前级/满级描述（页面缓存 24h）。
+
+    练度卡是玩家数据卡，wiki 只是增强信息：任何失败返回空 dict，
+    模板对缺省只展示专精点，不阻塞出卡。
+    """
+    try:
+        from ..utils.gamedata.charinfo import load_skill_names
+        from ..utils.prts.client import (
+            final_level,
+            query_operator,
+            select_owner_level,
+        )
+
+        skill_names = await load_skill_names()
+        op = await query_operator(entry.name or entry.char_id)
+        if not op or not op.skills:
+            return {}
+        specialize_by_name = {
+            skill_names.get(sk.skill_id) or sk.skill_id: sk.specialize_level
+            for sk in entry.skills
+        }
+        effects: dict[str, dict] = {}
+        for s in op.skills:
+            if s.name not in specialize_by_name:
+                continue
+            current = select_owner_level(
+                s.levels, specialize_by_name[s.name], entry.main_skill_lvl
+            )
+            final = final_level(s.levels)
+            effects[s.name] = {
+                "current": current.description if current else "",
+                "current_level": current.level if current else "",
+                "final": (
+                    final.description
+                    if final is not None and final is not current
+                    else ""
+                ),
+                "final_level": (
+                    final.level if final is not None and final is not current else ""
+                ),
+            }
+        return effects
+    except Exception:
+        logger.debug("[ArknightsUID] 练度卡技能效果获取失败", exc_info=True)
+        return {}
+
+
+def _format_char_card_text(
+    entry: CharEntry, skill_effects: dict[str, dict] | None = None
+) -> str:
     lines = [
         f"「明日方舟」{entry.display_name}",
         f"{entry.rarity_display}★ {entry.profession_name}",
@@ -506,6 +540,16 @@ def _format_char_card_text(entry: CharEntry) -> str:
     if entry.skills:
         spec = "/".join(str(s.specialize_level) for s in entry.skills)
         lines.append(f"技能专精：{spec}")
+    if skill_effects:
+        for name, eff in skill_effects.items():
+            if eff.get("current"):
+                lines.append(
+                    f"  {name} 当前{eff['current_level']}：{_clip(eff['current'], 120)}"
+                )
+            if eff.get("final"):
+                lines.append(
+                    f"  {name} {eff['final_level']}：{_clip(eff['final'], 120)}"
+                )
     if entry.equips:
         equips = "、".join(f"{eq.equip_id} Lv{eq.level}" for eq in entry.equips)
         lines.append(f"模组：{equips}")
@@ -686,6 +730,14 @@ async def show_ark_char_stat(bot: Bot, ev: Event) -> None:
         data, ArknightsUID_version, hide_uid(credential.uid)
     )
     if context is not None:
+        # 职业行挂 PRTS 职业图标（失败空串降级）
+        try:
+            from ..utils.gamedata.itemicon import profession_icon_b64
+
+            for p in context.get("professions", []):
+                p["icon"] = await profession_icon_b64(str(p.get("name", "")))
+        except Exception:
+            pass
         return await send_card_or_text(
             bot, ev, "ark_char_stat.html", context, _format_char_stat(credential, data)
         )
@@ -718,6 +770,25 @@ async def show_ark_box(bot: Bot, ev: Event) -> None:
         data, ArknightsUID_version, hide_uid(credential.uid)
     )
     if context is not None:
+        # 六星头像墙：等级前 10 的六星（当前穿戴皮肤头像），失败降级为空不显示
+        try:
+            from ..utils.path import AVATAR_CACHE_PATH
+            from ..utils.player.context import skin_avatar_url
+            from ..utils.render import get_image_b64_with_cache
+
+            top_six = sorted(
+                (c for c in data.chars if c.rarity_display == 6),
+                key=lambda c: (-c.level, c.display_name),
+            )[:10]
+            six_rows = []
+            for c in top_six:
+                b64 = await get_image_b64_with_cache(
+                    skin_avatar_url(c.skin_id), AVATAR_CACHE_PATH
+                )
+                six_rows.append({"name": c.display_name, "avatar": b64})
+            context["six_rows"] = six_rows
+        except Exception:
+            context["six_rows"] = []
         return await send_card_or_text(
             bot, ev, "ark_box_analysis.html", context, _format_box(credential, data)
         )
@@ -767,9 +838,14 @@ async def show_ark_char_card(bot: Bot, ev: Event) -> None:
         return await _send_text(bot, ev, resolved)
     entry = resolved
 
-    context = await build_char_card_context(entry, ArknightsUID_version)
+    # PRTS 技能效果增强（当前级/满级描述；失败静默降级为纯专精点展示）
+    skill_effects = await _char_skill_effects(entry)
+    context = await build_char_card_context(
+        entry, ArknightsUID_version, skill_effects
+    )
     await send_card_or_text(
-        bot, ev, "ark_char_card.html", context, _format_char_card_text(entry)
+        bot, ev, "ark_char_card.html", context,
+        _format_char_card_text(entry, skill_effects),
     )
 
 
@@ -819,7 +895,9 @@ def _format_building(
         board = "、".join(building.clue_board) if building.clue_board else "空"
         lines.append(f"会客室：线索 {building.clue_own} · 线索板：{board}")
     if building.training_trainee:
-        lines.append(f"训练室：{building.training_trainee} 专精训练中")
+        status = training_status_text(training_remaining_secs(building))
+        suffix = f"（{status}）" if status else ""
+        lines.append(f"训练室：{building.training_trainee} 专精训练中{suffix}")
     if building.tired_chars:
         names = "、".join(
             f"{c.name}({c.room} {c.morale})" for c in building.tired_chars[:6]
@@ -859,6 +937,16 @@ async def show_ark_building(bot: Bot, ev: Event) -> None:
     context = await build_building_context(
         data, building, ArknightsUID_version, hide_uid(credential.uid)
     )
+    if context is not None:
+        # 房间成员挂初始头像（EndUID 基建卡同款展示），失败空串降级
+        try:
+            from ..utils.player.context import char_avatar_b64
+
+            for room in context.get("manufactures", []) + context.get("tradings", []):
+                for m in room.get("members", []):
+                    m["avatar"] = await char_avatar_b64(str(m.get("char_id", "")))
+        except Exception:
+            pass
     await send_card_or_text(
         bot, ev, "ark_building.html", context or {},
         _format_building(credential, data, building),

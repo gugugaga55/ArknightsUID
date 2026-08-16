@@ -21,6 +21,14 @@ def _is_gzip(name: str) -> bool:
     return name in _GZIP_NAMES
 
 
+def assert_uid_segment(uid: str) -> str:
+    """uid 用作缓存目录段前的防御校验：仅允许纯数字，阻断路径拼接逃逸。"""
+    text = str(uid)
+    if not text.isdigit():
+        raise ValueError(f"非法游戏 UID（应为纯数字）：{text[:4]!r}")
+    return text
+
+
 def resolve_player_path(path: PathLike) -> Optional[Path]:
     """实际落盘路径：.gz 优先,回退明文;都不存在返回 None。move/unlink 用它。"""
     p = Path(path)

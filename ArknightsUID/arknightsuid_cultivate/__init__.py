@@ -5,6 +5,8 @@ UI：ark_cultivate.html（v3 浅色终端，已落地），渲染失败回退纯
 """
 from __future__ import annotations
 
+import re
+
 from gsuid_core.bot import Bot
 from gsuid_core.models import Event
 from gsuid_core.sv import SV
@@ -22,6 +24,7 @@ try:
         match_entries,
     )
     from ArknightsUID.ArknightsUID.utils.gamedata.itemicon import item_icon_b64
+    from ArknightsUID.ArknightsUID.utils.player.context import char_portrait_b64
     from ArknightsUID.ArknightsUID.version import ArknightsUID_version
 except ModuleNotFoundError:
     from ArknightsUID.utils.arg_utils import extract_index, extract_uid
@@ -36,6 +39,7 @@ except ModuleNotFoundError:
         match_entries,
     )
     from ArknightsUID.utils.gamedata.itemicon import item_icon_b64
+    from ArknightsUID.utils.player.context import char_portrait_b64
     from ArknightsUID.version import ArknightsUID_version
 
 cultivate_sv = SV("ArknightsUID养成", priority=5)
@@ -47,6 +51,10 @@ _AMIYA_FORM_IDS = {
     "医疗阿米娅": "char_1037_amiya3",
     "阿米娅医疗": "char_1037_amiya3",
 }
+
+# charId 兜底白名单：原词透传给森空岛接口前必须匹配（该接口查询串不编码，
+# 非 ASCII/特殊字符会污染请求参数）
+_CHAR_ID_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 
 async def _send_text(bot: Bot, ev: Event, msg: str) -> None:
@@ -136,7 +144,15 @@ async def show_cultivation(bot: Bot, ev: Event) -> None:
             "也可直接用 charId 查询（如 ark养成 char_123_silverash）。",
         )
     if not char_id:
-        char_id = query  # 直接当 charId 试（如 char_123_silverash）
+        # 原词兜底当 charId 试（如 char_123_silverash）；森空岛接口查询串
+        # 刻意不编码，非白名单字符会污染请求参数，直接拒绝
+        if not _CHAR_ID_RE.fullmatch(query):
+            return await _send_text(
+                bot, ev,
+                f"未找到干员「{query}」。若要用 charId 查询，"
+                "仅支持字母/数字/下划线（如 ark养成 char_123_silverash）。",
+            )
+        char_id = query
 
     result = await calculate_cultivation(credential, char_id)
     if isinstance(result, str):
@@ -152,6 +168,7 @@ async def show_cultivation(bot: Bot, ev: Event) -> None:
     context = {
         "version": ArknightsUID_version,
         "name": result["char"].display_name,
+        "portrait": await char_portrait_b64(char_id, result["char"].rarity_display),
         "result": result,
     }
     await send_card_or_text(

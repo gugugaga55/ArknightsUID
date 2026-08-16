@@ -84,6 +84,38 @@ class CardContractTest(unittest.TestCase):
         self.assertEqual(context["name"], "阿米娅(术师)")
         self.assertEqual(context["rarity"], 5)
 
+    def test_char_card_contract_with_skill_effects(self) -> None:
+        """PRTS 技能效果增强：当前级/满级描述进 context 并渲染上卡。"""
+        import asyncio
+
+        entry = self.data.chars[0]
+        assert entry.skills, "fixture 干员应带技能"
+        # 用技能名键（skill_table 命中时与 PRTS 技能名一致）；名字拿不到时
+        # 直接取 context 里解析出的 name 回填验证渲染链路
+        probe = asyncio.run(build_char_card_context(entry, VERSION))
+        first_name = probe["skills"][0]["name"]
+        effects = {
+            first_name: {
+                "current": "攻击力+120%",
+                "current_level": "7",
+                "final": "攻击力+200%",
+                "final_level": "专3",
+            }
+        }
+        context = asyncio.run(build_char_card_context(entry, VERSION, effects))
+        self._assert_card("ark_char_card.html", context)
+        skill = context["skills"][0]
+        self.assertEqual(skill["current"], "攻击力+120%")
+        self.assertEqual(skill["current_level"], "7")
+        self.assertEqual(skill["final"], "攻击力+200%")
+        self.assertEqual(skill["final_level"], "专3")
+        # 未命中的技能不携带效果字段值（空串降级）
+        if len(context["skills"]) > 1:
+            self.assertEqual(context["skills"][1]["current"], "")
+        html = _render("ark_char_card.html", context)
+        self.assertIn("攻击力+200%", html)
+        self.assertIn("专3", html)
+
     def test_gacha_card_contract(self) -> None:
         records = [
             {"category": "1", "char_id": "c1", "name": "维什戴尔", "rarity": 5,
@@ -132,6 +164,72 @@ class LiveRenderTest(unittest.IsolatedAsyncioTestCase):
         img = await render_html(ark_templates, "ark_status.html", context)
         self.assertIsInstance(img, bytes)
         self.assertGreater(len(img), 10000)  # jpeg 截图不可能小于 10KB
+
+
+class PortraitNegativeCacheTest(unittest.IsolatedAsyncioTestCase):
+    """缺档立绘的 .miss 负缓存：TTL 内不再重复请求 CDN（404 刷屏修复）。"""
+
+    async def test_missing_tier_cached_and_skipped(self) -> None:
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+
+        import ArknightsUID.utils.path as path_mod
+        import ArknightsUID.utils.render as render_mod
+        from ArknightsUID.utils.player.context import char_portrait_b64
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+            calls: list[str] = []
+
+            async def fake_get(url, cache_path, *args, **kwargs):
+                calls.append(url)
+                return ""  # 全部失败（模拟 404）
+
+            with (
+                mock.patch.object(path_mod, "CHAR_CACHE_PATH", cache),
+                mock.patch.object(
+                    render_mod, "get_image_b64_with_cache", fake_get
+                ),
+            ):
+                first = await char_portrait_b64("char_x", 5)  # 依次尝试 #3/#2/#1
+                self.assertEqual(first, "")
+                self.assertEqual(len(calls), 3)
+                self.assertTrue((cache / "char_x%233.miss").exists())
+
+                second = await char_portrait_b64("char_x", 5)
+                self.assertEqual(second, "")
+                # 负缓存生效：不再发起新请求
+                self.assertEqual(len(calls), 3)
+
+    async def test_success_returns_without_miss_marker(self) -> None:
+        import tempfile
+        from pathlib import Path
+        from unittest import mock
+
+        import ArknightsUID.utils.path as path_mod
+        import ArknightsUID.utils.render as render_mod
+        from ArknightsUID.utils.player.context import char_portrait_b64
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache = Path(tmp)
+
+            async def fake_get(url, cache_path, *args, **kwargs):
+                # E1 档位（#2）成功
+                return "BASE64" if "%232" in url else ""
+
+            with (
+                mock.patch.object(path_mod, "CHAR_CACHE_PATH", cache),
+                mock.patch.object(
+                    render_mod, "get_image_b64_with_cache", fake_get
+                ),
+            ):
+                result = await char_portrait_b64("char_y", 5)
+                self.assertEqual(result, "BASE64")
+                # 成功档位不落 .miss
+                self.assertFalse((cache / "char_y%232.miss").exists())
+                # 失败的 #3 档落 .miss
+                self.assertTrue((cache / "char_y%233.miss").exists())
 
 
 if __name__ == "__main__":

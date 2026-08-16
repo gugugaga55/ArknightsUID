@@ -37,6 +37,15 @@
             {% endfor %}
         </div>
 
+        {% if six_rows %}
+        <div class="wall">
+            {% for r in six_rows %}
+            <span class="aicon aicon--md" title="{{ r.name }}">{% if r.avatar %}<img src="{{ r.avatar }}" alt="{{ r.name }}">{% endif %}</span>
+            {% endfor %}
+            <span class="wall-hint">六星精锐 // TOP {{ six_rows | length }}</span>
+        </div>
+        {% endif %}
+
         <div class="grid grid-4" style="margin-top: var(--space-4);">
             {% for r in rarity_rows %}
             <div class="cell">

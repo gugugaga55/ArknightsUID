@@ -7,10 +7,15 @@
     profession/branch/position/faction/tags/obtain: str
     trait: str            特性
     summary: str
-    talents: [{slot, name, unlock, description}]
+    talents: [{slot, name, unlock, description,
+               stages: [{condition, effect}],        逐阶段（精英1/精英2/模组级）各带具体数值
+               potential: {condition, effect} | none  满潜强化效果}]
     skills: [{name, skill_type, range,
               levels: [{level, description, sp_init, sp_cost, duration}],
+              current: {level, description, ...} | none   玩家当前级（有绑定账号）
+              final: {level, description, ...} | none      满级展示级（专3，无专精回退 7）
               mastery_costs: [{mastery, materials: [str]}]}]
+    owner: {uid, main_skill_lvl, skills: {名: 专N}, training_remain} | none
     source_url/version: str
 -->
 <!DOCTYPE html>
@@ -23,7 +28,7 @@
             <span class="mast-meta"><span class="idx">10</span>PRTS.WIKI</span>
         </div>
 
-        <div class="titleblock">
+        <div class="titleblock" style="align-items: flex-start;">
             <div>
                 <div class="eyebrow">{{ profession }}{% if branch %} · {{ branch }}{% endif %}{% if position %} · {{ position }}{% endif %}</div>
                 <h1 class="title title--s">{{ name }}</h1>
@@ -32,7 +37,17 @@
                     {% for i in range(6) %}<i class="{{ 'on' if i < (rarity | int) else '' }}"></i>{% endfor %}
                 </div>
                 {% endif %}
+                {% if owner %}
+                <div style="margin-top: var(--space-2); display: flex; gap: 6px; flex-wrap: wrap;">
+                    <span class="chip chip--ink" style="height: 22px;">练度档案 UID {{ owner.uid }}</span>
+                    <span class="chip chip--ghost mono" style="height: 22px;">技能 {{ owner.main_skill_lvl }}/7</span>
+                    {% if owner.training_remain %}<span class="chip chip--ghost mono" style="height: 22px;">专精训练 {{ owner.training_remain }}</span>{% endif %}
+                </div>
+                {% endif %}
             </div>
+            {% if portrait %}
+            <div class="portrait"><img src="{{ portrait }}" alt=""></div>
+            {% endif %}
         </div>
         <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">OPERATOR FILE</span></div>
 
@@ -73,8 +88,19 @@
                     <span class="row-value" style="font-size: 13px;">{% if t.slot %}{{ t.slot}} · {% endif %}{{ t.name }}</span>
                     {% if t.unlock %}<span class="bar-num">{{ t.unlock }}</span>{% endif %}
                 </div>
-                {% if t.description %}
+                {% if t.stages %}
+                {% for st in t.stages %}
+                <div style="margin-top: 4px; font-size: 11px; color: var(--tx-1); line-height: 1.7;">
+                    {% if st.condition %}<span class="chip chip--ghost mono" style="height: 18px; font-size: 10px; margin-right: 6px;">{{ st.condition }}</span>{% endif %}{{ st.effect }}
+                </div>
+                {% endfor %}
+                {% elif t.description %}
                 <div style="margin-top: 4px; font-size: 11px; color: var(--tx-1); line-height: 1.7;">{{ t.description }}</div>
+                {% endif %}
+                {% if t.potential %}
+                <div style="margin-top: 4px; font-size: 11px; color: var(--tx-2); line-height: 1.7;">
+                    <span class="chip chip--ghost mono" style="height: 18px; font-size: 10px; margin-right: 6px;">满潜</span>{{ t.potential.effect }}
+                </div>
                 {% endif %}
             </div>
             {% endfor %}
@@ -90,7 +116,7 @@
             {% for s in skills %}
             <div class="row" style="display: block;">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <span class="row-value" style="font-size: 13px;">{{ s.name }}</span>
+                    <span class="row-value" style="display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px;">{% if s.icon %}<span class="icon" style="width: 28px; height: 28px;"><img src="{{ s.icon }}" alt=""></span>{% endif %}{{ s.name }}</span>
                     {% if s.skill_type %}<span class="chip chip--ink" style="height: 20px;">{{ s.skill_type }}</span>{% endif %}
                 </div>
                 {% if s.levels %}
@@ -100,6 +126,16 @@
                     <span class="chip chip--ghost mono" style="height: 20px; font-size: 10px;">{{ lv.level }}{% if lv.sp_cost %} · {{ lv.sp_cost }}耗{% endif %}{% if lv.duration %} · {{ lv.duration }}s{% endif %}</span>
                     {% endif %}
                     {% endfor %}
+                </div>
+                {% endif %}
+                {% if s.current %}
+                <div style="margin-top: 6px; font-size: 11px; color: var(--tx-1); line-height: 1.7; white-space: pre-line;">
+                    <span class="chip chip--ink" style="height: 18px; font-size: 10px; margin-right: 6px;">当前 {{ s.current.level }}</span>{{ s.current.description }}{% if s.current.meta %}（{{ s.current.meta }}）{% endif %}
+                </div>
+                {% endif %}
+                {% if s.final %}
+                <div style="margin-top: 4px; font-size: 11px; color: var(--tx-1); line-height: 1.7; white-space: pre-line;">
+                    <span class="chip chip--ghost mono" style="height: 18px; font-size: 10px; margin-right: 6px;">{{ s.final.level }}</span>{{ s.final.description }}{% if s.final.meta %}（{{ s.final.meta }}）{% endif %}
                 </div>
                 {% endif %}
                 {% for mc in s.mastery_costs %}

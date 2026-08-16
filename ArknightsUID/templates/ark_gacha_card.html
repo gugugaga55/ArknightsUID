@@ -64,7 +64,7 @@
         <div class="rows">
             {% for r in recent %}
             <div class="row">
-                <span class="row-value" style="font-size: 13px;">{{ r.name }}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 6px;">{{ r.pool }}</span></span>
+                <span class="row-value" style="display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px;">{% if r.avatar %}<span class="aicon"><img src="{{ r.avatar }}" alt=""></span>{% endif %}{{ r.name }}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 4px;">{{ r.pool }}</span></span>
                 <span class="bar-num">{{ r.pull }} 抽</span>
             </div>
             {% endfor %}

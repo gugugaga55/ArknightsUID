@@ -8,7 +8,8 @@
 - powers: [{level, chars}]                 发电站
 - dormitories: [{level, chars, comfort}]   宿舍（comfort = 氛围值）
 - meeting: {level, chars, clue: {own, board[], dailyReward}} 会客室（线索）
-- training: {level, trainee, speed}        训练室
+- training: {level, trainee{charId}, trainer, remainPoint, speed,
+             lastUpdateTime, remainSecs, slotState}          训练室
 - manufactureFormulaInfoMap（data 顶层）: {formulaId → {itemId, count, ...}}
 
 心情（morale）计量单位（dump 实测推断，双重证据）：
@@ -19,9 +20,14 @@
 展示口径（宁缺毋滥）：complete/remain/weight 等库存中间量语义未验证，不展示；
 workTime（累计工时）同理。低心情干员从四个工作房间（制造/贸易/发电/控制）
 聚合，宿舍（休息回复）不计入。
+
+training.remainSecs 训练中语义尚无一手样本（dump 为空闲态 -1），按
+「lastUpdateTime 快照时刻的剩余秒」折算（见 training_remaining_secs），
+与 labor.remainSecs 同款倒计时模式；展示文案统一带「约」。
 """
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -83,6 +89,52 @@ def morale_points(ap: Any) -> float:
     if value < 0:
         return 0.0
     return round(min(value / MORALE_PER_POINT, MORALE_MAX_POINTS), 1)
+
+
+def training_remaining_secs(building: BuildingData, now: int | None = None) -> int:
+    """训练剩余秒数（折算到 now 时刻）；-1 = 空闲/未知，0 = 已到点待结算。
+
+    remainSecs 视为 lastUpdateTime 快照时刻的剩余（labor.remainSecs 同款），
+    往后流逝的时间要扣掉；lastUpdateTime 缺失（0）时直接当作当前剩余。
+    """
+    if building.training_remain_secs < 0:
+        return -1
+    if now is None:
+        now = int(time.time())
+    if building.training_last_update > 0:
+        return max(0, building.training_remain_secs - (now - building.training_last_update))
+    return building.training_remain_secs
+
+
+def format_training_remaining(remaining: int) -> str:
+    """剩余秒 → 时长文案（约X小时Y分）；未知返回空串。"""
+    if remaining < 0:
+        return ""
+    if remaining == 0:
+        return "已完成"
+    minutes = remaining // 60
+    days, rest = divmod(minutes, 1440)
+    hours, mins = divmod(rest, 60)
+    if days:
+        return f"约{days}天{hours}小时"
+    if hours:
+        return f"约{hours}小时{mins}分"
+    return f"约{mins}分钟"
+
+
+def training_status_text(remaining: int) -> str:
+    """完整状态短语（调用方直接拼接，避免「剩已完成」这类拼接伤）：
+    "剩约2小时15分" / "已完成" / ""（未知或未在训）。"""
+    if remaining < 0:
+        return ""
+    if remaining == 0:
+        return "已完成"
+    return f"剩{format_training_remaining(remaining)}"
+
+
+# 训练进度百分比已移除：接口没有「专精目标等级/总时长」字段（dump 训练中
+# 样本缺失，training.level 是训练室房间等级而非目标专精档），任何总时长
+# 都只能臆测，违反本模块「宁缺毋滥」口径。待真实训练中样本校准后再加。
 
 
 @dataclass(slots=True)
@@ -150,6 +202,9 @@ class BuildingData:
     clue_daily_reward: bool = False
     training_speed: float = 0.0
     training_trainee: str = ""  # 训练中干员名（空 = 未在训练）
+    training_trainee_id: str = ""  # 在训干员 charId（干员查询匹配用）
+    training_remain_secs: int = -1  # 快照时刻剩余秒（dump 空闲态 -1）
+    training_last_update: int = 0  # 快照时刻（unix 秒；0 = 缺失）
     tired_chars: list[TiredChar] = field(default_factory=list)
 
     @property
@@ -266,10 +321,15 @@ def parse_building(data: "PlayerData") -> BuildingData | None:
 
     training = building.get("training")
     if isinstance(training, dict):
+        # training.level 是训练室房间等级（基建升级），不是专精目标等级，
+        # 不做展示/推算用途（见上方训练进度移除注释）
         result.training_speed = _as_float(training.get("speed"))
+        result.training_remain_secs = _as_int(training.get("remainSecs"), -1)
+        result.training_last_update = _as_int(training.get("lastUpdateTime"))
         trainee = training.get("trainee")
         trainee_id = str(path(trainee, "charId") or "") if isinstance(trainee, dict) else ""
         if trainee_id:
+            result.training_trainee_id = trainee_id
             info = info_map.get(trainee_id)
             result.training_trainee = (
                 str(path(info, "name") or "") if isinstance(info, dict) else ""

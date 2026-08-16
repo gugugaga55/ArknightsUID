@@ -22,11 +22,14 @@ try:
         exchange_gift_code,
         login_gacha_chain,
     )
+    from ArknightsUID.ArknightsUID.utils.gamedata.charinfo import load_char_index
     from ArknightsUID.ArknightsUID.utils.hypergryph.gacha import (
         build_gacha_context,
         format_gacha_text,
         sync_gacha_logs,
     )
+    from ArknightsUID.ArknightsUID.utils.player.context import char_avatar_b64
+    from ArknightsUID.ArknightsUID.utils.reply_safety import safe_external_message
     from ArknightsUID.ArknightsUID.version import ArknightsUID_version
 except ModuleNotFoundError:
     from ArknightsUID.utils.arg_utils import extract_index, extract_uid
@@ -39,11 +42,14 @@ except ModuleNotFoundError:
         exchange_gift_code,
         login_gacha_chain,
     )
+    from ArknightsUID.utils.gamedata.charinfo import load_char_index
     from ArknightsUID.utils.hypergryph.gacha import (
         build_gacha_context,
         format_gacha_text,
         sync_gacha_logs,
     )
+    from ArknightsUID.utils.player.context import char_avatar_b64
+    from ArknightsUID.utils.reply_safety import safe_external_message
     from ArknightsUID.version import ArknightsUID_version
 
 gacha_sv = SV("ArknightsUID抽卡", priority=5)
@@ -55,7 +61,10 @@ async def _send_text(bot: Bot, ev: Event, msg: str) -> None:
 
 def _gift_reply(response: dict) -> str:
     code = response.get("code")
-    message = str(response.get("message") or response.get("msg") or "")
+    # 上游 message 可能回显请求细节，统一脱敏后再进回复
+    message = safe_external_message(
+        str(response.get("message") or response.get("msg") or "")
+    )
     if message:
         message = message[:120]
     if code == 0:
@@ -90,6 +99,19 @@ async def show_gacha_report(bot: Bot, ev: Event) -> None:
         nickname, hide_uid(credential.uid), records, warning
     )
     if context is not None:
+        # 最近六星逐个挂初始头像（gamedata 索引精确名反查，失败空串降级）
+        try:
+            char_index = await load_char_index()
+            if char_index:
+                for row in context.get("recent", []):
+                    hit = next(
+                        (cid for cid, info in char_index.items()
+                         if info.get("name") == row.get("name")),
+                        "",
+                    )
+                    row["avatar"] = await char_avatar_b64(hit) if hit else ""
+        except Exception:
+            pass
         return await send_card_or_text(
             bot, ev, "ark_gacha_card.html", context, text
         )

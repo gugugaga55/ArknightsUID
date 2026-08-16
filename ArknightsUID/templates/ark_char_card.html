@@ -12,7 +12,9 @@
     potential: int        潜能 0-6
     favor: int            信赖 0-200
     main_skill_lvl: int   主技能等级 1-7
-    skills: [{icon: str, name: str, specialize: int}]   specialize 0-3
+    skills: [{icon: str, name: str, specialize: int,
+              current/current_level: str（玩家当前级效果，PRTS 增强，可空）,
+              final/final_level: str（满级效果，可空）}]
     equips: [{name: str, stage: int}]  模组（可为空列表）
     version: str
 -->
@@ -26,10 +28,7 @@
             <span class="mast-meta"><span class="idx">05</span>{{ profession }}</span>
         </div>
 
-        <div class="titleblock" style="align-items: center;">
-            <div class="optile">
-                {% if avatar %}<img src="{{ avatar }}" alt="">{% endif %}
-            </div>
+        <div class="titleblock" style="align-items: flex-start;">
             <div style="flex: 1; min-width: 0;">
                 <div class="eyebrow">{{ profession }} · 干员档案</div>
                 <h1 class="title" style="font-size: 36px;">{{ name }}</h1>
@@ -37,6 +36,11 @@
                     {% for i in range(6) %}<i class="{{ 'on' if i < rarity else '' }}"></i>{% endfor %}
                 </div>
             </div>
+            {% if portrait %}
+            <div class="portrait portrait--lg"><img src="{{ portrait }}" alt=""></div>
+            {% elif avatar %}
+            <div class="optile"><img src="{{ avatar }}" alt=""></div>
+            {% endif %}
         </div>
         <div class="title-rule" style="margin-top: var(--space-4);"><span class="en">OPERATOR FILE</span></div>
 
@@ -69,14 +73,26 @@
         </div>
         <div class="rows">
             {% for sk in skills %}
-            <div class="row">
-                <span style="display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0;">
-                    <span class="icon">{% if sk.icon %}<img src="{{ sk.icon }}" alt="">{% endif %}</span>
-                    <span class="row-value" style="font-size: 13px;">{{ sk.name }}</span>
-                </span>
-                <span class="dms" title="专精">
-                    {% for i in range(3) %}<i class="{{ 'on' if i < sk.specialize else '' }}"></i>{% endfor %}
-                </span>
+            <div class="row" style="display: block;">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <span style="display: inline-flex; align-items: center; gap: var(--space-2); min-width: 0;">
+                        <span class="icon">{% if sk.icon %}<img src="{{ sk.icon }}" alt="">{% endif %}</span>
+                        <span class="row-value" style="font-size: 13px;">{{ sk.name }}</span>
+                    </span>
+                    <span class="dms" title="专精">
+                        {% for i in range(3) %}<i class="{{ 'on' if i < sk.specialize else '' }}"></i>{% endfor %}
+                    </span>
+                </div>
+                {% if sk.current %}
+                <div style="margin-top: 4px; font-size: 11px; color: var(--tx-1); line-height: 1.7; white-space: pre-line;">
+                    <span class="chip chip--ink" style="height: 18px; font-size: 10px; margin-right: 6px;">当前 {{ sk.current_level }}</span>{{ sk.current }}
+                </div>
+                {% endif %}
+                {% if sk.final %}
+                <div style="margin-top: 4px; font-size: 11px; color: var(--tx-1); line-height: 1.7; white-space: pre-line;">
+                    <span class="chip chip--ghost mono" style="height: 18px; font-size: 10px; margin-right: 6px;">{{ sk.final_level }}</span>{{ sk.final }}
+                </div>
+                {% endif %}
             </div>
             {% endfor %}
         </div>
@@ -89,7 +105,7 @@
         <div class="rows">
             {% for eq in equips %}
             <div class="row">
-                <span class="row-value" style="font-size: 13px;">{{ eq.name }}</span>
+                <span class="row-value" style="display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px;">{% if eq.icon %}<span class="icon"><img src="{{ eq.icon }}" alt=""></span>{% endif %}{{ eq.name }}</span>
                 <span class="chip chip--yellow">STAGE {{ eq.stage }}</span>
             </div>
             {% endfor %}

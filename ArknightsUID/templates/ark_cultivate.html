@@ -31,7 +31,7 @@
             <span class="mast-meta"><span class="idx">14</span>{{ result.char.profession_name }}</span>
         </div>
 
-        <div class="titleblock">
+        <div class="titleblock" style="align-items: flex-start;">
             <div>
                 <div class="eyebrow">{{ result.char.profession_name }} · 到毕业材料缺口</div>
                 <h1 class="title title--s"><em>{{ name }}</em></h1>
@@ -41,6 +41,9 @@
                 </div>
                 {% endif %}
             </div>
+            {% if portrait %}
+            <div class="portrait"><img src="{{ portrait }}" alt=""></div>
+            {% endif %}
         </div>
         <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">CULTIVATION PLAN</span></div>
 

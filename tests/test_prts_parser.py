@@ -285,6 +285,21 @@ class PRTSParserTest(unittest.IsolatedAsyncioTestCase):
         # 2 天赋
         self.assertEqual(len(op.talents), 2)
         self.assertEqual(op.talents[1].name, "鹰眼视觉")
+        # 天赋逐阶段（精英1/精英2/模组级），效果带具体数值
+        first = op.talents[0]
+        self.assertEqual(first.name, "领袖")
+        self.assertEqual(len(first.stages), 4)
+        self.assertEqual(first.stages[0].condition, "精英1")
+        self.assertIn("攻击力+5%", first.stages[0].effect)
+        self.assertIn("攻击力+10%", first.stages[1].effect)
+        self.assertEqual(first.stages[3].condition, "精英2 X模组3级")
+        self.assertIn("攻击力+25%", first.stages[3].effect)
+        # 满潜强化：取最高档（潜能增强_天赋4，X模组3级 + 潜能加成标注）
+        self.assertIsNotNone(first.potential)
+        assert first.potential is not None
+        self.assertIn("攻击力+27%", first.potential.effect)
+        self.assertIn("（+2%）", first.potential.effect)
+        self.assertIsNone(op.talents[1].potential)
 
     async def test_build_assault_diffs_filters_noise_and_computes_deltas(self) -> None:
         # 构造普通/突袭字段：核心机制有数值差，噪音/失效字段存在，情报在描述
@@ -588,6 +603,62 @@ class PRTSParserTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(info["cnver"], "2.6.01")
         self.assertEqual(info["cnmaintstart"], "2026-08-20 10:00")
+
+
+class EnemyLevelInheritTest(unittest.TestCase):
+    """等级 2+ 变体块只写差异字段：空数值从上一级继承（实测爱国者页行为）。"""
+
+    WIKITEXT = """
+{{敌人信息/common2
+|名称=测试敌人
+|id=E1
+|index=E1
+|地位级别=普通
+}}
+{{敌人信息/levelcontent
+|index=0
+|最大生命值=1000
+|攻击力=200
+|防御力=100
+|法术抗性=10
+|重量等级=3
+}}
+{{敌人信息/levelcontent
+|index=1
+|最大生命值=2000
+|攻击力=300
+}}
+"""
+
+    def test_level2_inherits_missing_stats(self) -> None:
+        enemy = prts_client.parse_enemy_wikitext(
+            prts_client.PageWikitext(title="测试敌人", wikitext=self.WIKITEXT)
+        )
+        self.assertIsNotNone(enemy)
+        assert enemy is not None
+        self.assertEqual(len(enemy.levels), 2)
+        lv2 = enemy.levels[1]
+        # 有差异字段用变体值
+        self.assertEqual(lv2.max_hp, "2000")
+        self.assertEqual(lv2.atk, "300")
+        # 空字段从等级 1 继承
+        self.assertEqual(lv2.defense, "100")
+        self.assertEqual(lv2.res, "10")
+        self.assertEqual(lv2.weight, "3")
+
+    def test_level_select_helpers(self) -> None:
+        """final_level / select_owner_level 公共助手（wiki 与练度卡共用）。"""
+        levels = [
+            prts_client.SkillLevelDetail(level=str(n), description=f"效果+{n}%")
+            for n in range(1, 8)
+        ] + [
+            prts_client.SkillLevelDetail(level=f"专{n}", description=f"效果+{70 + n * 10}%")
+            for n in (1, 2, 3)
+        ]
+        self.assertEqual(prts_client.final_level(levels).level, "专3")
+        self.assertEqual(prts_client.select_owner_level(levels, 2, 7).level, "专2")
+        self.assertEqual(prts_client.select_owner_level(levels, 0, 4).level, "4")
+        self.assertIsNone(prts_client.select_owner_level(levels, 0, 0))
 
 
 if __name__ == "__main__":

@@ -8,7 +8,8 @@
     description: str
     drops: [str]          常规掉落
     extra_drops: [str]    额外物资
-    enemies: [{name, count}]
+    enemies: [{name, count, level, hp, atk, defense, res}]
+          基础数值取敌人页一级数据（完整数值/技能效果走 ark敌人 详情卡）
     assault_diffs: [str]  突袭差异
     map_image: str        地图 base64（可为空）
     map_url/source_url/version: str
@@ -60,7 +61,7 @@
             <span class="sect-en">DROPS // {{ drops | length }}</span>
         </div>
         <div class="chip-flow">
-            {% for d in drops %}<span class="chip">{{ d }}</span>{% endfor %}
+            {% for d in drops %}<span class="chip">{% if d.icon %}<span class="iicon" style="width: 18px; height: 18px;"><img src="{{ d.icon }}" alt=""></span>{% endif %}{{ d.name }}</span>{% endfor %}
         </div>
         {% endif %}
 
@@ -70,7 +71,7 @@
             <span class="sect-en">EXTRA // {{ extra_drops | length }}</span>
         </div>
         <div class="chip-flow">
-            {% for d in extra_drops %}<span class="chip chip--ghost">{{ d }}</span>{% endfor %}
+            {% for d in extra_drops %}<span class="chip chip--ghost">{% if d.icon %}<span class="iicon" style="width: 18px; height: 18px;"><img src="{{ d.icon }}" alt=""></span>{% endif %}{{ d.name }}</span>{% endfor %}
         </div>
         {% endif %}
 
@@ -81,9 +82,16 @@
         </div>
         <div class="rows">
             {% for e in enemies %}
-            <div class="row">
-                <span class="row-value" style="font-size: 13px;">{{ e.name }}</span>
-                <span class="bar-num">×{{ e.count }}</span>
+            <div class="row" style="display: block;">
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                    <span class="row-value" style="font-size: 13px;">{{ e.name }}</span>
+                    <span class="bar-num">×{{ e.count }}</span>
+                </div>
+                {% if e.hp or e.atk or e.defense or e.res %}
+                <div class="mono" style="margin-top: 3px; font-size: 10px; color: var(--tx-2); letter-spacing: 0.3px;">
+                    HP {{ e.hp or "-" }} · 攻 {{ e.atk or "-" }} · 防 {{ e.defense or "-" }} · 抗 {{ e.res or "-" }}
+                </div>
+                {% endif %}
             </div>
             {% endfor %}
         </div>

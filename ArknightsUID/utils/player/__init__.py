@@ -6,8 +6,11 @@ from .building import (
     TRADING_STRATEGY_NAMES,
     BuildingData,
     TiredChar,
+    format_training_remaining,
     morale_points,
     parse_building,
+    training_remaining_secs,
+    training_status_text,
 )
 from .context import (
     build_box_context,
@@ -51,8 +54,11 @@ __all__ = [
     "drop_cached_player_info",
     "effective_ap",
     "fetch_cached_player_info",
+    "format_training_remaining",
     "morale_points",
     "parse_building",
     "parse_player_info",
     "read_cached_player_info",
+    "training_remaining_secs",
+    "training_status_text",
 ]

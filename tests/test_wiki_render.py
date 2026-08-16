@@ -12,10 +12,15 @@ from unittest import mock
 from ArknightsUID.arknightsuid_wiki import (
     _build_enemy_context,
     _build_operator_context,
+    _build_owner_context,
     _build_page_context,
     _build_stage_context,
+    _final_level,
+    _format_enemy,
     _format_mastery,
     _format_operator,
+    _format_stage,
+    _owner_level,
     _render_or_text,
 )
 from ArknightsUID.utils.prts.client import (
@@ -30,9 +35,12 @@ from ArknightsUID.utils.prts.client import (
     ParadoxSimulation,
     SkillLevelDetail,
     SkillMasteryCost,
+    StageEnemy,
     StageInfo,
+    TalentStage,
     WikiPageSummary,
 )
+from ArknightsUID.utils.render import ark_templates  # noqa: F401  模板存在性
 
 
 class FakeBot:
@@ -49,6 +57,131 @@ class FakeEvent:
         self.group_id = group_id
         self.user_id = "u1"
         self.bot_id = "b1"
+
+
+def _full_levels(with_mastery: bool = True) -> list[SkillLevelDetail]:
+    """1-7 + 专1-3 十级（PRTS {{技能2}} 解析布局）；无专精技能后三级描述为空。"""
+    levels = [
+        SkillLevelDetail(level=str(n), description=f"效果+{n * 10}%", sp_cost="10")
+        for n in range(1, 8)
+    ]
+    if with_mastery:
+        levels += [
+            SkillLevelDetail(level=f"专{n}", description=f"效果+{70 + n * 10}%", sp_cost="10")
+            for n in (1, 2, 3)
+        ]
+    else:
+        levels += [SkillLevelDetail(level=f"专{n}") for n in (1, 2, 3)]
+    return levels
+
+
+class SkillLevelSelectionTest(unittest.TestCase):
+    def test_final_level_prefers_mastery_then_walks_back(self) -> None:
+        self.assertEqual(_final_level(_full_levels()).level, "专3")
+        # 无专精技能：最后一个带描述的等级是 7 级
+        self.assertEqual(_final_level(_full_levels(with_mastery=False)).level, "7")
+        self.assertIsNone(_final_level([SkillLevelDetail(level="1")]))
+
+    def test_owner_level_by_specialize(self) -> None:
+        levels = _full_levels()
+        self.assertEqual(_owner_level(levels, 2, 7).level, "专2")
+        self.assertEqual(_owner_level(levels, 3, 7).level, "专3")
+
+    def test_owner_level_by_main_lvl_without_mastery(self) -> None:
+        levels = _full_levels()
+        self.assertEqual(_owner_level(levels, 0, 4).level, "4")
+        # 边界：0/越界值拿不到有效级
+        self.assertIsNone(_owner_level(levels, 0, 0))
+
+    def test_owner_level_walks_back_when_mastery_slot_empty(self) -> None:
+        # 无专精技能但玩家数据带专精位（异常兜底）：回退到 7 级
+        self.assertEqual(
+            _owner_level(_full_levels(with_mastery=False), 1, 7).level, "7"
+        )
+
+
+class TalentDisplayTest(unittest.IsolatedAsyncioTestCase):
+    async def test_context_includes_stages_and_potential(self) -> None:
+        op = OperatorInfo(
+            title="测试",
+            name="测试",
+            rarity="5",
+            talents=[
+                OperatorTalent(
+                    slot="第一天赋",
+                    name="领袖",
+                    unlock="精英1",
+                    description="精英1：攻击力+5%",
+                    stages=[
+                        TalentStage(condition="精英1", effect="攻击力+5%"),
+                        TalentStage(condition="精英2", effect="攻击力+10%"),
+                    ],
+                    potential=TalentStage(condition="精英2", effect="攻击力+12%（+2%）"),
+                )
+            ],
+        )
+        context = await _build_operator_context(op)
+        talent = context["talents"][0]
+        self.assertEqual(
+            talent["stages"],
+            [
+                {"condition": "精英1", "effect": "攻击力+5%"},
+                {"condition": "精英2", "effect": "攻击力+10%"},
+            ],
+        )
+        self.assertEqual(
+            talent["potential"], {"condition": "精英2", "effect": "攻击力+12%（+2%）"}
+        )
+
+    async def test_format_operator_lists_talent_stages_and_potential(self) -> None:
+        """文本回退：天赋逐阶段一行 + 满潜一行（与卡片展示一致）。"""
+        op = OperatorInfo(
+            title="测试",
+            name="测试",
+            rarity="5",
+            talents=[
+                OperatorTalent(
+                    slot="第一天赋",
+                    name="领袖",
+                    unlock="精英1",
+                    stages=[
+                        TalentStage(condition="精英1", effect="攻击力+5%"),
+                        TalentStage(condition="精英2", effect="攻击力+10%"),
+                    ],
+                    potential=TalentStage(condition="精英2", effect="攻击力+12%（+2%）"),
+                )
+            ],
+        )
+        text = _format_operator(op)
+        self.assertIn("精英1：攻击力+5%", text)
+        self.assertIn("精英2：攻击力+10%", text)
+        self.assertIn("满潜：攻击力+12%（+2%）", text)
+
+    async def test_build_owner_context_degrades_without_account(self) -> None:
+        """未绑定账号：_build_owner_context 返回 None（资料查询不报账号错误）。"""
+        from ArknightsUID.utils.enduid import adapter
+
+        op = OperatorInfo(title="银灰", name="银灰", rarity="5")
+        ev = FakeEvent()
+        with mock.patch.object(
+            adapter,
+            "resolve_credential",
+            new=mock.AsyncMock(return_value="未绑定账号提示"),
+        ):
+            self.assertIsNone(await _build_owner_context(op, ev))
+
+    async def test_build_owner_context_swallows_errors(self) -> None:
+        """凭据层抛异常也静默降级为通用展示。"""
+        from ArknightsUID.utils.enduid import adapter
+
+        op = OperatorInfo(title="银灰", name="银灰", rarity="5")
+        ev = FakeEvent()
+        with mock.patch.object(
+            adapter,
+            "resolve_credential",
+            new=mock.AsyncMock(side_effect=RuntimeError("boom")),
+        ):
+            self.assertIsNone(await _build_owner_context(op, ev))
 
 
 class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
@@ -114,7 +247,13 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
                 )
             ],
             talents=[
-                OperatorTalent(slot="第一天赋", name="领袖", unlock="精英1", description="攻击力+5%"),
+                OperatorTalent(
+                    slot="第一天赋",
+                    name="领袖",
+                    unlock="精英1",
+                    description="攻击力+5%",
+                    stages=[TalentStage(condition="精英2", effect="攻击力+10%")],
+                ),
             ],
         )
         context = await _build_operator_context(op)
@@ -129,6 +268,11 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(skill["mastery_costs"][0]["materials"], ["龙门币 ×5", "糖 ×3"])
         self.assertEqual(len(context["talents"]), 1)
         self.assertEqual(context["talents"][0]["name"], "领袖")
+        # 天赋逐阶段结构（模板按 stage 渲染具体数值）
+        self.assertEqual(
+            context["talents"][0]["stages"],
+            [{"condition": "精英2", "effect": "攻击力+10%"}],
+        )
 
     async def test_format_operator_renders_skills_and_mastery(self) -> None:
         op = OperatorInfo(
@@ -166,6 +310,127 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("专1材料：龙门币 ×5", text)
         self.assertIn("天赋一", text)
         self.assertIn("来源：https://prts.wiki/w/测试", text)
+
+    async def test_format_operator_shows_descriptions_and_owner_levels(self) -> None:
+        op = OperatorInfo(
+            title="测试",
+            name="测试",
+            rarity="5",
+            profession="近卫",
+            skills=[
+                OperatorSkill(
+                    name="技能一",
+                    skill_type="自动回复 / 手动触发",
+                    levels=[
+                        SkillLevelDetail(
+                            level="1", description="攻击力+10%", sp_cost="10", duration="30"
+                        ),
+                        SkillLevelDetail(
+                            level="7", description="攻击力+25%", sp_cost="10", duration="35"
+                        ),
+                        SkillLevelDetail(
+                            level="专1", description="攻击力+30%", sp_cost="10", duration="36"
+                        ),
+                        SkillLevelDetail(
+                            level="专3", description="攻击力+40%", sp_cost="10", duration="40"
+                        ),
+                    ],
+                )
+            ],
+            source_url="https://prts.wiki/w/测试",
+        )
+        owner = {
+            "uid": "12****89",
+            "main_skill_lvl": 7,
+            "skills": {"技能一": 1},
+            "training_remain": "剩约2小时15分",
+        }
+
+        # 有 owner：当前级（专1）与满级（专3）详情并列
+        text = _format_operator(op, owner)
+        self.assertIn("我的练度（UID 12****89）：技能等级 7/7，专精训练剩约2小时15分", text)
+        self.assertIn("当前 专1：攻击力+30%（10耗·36持）", text)
+        self.assertIn("专3：攻击力+40%（10耗·40持）", text)
+
+        # 无 owner（未绑定/未持有）：仍展示满级描述（修复描述丢失）
+        plain = _format_operator(op)
+        self.assertIn("专3：攻击力+40%（10耗·40持）", plain)
+        self.assertNotIn("我的练度", plain)
+        self.assertNotIn("当前 专1", plain)
+
+    async def test_format_operator_owner_maxed_shows_single_level(self) -> None:
+        op = OperatorInfo(
+            title="测试",
+            name="测试",
+            rarity="5",
+            skills=[
+                OperatorSkill(name="技能一", levels=_full_levels()),
+            ],
+        )
+        owner = {"uid": "12****89", "main_skill_lvl": 7, "skills": {"技能一": 3}}
+        text = _format_operator(op, owner)
+        # 已专3：只出一条「当前 专3」，不重复罗列满级行
+        self.assertIn("当前 专3：", text)
+        self.assertEqual(text.count("专3：效果+100%"), 1)
+
+    async def test_build_operator_context_with_owner(self) -> None:
+        op = OperatorInfo(
+            title="测试",
+            name="测试",
+            rarity="5",
+            skills=[OperatorSkill(name="技能一", levels=_full_levels())],
+        )
+        owner = {"uid": "12****89", "main_skill_lvl": 6, "skills": {"技能一": 2}}
+        context = await _build_operator_context(op, owner)
+
+        self.assertEqual(context["owner"], owner)
+        skill = context["skills"][0]
+        self.assertEqual(skill["current"]["level"], "专2")
+        self.assertEqual(skill["current"]["meta"], "10耗")
+        self.assertEqual(skill["final"]["level"], "专3")
+
+    async def test_build_operator_context_without_owner_has_final_only(self) -> None:
+        op = OperatorInfo(
+            title="测试",
+            name="测试",
+            rarity="5",
+            skills=[OperatorSkill(name="技能一", levels=_full_levels())],
+        )
+        context = await _build_operator_context(op)
+        self.assertIsNone(context["owner"])
+        skill = context["skills"][0]
+        self.assertIsNone(skill["current"])
+        self.assertEqual(skill["final"]["level"], "专3")
+
+    async def test_render_contract(self) -> None:
+        """ark_wiki_operator.html 与 builder context 的 schema 契约（jinja 全量渲染）。"""
+        op = OperatorInfo(
+            title="测试",
+            name="测试",
+            rarity="5",
+            profession="近卫",
+            skills=[OperatorSkill(name="技能一", levels=_full_levels())],
+        )
+        owner = {
+            "uid": "12****89",
+            "main_skill_lvl": 6,
+            "skills": {"技能一": 2},
+            "training_remain": "剩约2小时15分",
+        }
+        context = await _build_operator_context(op, owner)
+        template = ark_templates.get_template("ark_wiki_operator.html")
+        html = template.render(font_css_url="about:blank", **context)
+        self.assertIn("当前 专2", html)
+        self.assertIn("效果+90%", html)  # 专2 描述（伤害数值必须上卡）
+        self.assertIn("效果+100%", html)  # 专3 描述
+        self.assertIn("练度档案 UID 12****89", html)
+        self.assertIn("专精训练 剩约2小时15分", html)
+
+        # 无 owner（未绑定）渲染不报错、无练度区块
+        plain_context = await _build_operator_context(op)
+        plain_html = template.render(font_css_url="about:blank", **plain_context)
+        self.assertNotIn("练度档案", plain_html)
+        self.assertIn("效果+100%", plain_html)
 
     async def test_format_operator_low_rarity_panel_without_elite2(self) -> None:
         # 低星干员（如黑角）无精英2数据：应显示存在的最高阶段，不出现空白精二行
@@ -262,6 +527,28 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context["max_hp"], "1000")
         self.assertEqual(context["atk"], "100")
         self.assertEqual(context["defense"], "0")
+        # 单等级：无等级 2 变体区块
+        self.assertFalse(context["has_level2"])
+
+    async def test_build_enemy_context_includes_level2_variant(self) -> None:
+        enemy = EnemyInfo(
+            title="爱国者",
+            name="爱国者",
+            levels=[
+                EnemyLevel(max_hp="45000", atk="1600", defense="500", res="45"),
+                # 等级2 变体（差异字段已在解析层从等级1继承补全）
+                EnemyLevel(max_hp="60000", atk="2000", defense="500", res="45"),
+            ],
+        )
+        context = await _build_enemy_context(enemy)
+        self.assertTrue(context["has_level2"])
+        self.assertEqual(context["lv2_hp"], "60000")
+        self.assertEqual(context["lv2_atk"], "2000")
+        self.assertEqual(context["lv2_defense"], "500")
+        self.assertEqual(context["lv2_res"], "45")
+        text = _format_enemy(enemy)
+        self.assertIn("等级2：", text)
+        self.assertIn("生命 60000", text)
 
     async def test_build_stage_context_without_map_url(self) -> None:
         stage = StageInfo(
@@ -277,10 +564,55 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context["title"], "1-7")
         self.assertEqual(context["name"], "暴君")
         self.assertEqual(context["ap_cost"], "6")
-        self.assertEqual(context["drops"], ["固源岩", "代糖"])
+        # drops 升级为 {name, icon} 结构（图标缺失降级空串）
+        self.assertEqual([d["name"] for d in context["drops"]], ["固源岩", "代糖"])
+        self.assertIn("icon", context["drops"][0])
         # 无 map_url → map_image 留空，模板需优雅降级
         self.assertEqual(context["map_image"], "")
         self.assertTrue(context["version"])
+
+    async def test_stage_context_enriches_enemy_basic_stats(self) -> None:
+        """敌方情报基础数值：敌人页一级 HP/攻/防/抗上卡；查不到降级仅名字。"""
+        stage = StageInfo(
+            title="1-7",
+            code="1-7",
+            enemies=[
+                StageEnemy(name="士兵", count="18"),
+                StageEnemy(name="查无此敌", count="1"),
+            ],
+        )
+
+        async def fake_query_enemy(name: str):
+            if name == "士兵":
+                return EnemyInfo(
+                    title="士兵",
+                    name="士兵",
+                    levels=[
+                        EnemyLevel(max_hp="1650", atk="200", defense="100", res="0")
+                    ],
+                )
+            return None
+
+        with mock.patch(
+            "ArknightsUID.arknightsuid_wiki.query_enemy",
+            side_effect=fake_query_enemy,
+        ):
+            context = await _build_stage_context(stage)
+
+        rows = context["enemies"]
+        self.assertEqual(rows[0]["hp"], "1650")
+        self.assertEqual(rows[0]["atk"], "200")
+        self.assertEqual(rows[0]["defense"], "100")
+        self.assertEqual(rows[0]["res"], "0")
+        # 查不到的敌人不携带数值键（模板只显示名字）
+        self.assertNotIn("hp", rows[1])
+        # 文本回退同样带基础数值
+        text = _format_stage(stage, rows)
+        self.assertIn("士兵x18（HP1650·攻200·防100·抗0）", text)
+        self.assertIn("查无此敌x1", text)
+        # 无增强数据时回退纯名单（不带空括号）
+        plain = _format_stage(stage)
+        self.assertIn("士兵x18、查无此敌x1", plain)
 
 
 class WikiRenderOrTextTest(unittest.IsolatedAsyncioTestCase):

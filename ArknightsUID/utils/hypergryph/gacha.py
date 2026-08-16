@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, Any
 from gsuid_core.logger import logger
 
 from ..path import PLAYER_PATH
-from ..player_store import read_player_json, write_player_json
+from ..player_store import assert_uid_segment, read_player_json, write_player_json
 
 if TYPE_CHECKING:
     from ..enduid.adapter import ArkCredential
@@ -37,7 +37,7 @@ _LOGS_NAME = "gacha_logs.json"
 
 
 def _logs_path(uid: str) -> Path:
-    return PLAYER_PATH / uid / _LOGS_NAME
+    return PLAYER_PATH / assert_uid_segment(uid) / _LOGS_NAME
 
 
 def _norm_ts(raw: Any) -> int:
@@ -97,7 +97,12 @@ def merge_records(
 
 
 async def load_local_logs(uid: str) -> list[dict[str, Any]]:
-    data = await read_player_json(_logs_path(uid))
+    # uid 非法（历史脏数据）当无本地记录处理，读路径不抛异常
+    try:
+        path = _logs_path(uid)
+    except (ValueError, TypeError):
+        return []
+    data = await read_player_json(path)
     return data if isinstance(data, list) else []
 
 

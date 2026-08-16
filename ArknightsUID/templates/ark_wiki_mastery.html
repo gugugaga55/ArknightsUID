@@ -18,7 +18,7 @@
             <span class="mast-meta"><span class="idx">15</span>PRTS.WIKI</span>
         </div>
 
-        <div class="titleblock">
+        <div class="titleblock" style="align-items: flex-start;">
             <div>
                 <div class="eyebrow">{{ profession }} · 技能专精材料</div>
                 <h1 class="title title--s"><em>{{ name }}</em></h1>
@@ -28,12 +28,15 @@
                 </div>
                 {% endif %}
             </div>
+            {% if portrait %}
+            <div class="portrait"><img src="{{ portrait }}" alt=""></div>
+            {% endif %}
         </div>
         <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">MASTERY MATERIALS</span></div>
 
         {% for s in skills %}
         <div class="sect">
-            <span class="sect-label">{{ s.name }}</span>
+            <span class="sect-label">{% if s.icon %}<span class="icon" style="width: 26px; height: 26px;"><img src="{{ s.icon }}" alt=""></span>{% endif %}{{ s.name }}</span>
             <span class="sect-en">SKILL {{ loop.index }} // {{ s.mastery_costs | length }} 阶</span>
         </div>
         <div class="rows">
