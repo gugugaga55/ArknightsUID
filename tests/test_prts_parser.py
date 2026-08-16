@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import calendar
 import json
 import time
@@ -202,7 +203,7 @@ class PRTSParserTest(unittest.IsolatedAsyncioTestCase):
             )
         )
         self.assertIn("...", stage_reply)
-        self.assertIn("地图：https://mapen.ark-nights.com/map/main_01-07", stage_reply)
+        self.assertIn("地图：https://map.ark-nights.com/?map=main_01-07", stage_reply)
         self.assertIn("来源：https://prts.wiki/w/", stage_reply)
         self.assertNotIn("掉落8", stage_reply)
         self.assertNotIn("敌人10", stage_reply)
@@ -603,6 +604,54 @@ class PRTSParserTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(info["cnver"], "2.6.01")
         self.assertEqual(info["cnmaintstart"], "2026-08-20 10:00")
+
+
+class StageMapFileTest(unittest.IsolatedAsyncioTestCase):
+    """关卡地图：PRTS 文件命名 {代号}_{关卡名}_地图.png + imageinfo 直链解析。"""
+
+    def test_map_file_title(self) -> None:
+        self.assertEqual(prts_client.map_file_title("1-7", "暴君"), "1-7_暴君_地图.png")
+        self.assertEqual(prts_client.map_file_title("TR-10", "小队防御"), "TR-10_小队防御_地图.png")
+        # 缺代号/关卡名（活动关等）不构造文件名
+        self.assertEqual(prts_client.map_file_title("", "暴君"), "")
+        self.assertEqual(prts_client.map_file_title("CW-1", ""), "")
+
+    def test_resolve_map_file_url_found(self) -> None:
+        async def fake_api(params: dict[str, Any], *, cache_seconds: int = 86400) -> dict[str, Any]:
+            return {
+                "query": {
+                    "pages": {
+                        "3515": {
+                            "title": "文件:1-7 暴君 地图.png",
+                            "imagerepository": "local",
+                            "imageinfo": [{"url": "https://media.prts.wiki/7/74/1-7.png"}],
+                        }
+                    }
+                }
+            }
+
+        orig = prts_client._api
+        prts_client._api = fake_api  # type: ignore[assignment]
+        try:
+            url = asyncio.run(prts_client.resolve_map_file_url("1-7", "暴君"))
+        finally:
+            prts_client._api = orig
+        self.assertEqual(url, "https://media.prts.wiki/7/74/1-7.png")
+
+    def test_resolve_map_file_url_missing_degrades(self) -> None:
+        async def fake_api(params: dict[str, Any], *, cache_seconds: int = 86400) -> dict[str, Any]:
+            # 文件不存在：page 带 missing 标记、无 imageinfo
+            return {"query": {"pages": {"-1": {"title": "文件:CW-1 地图.png", "missing": ""}}}}
+
+        orig = prts_client._api
+        prts_client._api = fake_api  # type: ignore[assignment]
+        try:
+            url = asyncio.run(prts_client.resolve_map_file_url("CW-1", ""))
+            url_found = asyncio.run(prts_client.resolve_map_file_url("CW-1", "编号"))
+        finally:
+            prts_client._api = orig
+        self.assertEqual(url, "")  # 无文件名直接空
+        self.assertEqual(url_found, "")  # 查无文件降级空串
 
 
 class EnemyLevelInheritTest(unittest.TestCase):

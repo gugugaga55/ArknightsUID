@@ -32,6 +32,7 @@ try:
         query_operator,
         query_page,
         query_stage,
+        resolve_map_file_url,
         search_pages,
         select_owner_level,
     )
@@ -52,6 +53,7 @@ except ModuleNotFoundError:
         query_operator,
         query_page,
         query_stage,
+        resolve_map_file_url,
         search_pages,
         select_owner_level,
     )
@@ -815,17 +817,21 @@ async def _enrich_stage_enemies(stage: StageInfo, limit: int = 10) -> list[dict]
 
 async def _build_stage_context(stage: StageInfo) -> dict:
     title = stage.code or stage.title
+    # 地图：PRTS 文件命名规律 {代号}_{关卡名}_地图.png（imageinfo 解析直链，
+    # 24h 缓存）；活动关等无此文件时降级为无图，map_url 仍给 PRTS.Map 链接
     map_b64 = ""
-    if stage.map_url:
+    if stage.code and stage.name:
         try:
-            from ..utils.render import get_image_b64_with_cache
-            from ..utils.resource.RESOURCE_PATH import CACHE_PATH
+            image_url = await resolve_map_file_url(stage.code, stage.name)
+            if image_url:
+                from ..utils.render import get_image_b64_with_cache
+                from ..utils.resource.RESOURCE_PATH import CACHE_PATH
 
-            map_b64 = await get_image_b64_with_cache(
-                stage.map_url, CACHE_PATH / "wiki" / "map"
-            )
+                map_b64 = await get_image_b64_with_cache(
+                    image_url, CACHE_PATH / "wiki" / "map"
+                )
         except Exception:
-            logger.exception("[ArknightsUID] 关卡地图转 base64 失败，模板降级")
+            logger.debug("[ArknightsUID] 关卡地图下载失败，卡片降级无图", exc_info=True)
             map_b64 = ""
 
     async def _drop_rows(names: list[str], limit: int = 8) -> list[dict]:

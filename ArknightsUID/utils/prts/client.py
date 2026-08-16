@@ -24,7 +24,8 @@ except ModuleNotFoundError:
 
 PRTS_API_URL = "https://prts.wiki/api.php"
 PRTS_PAGE_URL = "https://prts.wiki/w/"
-PRTS_MAP_URL = "https://mapen.ark-nights.com/map/"
+# PRTS.Map 交互地图（ark-nights.com 家族，默认中文界面；mapen.* 为英文站）
+PRTS_MAP_URL = "https://map.ark-nights.com/?map="
 # PRTS 的 Tengine 反代实测（2026-08-14）：封杀浏览器特征 UA（Chrome 等一律 403），
 # 放行"可联系的自定义 UA"——这恰是 MediaWiki 官方对 bot 的建议。切勿改成浏览器 UA，
 # 否则 wiki 模块全部接口（query/parse/prop=text）会被打成 403。
@@ -258,6 +259,48 @@ def page_url(title: str) -> str:
 
 def map_url(stage_id: str) -> str:
     return f"{PRTS_MAP_URL}{quote(stage_id, safe='')}" if stage_id else ""
+
+
+def map_file_title(code: str, name: str) -> str:
+    """关卡地图文件名（PRTS 命名规律：`{代号}_{关卡名}_地图.png`）。
+
+    实测覆盖主线（1-7_暴君_地图.png）与教学关（TR-10_小队防御_地图.png）；
+    活动代号（CW- 等）无此命名文件，返回的标题查不到由调用方降级。
+    """
+    if not code or not name:
+        return ""
+    return f"{code}_{name}_地图.png"
+
+
+async def resolve_map_file_url(code: str, name: str) -> str:
+    """关卡地图文件直链（MediaWiki imageinfo，随 _api 缓存 24h）。
+
+    文件不存在/接口失败返回空串——调用方降级为 PRTS.Map 链接。
+    """
+    title = map_file_title(code, name)
+    if not title:
+        return ""
+    data = await _api(
+        {
+            "action": "query",
+            "titles": f"File:{title}",
+            "prop": "imageinfo",
+            "iiprop": "url",
+        }
+    )
+    if not isinstance(data, dict):
+        return ""
+    query = data.get("query")
+    pages = query.get("pages") if isinstance(query, dict) else None
+    if not isinstance(pages, dict):
+        return ""
+    for page in pages.values():
+        if not isinstance(page, dict):
+            continue
+        info = page.get("imageinfo")
+        if isinstance(info, list) and info and isinstance(info[0], dict):
+            return str(info[0].get("url") or "")
+    return ""
 
 
 def _cache_file(params: dict[str, Any]) -> Path:

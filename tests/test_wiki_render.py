@@ -550,7 +550,8 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("等级2：", text)
         self.assertIn("生命 60000", text)
 
-    async def test_build_stage_context_without_map_url(self) -> None:
+    async def test_build_stage_context_without_map_file(self) -> None:
+        """地图文件不存在/解析失败：map_image 留空，其余字段不受影响。"""
         stage = StageInfo(
             title="1-7",
             code="1-7",
@@ -559,7 +560,14 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
             drops=["固源岩", "代糖"],
             enemies=[],
         )
-        context = await _build_stage_context(stage)
+
+        async def no_map(code: str, name: str) -> str:
+            return ""
+
+        with mock.patch(
+            "ArknightsUID.arknightsuid_wiki.resolve_map_file_url", new=no_map
+        ):
+            context = await _build_stage_context(stage)
 
         self.assertEqual(context["title"], "1-7")
         self.assertEqual(context["name"], "暴君")
@@ -567,9 +575,44 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         # drops 升级为 {name, icon} 结构（图标缺失降级空串）
         self.assertEqual([d["name"] for d in context["drops"]], ["固源岩", "代糖"])
         self.assertIn("icon", context["drops"][0])
-        # 无 map_url → map_image 留空，模板需优雅降级
         self.assertEqual(context["map_image"], "")
         self.assertTrue(context["version"])
+
+    async def test_build_stage_context_downloads_map_image(self) -> None:
+        """地图：{代号}_{关卡名}_地图.png 直链解析成功 → 下载转 base64 上卡。"""
+        stage = StageInfo(
+            title="1-7",
+            code="1-7",
+            name="暴君",
+            map_url="https://map.prts.wiki/1-7",
+        )
+
+        async def fake_resolve(code: str, name: str) -> str:
+            self.assertEqual((code, name), ("1-7", "暴君"))
+            return "https://media.prts.wiki/7/74/1-7.png"
+
+        async def fake_fetch(url, cache_path, *args, **kwargs):
+            self.assertEqual(url, "https://media.prts.wiki/7/74/1-7.png")
+            return "BASE64MAP"
+
+        import ArknightsUID.utils.render as render_mod
+
+        with (
+            mock.patch(
+                "ArknightsUID.arknightsuid_wiki.resolve_map_file_url",
+                new=fake_resolve,
+            ),
+            mock.patch.object(render_mod, "get_image_b64_with_cache", fake_fetch),
+        ):
+            context = await _build_stage_context(stage)
+
+        self.assertEqual(context["map_image"], "BASE64MAP")
+        self.assertEqual(context["map_url"], "https://map.prts.wiki/1-7")
+        # 渲染契约：地图图与 PRTS.Map 链接行都上卡
+        template = ark_templates.get_template("ark_wiki_stage.html")
+        html = template.render(font_css_url="about:blank", **context)
+        self.assertIn("关卡地图", html)
+        self.assertIn("PRTS.MAP // https://map.prts.wiki/1-7", html)
 
     async def test_stage_context_enriches_enemy_basic_stats(self) -> None:
         """敌方情报基础数值：敌人页一级 HP/攻/防/抗上卡；查不到降级仅名字。"""

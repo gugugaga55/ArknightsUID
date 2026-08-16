@@ -634,6 +634,17 @@ async def _enrich_icons(name: str, context: dict) -> None:
         from ArknightsUID.utils.gamedata.itemicon import enemy_icon_b64
 
         context["icon"] = await enemy_icon_b64(context["name"])
+    elif name == "ark_wiki_stage.html":
+        # 真实关卡地图（PRTS 文件 {代号}_{关卡名}_地图.png，走缓存）
+        from ArknightsUID.utils.prts.client import resolve_map_file_url
+        from ArknightsUID.utils.render import get_image_b64_with_cache
+        from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
+
+        image_url = await resolve_map_file_url(context["title"], context["name"])
+        if image_url:
+            context["map_image"] = await get_image_b64_with_cache(
+                image_url, CACHE_PATH / "wiki" / "map"
+            )
     elif name in ("ark_recruit.html", "ark_gacha_card.html"):
         # 行内小头像：精确名反查 charId → 初始头像
         from ArknightsUID.utils.gamedata.charinfo import load_char_index

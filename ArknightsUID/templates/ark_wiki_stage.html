@@ -11,7 +11,8 @@
     enemies: [{name, count, level, hp, atk, defense, res}]
           基础数值取敌人页一级数据（完整数值/技能效果走 ark敌人 详情卡）
     assault_diffs: [str]  突袭差异
-    map_image: str        地图 base64（可为空）
+    map_image: str        地图 base64（PRTS 文件 {代号}_{关卡名}_地图.png，可为空）
+    map_url: str          PRTS.Map 交互地图链接（可为空）
     map_url/source_url/version: str
 -->
 <!DOCTYPE html>
@@ -109,6 +110,9 @@
         <div class="figure">
             <img src="{{ map_image }}" alt="关卡地图">
         </div>
+        {% endif %}
+        {% if map_url %}
+        <div class="mono" style="font-size: 10px; color: var(--tx-3); letter-spacing: 0.4px; margin-top: 4px;">PRTS.MAP // {{ map_url }}</div>
         {% endif %}
 
         <div class="foot">
