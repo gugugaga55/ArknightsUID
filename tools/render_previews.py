@@ -382,13 +382,30 @@ MOCK_CONTEXTS = {
         "source_url": "https://prts.wiki/w/1-7",
         "version": VERSION,
     },
+    "ark_rogue_relic.html": {
+        "name": "钝爪-典训",
+        "rows": [
+            {
+                "usage": "立即进阶一个【先锋】干员（不消耗希望）",
+                "rarity_name": "普通",
+                "themes": ["岁的界园志异", "萨卡兹的无终奇语", "探索者的银凇止境", "水月与深蓝之树", "傀影与猩红孤钻"],
+                "icon": "",
+            },
+        ],
+        "desc": "一套强有力的装备，一颗勇往直前的心。",
+        "source_note": "数据 ArknightsGameData · 图标 tomimi.dev",
+        "version": VERSION,
+    },
     "ark_rogue.html": {
         "name": "刀客塔不吃香菜",
         "uid": "12****89",
+        "total_clears": 52,
+        "total_relics": 618,
         "records": [
             {
-                "rogue_id": "rogue_2",
-                "name": "傀影与猩红孤钻",
+                "rogue_id": "rogue_6",
+                "name": "岁的界园志异",
+                "latest": True,
                 "clear_time": 27,
                 "bp_level": 155,
                 "relic_cnt": 186,
@@ -398,7 +415,7 @@ MOCK_CONTEXTS = {
                 "medal_total": 120,
             },
             {
-                "rogue_id": "rogue_3",
+                "rogue_id": "rogue_5",
                 "name": "水月与深蓝之树",
                 "clear_time": 12,
                 "bp_level": 80,
@@ -639,6 +656,14 @@ async def _enrich_icons(name: str, context: dict) -> None:
         from ArknightsUID.utils.gamedata.itemicon import enemy_icon_b64
 
         context["icon"] = await enemy_icon_b64(context["name"])
+    elif name == "ark_rogue_relic.html":
+        from ArknightsUID.utils.gamedata.rogue_relic import relic_icon_b64
+
+        for row in context.get("rows", []):
+            row["icon"] = ""
+        # 首行用已知存在的图标（钝爪-典训 rogue_5 档）
+        if context.get("rows"):
+            context["rows"][0]["icon"] = await relic_icon_b64("rogue_5_relic_legacy_1")
     elif name == "ark_wiki_stage.html":
         # 真实关卡地图（PRTS 文件 {代号}_{关卡名}_地图.png，走缓存）
         from ArknightsUID.utils.prts.client import resolve_map_file_url

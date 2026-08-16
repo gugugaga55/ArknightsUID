@@ -30,12 +30,15 @@ GAMEDATA_BASE = (
 CHAR_TABLE_URL = f"{GAMEDATA_BASE}/character_table.json"
 SKILL_TABLE_URL = f"{GAMEDATA_BASE}/skill_table.json"
 ITEM_TABLE_URL = f"{GAMEDATA_BASE}/item_table.json"
+# 肉鸽全量表（~18MB：6 期主题的藏品/结局/分队/招募券等；tomimi.dev 同源数据）
+ROGUE_TOPIC_TABLE_URL = f"{GAMEDATA_BASE}/roguelike_topic_table.json"
 
 GAMEDATA_CACHE_DIR = CACHE_PATH / "gamedata"
 GAMEDATA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 CHAR_TABLE_PATH = GAMEDATA_CACHE_DIR / "character_table.json"
 SKILL_TABLE_PATH = GAMEDATA_CACHE_DIR / "skill_table.json"
 ITEM_TABLE_PATH = GAMEDATA_CACHE_DIR / "item_table.json"
+ROGUE_TOPIC_TABLE_PATH = GAMEDATA_CACHE_DIR / "roguelike_topic_table.json"
 
 # 全量缓存 TTL（game data 随版本更新，7 天足够）
 CHAR_TABLE_TTL = 7 * 86400
@@ -107,6 +110,19 @@ def _write_sidecar(path: Path, payload: Any) -> None:
             f"[ArknightsUID·gamedata] 精简缓存写入失败 {path.name}: "
             f"{exc.__class__.__name__}"
         )
+
+
+async def ensure_rogue_topic_table(force: bool = False) -> dict[str, Any] | None:
+    """确保 roguelike_topic_table 可用（同 ensure_char_table 策略；~18MB）。"""
+    if not force and _cache_fresh(ROGUE_TOPIC_TABLE_PATH, CHAR_TABLE_TTL):
+        cached = _read_wrapped_cache(ROGUE_TOPIC_TABLE_PATH)
+        if cached is not None:
+            return cached
+    fresh = await _download_json(ROGUE_TOPIC_TABLE_URL)
+    if isinstance(fresh, dict):
+        _write_wrapped_cache(ROGUE_TOPIC_TABLE_PATH, fresh)
+        return fresh
+    return _read_wrapped_cache(ROGUE_TOPIC_TABLE_PATH)
 
 
 async def ensure_char_table(force: bool = False) -> dict[str, Any] | None:

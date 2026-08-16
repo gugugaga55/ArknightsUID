@@ -1017,6 +1017,85 @@ async def send_enemy_page(bot: Bot, ev: Event) -> None:
     )
 
 
+def _format_relic(name: str, groups: list[dict]) -> str:
+    lines = [f"「明日方舟」肉鸽藏品：{name}"]
+    for i, g in enumerate(groups):
+        head = f"  [{g.get('rarity_name') or g.get('rarity') or '-'}]"
+        lines.append(
+            f"{head} {'、'.join(t for t in g['themes'] if t)}\n    {_clip(g['usage'] or '（无效果说明）', 200)}"
+        )
+    desc = next((g["desc"] for g in groups if g.get("desc")), "")
+    if desc:
+        lines.append(f"  趣文：{_clip(desc, 120)}")
+    return "\n".join(lines)
+
+
+async def _build_relic_context(name: str, groups: list[dict]) -> dict:
+    """藏品卡：同名跨期按效果去重，每组带主题与图标（tomimi 资源）。"""
+    rows = []
+    for g in groups:
+        icon = ""
+        if g.get("icon_id"):
+            try:
+                from ..utils.gamedata.rogue_relic import relic_icon_b64
+
+                icon = await relic_icon_b64(g["icon_id"])
+            except Exception:
+                logger.debug("[ArknightsUID] 藏品图标获取失败", exc_info=True)
+        rows.append(
+            {
+                "usage": g.get("usage") or "",
+                "rarity_name": g.get("rarity_name") or "",
+                "themes": [t for t in g.get("themes", []) if t],
+                "icon": icon,
+            }
+        )
+    desc = next((g["desc"] for g in groups if g.get("desc")), "")
+    return {
+        "name": name,
+        "rows": rows,
+        "desc": _clip(desc, 160),
+        "source_note": "数据 ArknightsGameData · 图标 tomimi.dev",
+        "version": ArknightsUID_version,
+    }
+
+
+@wiki_sv.on_command(("藏品", "肉鸽藏品"), block=True)
+async def send_relic_query(bot: Bot, ev: Event) -> None:
+    query = _clean_query(ev.text)
+    if not query:
+        return await _send_text(bot, ev, "用法：ark藏品 名字（如 ark藏品 钝爪-典训）")
+    try:
+        from ..utils.gamedata.rogue_relic import (
+            group_relic_effects,
+            load_relic_index,
+            match_relics,
+        )
+
+        index = await load_relic_index()
+    except Exception:
+        logger.exception("[ArknightsUID] 藏品索引加载失败")
+        index = {}
+    if not index:
+        return await _send_text(
+            bot, ev, "藏品数据不可用（roguelike_topic_table 拉取失败），请稍后再试。"
+        )
+
+    matched = match_relics(query, index)
+    if not matched:
+        return await _send_text(bot, ev, f"未找到藏品：{query}")
+    if len(matched) > 1:
+        shown = "、".join(matched)
+        return await _send_text(bot, ev, f"找到 {len(matched)} 个候选：{shown}（请用完整名）")
+
+    name = matched[0]
+    groups = group_relic_effects(index[name])
+    context = await _build_relic_context(name, groups)
+    return await _render_or_text(
+        bot, ev, "ark_rogue_relic.html", context, _format_relic(name, groups)
+    )
+
+
 @wiki_sv.on_command(("关卡", "stage", "地图"), block=True)
 async def send_stage_page(bot: Bot, ev: Event) -> None:
     query = _clean_query(ev.text)

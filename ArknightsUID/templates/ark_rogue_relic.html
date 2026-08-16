@@ -1,0 +1,62 @@
+<!--
+  ark_rogue_relic.html —— 肉鸽藏品卡（#15）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_wiki._build_relic_context 提供）：
+    name: str
+    rows: [{usage, rarity_name, themes: [str], icon}]  同名跨期按效果去重
+    desc: str            趣文（可空）
+    source_note: str
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="RELIC">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 藏品档案 RELIC FILE</em></span>
+            <span class="mast-meta"><span class="idx">15</span>IS ARCHIVE</span>
+        </div>
+
+        <div class="titleblock" style="align-items: flex-start;">
+            <div>
+                <div class="eyebrow">集成战略 · 收藏品</div>
+                <h1 class="title title--s">{{ name }}</h1>
+                {% if rows and rows[0].rarity_name %}
+                <div style="margin-top: var(--space-2); display: flex; gap: 6px; flex-wrap: wrap;">
+                    <span class="chip chip--ink" style="height: 22px;">{{ rows[0].rarity_name }}</span>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+        <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">RELIC FILE</span></div>
+
+        {% for r in rows %}
+        <div class="rows" style="margin-top: var(--space-4);">
+            <div class="row" style="display: block;">
+                <div style="display: flex; align-items: center; gap: 10px; min-width: 0;">
+                    {% if r.icon %}<span class="icon" style="width: 40px; height: 40px;"><img src="{{ r.icon }}" alt=""></span>{% endif %}
+                    <div style="flex: 1; min-width: 0;">
+                        <div style="font-size: 12px; color: var(--tx-0); line-height: 1.7;">{{ r.usage or "（无效果说明）" }}</div>
+                        <div class="mono" style="margin-top: 4px; font-size: 10px; color: var(--tx-2); letter-spacing: 0.3px;">{{ r.themes | join(" · ") }}</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endfor %}
+
+        {% if desc %}
+        <div class="prose prose--blue" style="margin-top: var(--space-4);"><strong>趣文</strong>　{{ desc }}</div>
+        {% endif %}
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · {{ source_note }}</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// IS // RELIC ARCHIVE</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

@@ -3,8 +3,10 @@
   设计语言：罗德岛终端（见 ark_base.css 头部注释）
   上下文（由 arknightsuid_rogue 组装）：
     name: str, uid: str
+    total_clears/total_relics: int   合计小结（最新期 records[0]，r.latest 标记）
     records: [{
         rogue_id: str,        主题 ID（rogue_1..rogue_6）
+        latest: bool,         最新期（模板加 · 进行中 标）
         name: str,            主题名（可选，缺省显示 rogue_id）
         clear_time: int,      通关次数
         bp_level: int,        声望等级
@@ -34,9 +36,30 @@
             </div>
         </div>
 
+        {% if total_clears is defined and total_clears %}
+        <div class="grid grid-4" style="margin-top: var(--space-3);">
+            <div class="cell">
+                <div class="cell-label">合计通关 TOTAL</div>
+                <div class="cell-value">{{ total_clears }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">收藏解锁 RELICS</div>
+                <div class="cell-value">{{ total_relics }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">主题 THEMES</div>
+                <div class="cell-value">{{ records | length }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">最新 CURRENT</div>
+                <div class="cell-value" style="font-size: 12px;">{{ records[0].name if records else "-" }}</div>
+            </div>
+        </div>
+        {% endif %}
+
         {% for r in records %}
         <div class="sect">
-            <span class="sect-label bk">{{ r.name or r.rogue_id }}</span>
+            <span class="sect-label bk">{{ r.name or r.rogue_id }}{% if r.latest %} · 最新{% endif %}</span>
             <span class="sect-en">{{ r.rogue_id }}</span>
         </div>
         <div class="grid grid-4">

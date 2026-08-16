@@ -25,18 +25,32 @@ except ModuleNotFoundError:
 
 rogue_sv = SV("ArknightsUID肉鸽", priority=5)
 
-# 集成战略主题名（rogue_id → 官方主题名，客观游戏数据）
+# 集成战略主题名（玩家数据 rogue_id → 官方主题名，客观游戏数据）。
+# 推位规律（roguelike_topic_table 5 对名字全吻合验证）：主题表 rogue_N 从傀影
+# 起编，玩家数据从灰蕈迷境起编——玩家 rogue_6 = 表 rogue_5 = 岁的界园志异。
 ROGUE_THEME_NAMES = {
     "rogue_1": "刻俄柏的灰蕈迷境",
     "rogue_2": "傀影与猩红孤钻",
     "rogue_3": "水月与深蓝之树",
     "rogue_4": "探索者的银凇止境",
     "rogue_5": "萨卡兹的无终奇语",
+    "rogue_6": "岁的界园志异",
+    "rogue_7": "沉沦者的黑流树海",
 }
 
 
 async def _send_text(bot: Bot, ev: Event, msg: str) -> None:
     await bot.send((" " if ev.group_id else "") + msg, at_sender=bool(ev.group_id))
+
+
+def _rogue_sort_key(rogue_id: str) -> int:
+    digits = "".join(ch for ch in rogue_id if ch.isdigit())
+    return int(digits) if digits else 0
+
+
+def _sorted_records(records: list) -> list:
+    """最新期在前（rogue_N 数字倒序）。"""
+    return sorted(records, key=lambda r: -_rogue_sort_key(r.rogue_id))
 
 
 def _format_rogue(response: object) -> str:
@@ -54,12 +68,19 @@ def _format_rogue(response: object) -> str:
     info = parse_rogue(rogue)
     lines = ["「明日方舟」集成战略（肉鸽）"]
     if info and info.records:
-        for r in info.records:
+        # 最新期在前 + 合计小结（与卡片一致）
+        records = _sorted_records(info.records)
+        for r in records:
+            theme = ROGUE_THEME_NAMES.get(r.rogue_id, r.rogue_id)
             lines.append(
-                f"[{r.rogue_id}] 通关 {r.clear_time} | 声望 {r.bp_level} | "
+                f"{theme}：通关 {r.clear_time} | 声望 {r.bp_level} | "
                 f"收藏 {r.relic_cnt} | 蜡烛 {r.bank.current}/{r.bank.record} | "
                 f"奖章 {r.medal.current}/{r.medal.total}"
             )
+        lines.append(
+            f"合计通关 {sum(r.clear_time for r in records)} 次"
+            f"（{len(records)} 期主题）"
+        )
         return "\n".join(lines)
     # 无 records 但有 rogue dict：通用遍历兜底
     flat = flatten_rogue(rogue)
@@ -84,23 +105,30 @@ def _build_rogue_context(response: object) -> dict | None:
         return None
     name = path(response, "data", "status", "nickName") or "博士"
     uid = path(response, "data", "status", "uid") or ""
+    records = _sorted_records(info.records)
+    rows = [
+        {
+            "rogue_id": r.rogue_id,
+            "name": ROGUE_THEME_NAMES.get(r.rogue_id, r.rogue_id),
+            "clear_time": r.clear_time,
+            "bp_level": r.bp_level,
+            "relic_cnt": r.relic_cnt,
+            "bank_current": r.bank.current,
+            "bank_record": r.bank.record,
+            "medal_current": r.medal.current,
+            "medal_total": r.medal.total,
+            "latest": False,
+        }
+        for r in records
+    ]
+    if rows:
+        rows[0]["latest"] = True
     return {
         "name": name,
         "uid": uid,
-        "records": [
-            {
-                "rogue_id": r.rogue_id,
-                "name": ROGUE_THEME_NAMES.get(r.rogue_id, r.rogue_id),
-                "clear_time": r.clear_time,
-                "bp_level": r.bp_level,
-                "relic_cnt": r.relic_cnt,
-                "bank_current": r.bank.current,
-                "bank_record": r.bank.record,
-                "medal_current": r.medal.current,
-                "medal_total": r.medal.total,
-            }
-            for r in info.records
-        ],
+        "records": rows,
+        "total_clears": sum(r.clear_time for r in records),
+        "total_relics": sum(r.relic_cnt for r in records),
         "version": ArknightsUID_version,
     }
 
