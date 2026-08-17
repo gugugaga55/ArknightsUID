@@ -32,6 +32,7 @@
                 <h1 class="title">基建<em>总览</em></h1>
                 <div class="title-rule"><span class="en">BASE INFRASTRUCTURE</span></div>
             </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_building.b64" %}" alt="博士">
         </div>
 
         <div class="sect">
@@ -136,9 +137,16 @@
 
         {% if training_trainee %}
         <div class="rows" style="margin-top: 0; border-top: 0;">
-            <div class="row">
-                <span class="row-label">训练室 TRAINING</span>
-                <span class="row-value">{{ training_trainee }} 专精训练中{% if training_remain %} · {{ training_remain }}{% endif %}</span>
+            <div class="row" style="display: block;">
+                <div class="bar-row" style="margin-bottom: var(--space-2);">
+                    <span class="row-label">训练室 TRAINING</span>
+                    <span style="flex: 1;"></span>
+                    <span class="bar-num">{{ training_trainee }} 专精训练中{% if training_remain %} · {{ training_remain }}{% endif %}</span>
+                </div>
+                <div class="bar bar--lg">
+                    <i style="width: {{ training_pct }}%;"></i>
+                    <span class="bar-txt">{{ training_pct }}%</span>
+                </div>
             </div>
         </div>
         {% endif %}

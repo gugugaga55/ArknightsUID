@@ -1,0 +1,93 @@
+<!--
+  ark_rogue_enemy.html —— 肉鸽敌人 buff 面板卡（#16）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_rogue._build_rogue_enemy_context 提供）：
+    name/enemy_key/tags: str
+    icon: str             头像 base64（tomimi enemy_icons，可空）
+    forms: [{title, hp, atk, def, res, weight, attack}]  基础形态面板
+    theme_name: str       所属期（空 = 未识别，仅基础面板）
+    panels: [{grade, label, stats: {hp/atk/def/res}, notes: [str]}]  难度累积面板
+    source_note/version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="IS-ENEMY">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 肉鸽敌人面板 I.S. ENEMY</em></span>
+            <span class="mast-meta"><span class="idx">16</span>TOMIMI.DATA</span>
+        </div>
+
+        <div class="titleblock" style="align-items: flex-start;">
+            <div style="display: flex; gap: 12px; align-items: center; min-width: 0;">
+                {% if icon %}<span class="icon" style="width: 48px; height: 48px;"><img src="{{ icon }}" alt=""></span>{% endif %}
+                <div>
+                    <div class="eyebrow">集成战略 · 敌人档案</div>
+                    <h1 class="title title--s">{{ name }}</h1>
+                </div>
+            </div>
+        </div>
+        {% if tags %}
+        <div class="chip-flow" style="margin-top: var(--space-3);">
+            {% for t in tags %}<span class="chip {% if t == '领袖' %}chip--red{% else %}chip--ink{% endif %}">{{ t }}</span>{% endfor %}
+        </div>
+        {% endif %}
+        <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">ENEMY PANEL</span></div>
+
+        <div class="sect" style="margin-top: var(--space-4);">
+            <span class="sect-label bk">基础面板</span>
+            <span class="sect-en">BASE // {{ forms | length }} FORMS</span>
+        </div>
+        <div class="rows">
+            {% for f in forms %}
+            <div class="row" style="display: block;">
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                    <span class="row-value" style="font-size: 13px;">{{ f.title }}</span>
+                    <span class="bar-num">{{ f.attack }}</span>
+                </div>
+                <div class="mono" style="margin-top: 3px; font-size: 10px; color: var(--tx-2); letter-spacing: 0.3px;">
+                    HP {{ f.hp }} · 攻 {{ f.atk }} · 防 {{ f.def }} · 抗 {{ f.res }} · 重量 {{ f.weight }}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        {% if theme_name and panels %}
+        <div class="sect" style="margin-top: var(--space-4);">
+            <span class="sect-label bk">难度面板 · {{ theme_name }}</span>
+            <span class="sect-en">DIFF CUMULATIVE</span>
+        </div>
+        <div class="rows">
+            {% for p in panels %}
+            <div class="row" style="display: block;">
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                    <span class="row-value" style="font-size: 12px;">{{ p.label }}</span>
+                    <span class="bar-num mono">{{ p.stats.hp }} / {{ p.stats.atk }} / {{ p.stats.def }} / {{ p.stats.res }}</span>
+                </div>
+                {% if p.notes %}
+                <div class="mono" style="margin-top: 2px; font-size: 10px; color: var(--tx-2);">{{ p.notes | join("、") }}</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+        <div class="prose" style="margin-top: var(--space-3); font-size: 11px;">
+            难度效果累积生效；HP/攻/防/抗 列为对应档位面板。层数增益（每层按 floorBuff 复合）未计入，完整交互模拟见 tomimi.dev。
+        </div>
+        {% else %}
+        <div class="prose" style="margin-top: var(--space-4); font-size: 11px;">
+            未识别所属期（该敌人未被任何难度效果显式标注且无期标签），仅展示基础面板。
+        </div>
+        {% endif %}
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · {{ source_note }}</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// IS // ENEMY ARCHIVE</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

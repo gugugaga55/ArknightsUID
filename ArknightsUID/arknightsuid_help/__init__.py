@@ -40,6 +40,7 @@ HELP_GROUPS = [
             {"cmd": "arkBOX", "desc": "BOX 稀有度/精英化分析卡", "eg": "arkBOX"},
             {"cmd": "ark练度卡 <干员>", "desc": "单干员练度卡（技能效果/别名）", "eg": "ark练度卡 银灰"},
             {"cmd": "ark肉鸽", "desc": "集成战略进度卡", "eg": "ark肉鸽"},
+            {"cmd": "ark肉鸽敌人 <名字>", "desc": "肉鸽敌人难度面板", "eg": "ark肉鸽敌人 歌利亚"},
             {"cmd": "ark签到", "desc": "森空岛每日签到", "eg": "ark签到 2"},
         ],
     },
@@ -102,17 +103,10 @@ HELP_TEXT = _help_text()
 
 @help_sv.on_fullmatch(("帮助", "help", "方舟帮助"), block=True)
 async def send_ark_help(bot: Bot, ev: Event) -> None:
-    figure = ""
-    try:
-        # 帮助卡装饰干员立绘（透明 PNG 浮空图；失败空串降级）
-        from ..utils.player.context import char_portrait_b64
-
-        figure = await char_portrait_b64("char_002_amiya", 5)
-    except Exception:
-        figure = ""
+    # 装饰 Q 版表情包为模板烘焙资产（templates/assets/sticker_help.b64），
+    # 无需运行时下载
     context = {
         "version": ArknightsUID_version,
         "groups": HELP_GROUPS,
-        "figure": figure,
     }
     await send_card_or_text(bot, ev, "ark_help.html", context, HELP_TEXT)

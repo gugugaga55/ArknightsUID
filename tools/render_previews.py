@@ -382,6 +382,23 @@ MOCK_CONTEXTS = {
         "source_url": "https://prts.wiki/w/1-7",
         "version": VERSION,
     },
+    "ark_rogue_enemy.html": {
+        "name": "歌利亚",
+        "enemy_key": "enemy_2074_skzgly",
+        "tags": ["领袖", "近战"],
+        "icon": "",
+        "forms": [
+            {"title": "形态1", "hp": 80000, "atk": 2350, "def": 1000, "res": 25, "weight": 5, "attack": "近战/物理"},
+        ],
+        "theme_name": "萨卡兹的无终奇语",
+        "panels": [
+            {"grade": 0, "label": "难度0·新手（HP×0.8）", "stats": {"hp": 64000, "atk": 2350, "def": 1000, "res": 25}, "notes": []},
+            {"grade": 4, "label": "难度4", "stats": {"hp": 96000, "atk": 2350, "def": 1000, "res": 25}, "notes": []},
+            {"grade": 7, "label": "难度7~15 起（更高档数值不变）", "stats": {"hp": 96000, "atk": 2585, "def": 1000, "res": 25}, "notes": ["dmg_res 0.1"]},
+        ],
+        "source_note": "数据 tomimi.dev（游戏解包）",
+        "version": VERSION,
+    },
     "ark_rogue_relic.html": {
         "name": "钝爪-典训",
         "rows": [
@@ -656,6 +673,11 @@ async def _enrich_icons(name: str, context: dict) -> None:
         from ArknightsUID.utils.gamedata.itemicon import enemy_icon_b64
 
         context["icon"] = await enemy_icon_b64(context["name"])
+    elif name == "ark_rogue_enemy.html":
+        from ArknightsUID.utils.gamedata.rogue_enemy import enemy_icon_b64
+
+        if context.get("enemy_key"):
+            context["icon"] = await enemy_icon_b64(context["enemy_key"])
     elif name == "ark_rogue_relic.html":
         from ArknightsUID.utils.gamedata.rogue_relic import relic_icon_b64
 

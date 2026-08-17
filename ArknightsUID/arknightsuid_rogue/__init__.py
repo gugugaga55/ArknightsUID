@@ -11,6 +11,7 @@ try:
         fetch_player_info,
         resolve_credential,
     )
+    from ArknightsUID.ArknightsUID.utils.gamedata.rogue_enemy import STAT_LABELS
     from ArknightsUID.ArknightsUID.utils.rogue import flatten_rogue, parse_rogue
     from ArknightsUID.ArknightsUID.version import ArknightsUID_version
 except ModuleNotFoundError:
@@ -20,6 +21,7 @@ except ModuleNotFoundError:
         fetch_player_info,
         resolve_credential,
     )
+    from ArknightsUID.utils.gamedata.rogue_enemy import STAT_LABELS
     from ArknightsUID.utils.rogue import flatten_rogue, parse_rogue
     from ArknightsUID.version import ArknightsUID_version
 
@@ -131,6 +133,101 @@ def _build_rogue_context(response: object) -> dict | None:
         "total_relics": sum(r.relic_cnt for r in records),
         "version": ArknightsUID_version,
     }
+
+
+def _format_rogue_enemy(context: dict) -> str:
+    lines = [f"「明日方舟」肉鸽敌人：{context['name']}"]
+    tags = " ".join(context["tags"])
+    if tags:
+        lines.append(f"类别：{tags}")
+    for form in context["forms"]:
+        lines.append(
+            f"{form['title']}：HP {form['hp']} 攻 {form['atk']} "
+            f"防 {form['def']} 抗 {form['res']} 重量 {form['weight']}（{form['attack']}）"
+        )
+    if context["theme_name"]:
+        lines.append(f"难度面板（{context['theme_name']}，累积生效）：")
+        for row in context["panels"]:
+            stat = " ".join(
+                f"{STAT_LABELS[k]}{v}" for k, v in row["stats"].items()
+            )
+            note = f"｜{'、'.join(row['notes'])}" if row["notes"] else ""
+            lines.append(f"  {row['label']}：{stat}{note}")
+        lines.append("  注：层数增益（每层按 floorBuff 复合）未计入，完整模拟见 tomimi.dev")
+    else:
+        lines.append("难度面板：未识别所属期（仅基础面板）")
+    return "\n".join(lines)
+
+
+async def _build_rogue_enemy_context(query: str) -> dict | str:
+    """肉鸽敌人 buff 面板查询：基础形态面板 + 所属期难度累积面板。"""
+    from ..utils.gamedata.rogue_enemy import (
+        THEME_DIRS,
+        build_diff_panels,
+        class_labels,
+        detect_theme,
+        enemy_icon_b64,
+        form_context,
+        load_difficulty_mods,
+        load_enemy_db,
+        match_rogue_enemies,
+    )
+
+    db = await load_enemy_db()
+    if not db:
+        return "敌人库不可用（tomimi 数据拉取失败），请稍后再试。"
+    matched = match_rogue_enemies(query, db)
+    if not matched:
+        return f"未找到肉鸽敌人：{query}"
+    if len(matched) > 1:
+        shown = "、".join(db[k].get("name_zh", k) for k in matched)
+        return f"找到 {len(matched)} 个候选：{shown}（请用完整名）"
+
+    entry = db[matched[0]]
+    diff_data = await load_difficulty_mods()
+    theme_dir = detect_theme(
+        str(entry.get("key") or ""), list(entry.get("type") or []), diff_data
+    )
+    panels = build_diff_panels(entry, diff_data.get(theme_dir) or []) if theme_dir else []
+    icon = await enemy_icon_b64(str(entry.get("key") or ""))
+    tags = class_labels(entry) + [
+        t for t in ("近战", "远程") if t in "/".join(
+            tt for f in (entry.get("forms") or [])
+            for tt in ((f.get("normal_attack") or {}).get("atk_type") or [])
+        )
+    ]
+    return {
+        "name": str(entry.get("name_zh") or entry.get("key") or ""),
+        "enemy_key": str(entry.get("key") or ""),
+        "tags": tags,
+        "icon": icon,
+        "forms": form_context(entry),
+        "theme_name": THEME_DIRS.get(theme_dir or "", ""),
+        "panels": panels,
+        "source_note": "数据 tomimi.dev（游戏解包）",
+        "version": ArknightsUID_version,
+    }
+
+
+@rogue_sv.on_command(("肉鸽敌人", "is敌人"), block=True)
+async def send_rogue_enemy(bot: Bot, ev: Event) -> None:
+    query = ev.text.strip().strip("：:").strip()
+    if not query:
+        return await _send_text(bot, ev, "用法：ark肉鸽敌人 名字（如 ark肉鸽敌人 歌利亚）")
+    result = await _build_rogue_enemy_context(query)
+    if isinstance(result, str):
+        return await _send_text(bot, ev, result)
+
+    img = None
+    try:
+        from ..utils.render import ark_templates, render_html
+
+        img = await render_html(ark_templates, "ark_rogue_enemy.html", result)
+    except Exception:
+        img = None
+    if img:
+        return await bot.send(img, at_sender=bool(ev.group_id))
+    await _send_text(bot, ev, _format_rogue_enemy(result))
 
 
 @rogue_sv.on_command(("肉鸽", "集成战略"), block=True)

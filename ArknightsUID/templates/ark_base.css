@@ -893,6 +893,16 @@ body {
 
 .aicon--md { width: 32px; height: 32px; }
 
+/* === 官方 Q 版表情包贴纸（烘焙资产，标题区右侧拍立得式装饰）=== */
+.sticker {
+    width: 96px;
+    height: auto;
+    flex-shrink: 0;
+    transform: rotate(4deg);
+    filter: drop-shadow(0 5px 10px rgba(22, 24, 29, 0.22));
+    border-radius: 4px;
+}
+
 /* === 装饰浮空立绘（帮助卡标题区右侧，透明 PNG 无框）=== */
 .figure-float {
     width: 120px;
