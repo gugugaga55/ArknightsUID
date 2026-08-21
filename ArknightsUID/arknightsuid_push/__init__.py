@@ -439,3 +439,151 @@ async def check_ark_activities() -> None:
     seen.extend(entries.keys())
     save_push_state({"seen": seen})
     logger.info("[ArknightsUID·推送] 推送完毕")
+
+
+# ---------------------------------------------------------------------------
+# 材料合成树（ark合成）与刷图规划（ark计划）
+# ---------------------------------------------------------------------------
+
+
+def _match_item_id(query: str, item_index: dict) -> str | None:
+    """材料名 → itemId：精确 → 唯一前缀。歧义/无匹配返回 None。"""
+    exact = [iid for iid, info in item_index.items() if info.get("name") == query]
+    if len(exact) == 1:
+        return exact[0]
+    prefix = [
+        iid for iid, info in item_index.items()
+        if str(info.get("name", "")).startswith(query)
+    ]
+    return prefix[0] if len(prefix) == 1 else None
+
+
+def _parse_plan_targets(text: str) -> list[tuple[str, int]]:
+    """「材料:数量 材料:数量 …」→ [(name, count)]；数量默认 1。"""
+    targets: list[tuple[str, int]] = []
+    for token in (text or "").split():
+        if ":" in token or "：" in token:
+            name, _, count_text = token.replace("：", ":").partition(":")
+        else:
+            name, count_text = token, "1"
+        try:
+            count = max(1, int(count_text))
+        except ValueError:
+            count = 1
+        if name:
+            targets.append((name, count))
+    return targets
+
+
+@push_sv.on_command(("合成", "合成树"), block=True)
+async def show_craft_tree(bot: Bot, ev: Event) -> None:
+    """ark合成 材料 → 加工站合成树（含子材料递归）+ 直刷对比。"""
+    query = ev.text.strip()
+    if not query:
+        return await _send_text(bot, ev, "用法：ark合成 材料名（如 ark合成 聚酸酯块）")
+
+    try:
+        from ArknightsUID.utils.gamedata.craft import (
+            craft_tree,
+            format_craft_tree,
+            load_formulas,
+        )
+    except ModuleNotFoundError:
+        from ArknightsUID.ArknightsUID.utils.gamedata.craft import (
+            craft_tree,
+            format_craft_tree,
+            load_formulas,
+        )
+
+    item_index = await load_item_index()
+    if not item_index:
+        return await _send_text(bot, ev, "物品数据不可用（gamedata 拉取失败），请稍后再试。")
+    item_id = _match_item_id(query, item_index)
+    if not item_id:
+        return await _send_text(bot, ev, f"未找到材料「{query}」（或匹配到多种，请写全名）。")
+
+    formulas = await load_formulas()
+    if not formulas or item_id not in formulas:
+        return await _send_text(
+            bot, ev, f"「{item_index[item_id]['name']}」不可合成（无加工站配方）。"
+        )
+
+    tree = craft_tree(item_id, formulas, item_index, need=1)
+    lines = [f"「明日方舟」{item_index[item_id]['name']} · 合成树"]
+    lines.extend(format_craft_tree(tree, item_index))
+    lines.append("数据：ArknightsGameData（workshopFormulas）；合成需加工站 Lv3")
+    await _send_text(bot, ev, "\n".join(lines))
+
+
+@push_sv.on_command(("计划", "刷图计划"), block=True)
+async def show_farm_plan(bot: Bot, ev: Event) -> None:
+    """ark计划 材料:数量 [...] → 直刷 vs 合成 规划（去哪刷/多少理智）。"""
+    text = ev.text.strip()
+    targets = _parse_plan_targets(text)
+    if not targets:
+        return await _send_text(
+            bot, ev,
+            "用法：ark计划 材料:数量 [材料:数量 …]（如 ark计划 聚酸酯块:10 龙门币:20000）",
+        )
+
+    try:
+        from ArknightsUID.utils.gamedata.craft import craft_vs_farm, load_formulas
+    except ModuleNotFoundError:
+        from ArknightsUID.ArknightsUID.utils.gamedata.craft import (
+            craft_vs_farm,
+            load_formulas,
+        )
+
+    item_index = await load_item_index()
+    matrix = await fetch_drop_matrix()
+    stages = await fetch_stage_info()
+    if not item_index or not matrix or not stages:
+        return await _send_text(bot, ev, "数据源不可用（gamedata/一图流拉取失败），请稍后再试。")
+
+    from ..utils.yituliu import latest_matrix_by_item
+
+    matrix_by_item = latest_matrix_by_item(matrix)
+    stage_meta = {str(s.get("stageId", "")): s for s in stages}
+    formulas = await load_formulas()
+
+    lines: list[str] = ["「明日方舟」刷图规划"]
+    total_farm = 0.0
+    unknown: list[str] = []
+    for name, count in targets[:6]:
+        item_id = _match_item_id(name, item_index)
+        if not item_id:
+            unknown.append(name)
+            continue
+        result = craft_vs_farm(
+            item_id, count, formulas, item_index, matrix_by_item, stage_meta
+        )
+        head = f"◆ {result['name']} ×{count}"
+        options: list[str] = []
+        if result["farm"]:
+            options.append(
+                f"直刷 {result['farm']['stage_code']}（{result['farm']['ap_expect']:.0f} 理智/件"
+                f"≈{result['farm_sanity']:.0f} 理智，需 {count / result['farm']['rate']:.0f} 把）"
+            )
+            if result["farm_sanity"] is not None:
+                total_farm += result["farm_sanity"]
+        if result["craft"] is not None:
+            if result["craft_sanity"] is not None:
+                leaves = " + ".join(
+                    f"{item_index[lid]['name']}×{ln}"
+                    if lid in item_index else lid
+                    for lid, ln in result["craft_leaves"].items()
+                )
+                options.append(
+                    f"合成（叶子材料 {leaves} ≈{result['craft_sanity']:.0f} 理智）"
+                )
+            else:
+                options.append("合成可行，但部分子材料无掉落数据")
+        if not options:
+            lines.append(f"{head}：没有样本充足的掉落关卡")
+        else:
+            lines.append(f"{head}：" + "｜".join(options))
+    if unknown:
+        lines.append(f"未识别：{'、'.join(unknown)}（支持精确材料名）")
+    lines.append(f"直刷合计 ≈{total_farm:.0f} 理智")
+    lines.append("数据：ArknightsGameData + ark.yituliu.cn（样本>300 关卡）")
+    await _send_text(bot, ev, "\n".join(lines))

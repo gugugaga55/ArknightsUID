@@ -263,3 +263,94 @@ async def plan_gacha_draws(bot: Bot, ev: Event) -> None:
         ]
         text += "\n提示：绑定账号后可自动读取当前垫刀（ark绑定 / ark扫码登录）"
     await send_card_or_text(bot, ev, "ark_gacha_plan.html", context, text)
+
+
+# ---------------------------------------------------------------------------
+# ark年度：本地抽卡记录年度报告（纯文本娱乐总结，不联网）
+# ---------------------------------------------------------------------------
+
+
+def _annual_report(records: list[dict], year: str) -> str | None:
+    """按年汇总：总抽数/六星数/六星率/最长垫刀/月份分布/新干员。"""
+    from collections import Counter
+    from datetime import datetime
+
+    _threshold = 6 if any(r.get("rarity") == 6 for r in records) else 5
+
+    def _year_of(ts: int) -> str:
+        return datetime.fromtimestamp(ts).strftime("%Y") if ts else ""
+
+    year_records = sorted(
+        [r for r in records if _year_of(int(r.get("gacha_ts") or 0)) == year],
+        key=lambda r: (r.get("gacha_ts", 0), r.get("pos", 0)),
+    )
+    if not year_records:
+        return None
+
+    total = len(year_records)
+    sixes = [r for r in year_records if r.get("rarity", 0) >= _threshold]
+    six_count = len(sixes)
+    new_chars = [r for r in sixes if r.get("is_new")]
+
+    # 垫刀 = 同 category 内上一个六星后的抽数；跨年界沿用同规则
+    pity_by_cate: dict[str, int] = {}
+    worst_pity = 0
+    worst_record: dict | None = None
+    for record in year_records:
+        cate = str(record.get("category", ""))
+        pity_by_cate[cate] = pity_by_cate.get(cate, 0) + 1
+        if record.get("rarity", 0) >= _threshold:
+            pity = pity_by_cate[cate]
+            if pity > worst_pity:
+                worst_pity, worst_record = pity, record
+            pity_by_cate[cate] = 0
+
+    months = Counter(
+        datetime.fromtimestamp(int(r.get("gacha_ts") or 0)).month
+        for r in year_records
+    )
+    busiest = max(months.items(), key=lambda kv: kv[1])[0]
+
+    lines = [
+        f"「明日方舟」{year} 年寻访年度报告",
+        f"总抽数：{total}（六星 {six_count}，六星率 "
+        f"{six_count * 100 / total:.2f}%）",
+        f"平均 {total / six_count:.1f} 抽一个六星" if six_count else "全年无六星……节哀",
+        f"六星新干员：{len(new_chars)} 位"
+        + (f"（{'、'.join(str(r['name']) for r in new_chars[:8])}）"
+           if new_chars else ""),
+    ]
+    if worst_record is not None:
+        lines.append(
+            f"最非时刻：{worst_record['name']} 前垫了 {worst_pity} 抽"
+        )
+    lines.append(f"最肝月份：{busiest} 月（{months[busiest]} 抽）")
+    lines.append("（基于本地已同步记录；ark抽卡记录 先同步最新数据）")
+    return "\n".join(lines)
+
+
+@gacha_sv.on_command(("年度", "年度报告", "抽卡年度"), block=True)
+async def send_annual_report(bot: Bot, ev: Event) -> None:
+    from datetime import datetime
+
+    args = (ev.text or "").strip().split()
+    year = args[0] if args and args[0].isdigit() and len(args[0]) == 4 else str(
+        datetime.now().year
+    )
+    uid = extract_uid(ev.text or "")
+    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, 0)
+    if isinstance(credential, str):
+        return await _send_text(bot, ev, credential)
+
+    records = await load_local_logs(credential.uid)
+    if not records:
+        return await _send_text(
+            bot, ev,
+            f"本地没有抽卡记录（{year} 年）。先用 ark抽卡记录 同步，再来看年度报告。",
+        )
+    report = _annual_report(records, year)
+    if report is None:
+        return await _send_text(
+            bot, ev, f"{year} 年没有本地记录（可用年份见 ark抽卡分析）。"
+        )
+    await _send_text(bot, ev, report)
