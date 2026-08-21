@@ -40,6 +40,9 @@ HELP_GROUPS = [
             {"cmd": "arkBOX", "desc": "BOX 稀有度/精英化分析卡", "eg": "arkBOX"},
             {"cmd": "ark练度卡 <干员>", "desc": "单干员练度卡（技能效果/别名）", "eg": "ark练度卡 银灰"},
             {"cmd": "ark面板 <干员> [精2 Lv45 潜6 满好 X模 技能2 专3]", "desc": "干员面板模拟（默认你的练度；任意等级/潜能/模组/技能档数值）", "eg": "ark面板 银灰 精2 满级 潜6 X模"},
+            {"cmd": "ark模组 <干员>", "desc": "干员模组详情：类型/解锁条件/各级属性增量/解锁材料", "eg": "ark模组 银灰"},
+            {"cmd": "ark语音 <干员> [关键词]", "desc": "干员中文台词（PRTS 语音记录，可按内容过滤）", "eg": "ark语音 银灰 合约"},
+            {"cmd": "ark别名 <别名>=<干员>", "desc": "自定义干员别名（干员/面板/养成/练度卡/模组生效）", "eg": "ark别名 银羽毛=银灰"},
             {"cmd": "ark肉鸽", "desc": "集成战略进度卡", "eg": "ark肉鸽"},
             {"cmd": "ark肉鸽敌人 <名字> [期名] [N难度] [关名] [紧急]", "desc": "肉鸽敌人面板：机制/免疫/难度 buff（可按关卡与紧急作战精确折算）", "eg": "ark肉鸽敌人 歌利亚 不容拒绝 N15"},
             {"cmd": "ark肉鸽关卡 <关名> [N难度] [紧急]", "desc": "肉鸽关卡出怪面板：该难度下全体敌人折算数值 + 紧急作战", "eg": "ark肉鸽关卡 拆东补西 N15 紧急"},
@@ -54,6 +57,7 @@ HELP_GROUPS = [
             {"cmd": "ark兑换码 <code>", "desc": "礼包码兑换", "eg": "ark兑换码 TFBUIT"},
             {"cmd": "ark养成 <干员>", "desc": "养成材料缺口计算", "eg": "ark养成 银灰"},
             {"cmd": "ark攒抽 [参数]", "desc": "攒抽规划（自动垫刀/卡池）", "eg": "ark攒抽 玉:60000 石:30 垫刀:20"},
+            {"cmd": "ark年度 [年份]", "desc": "寻访年度报告（本地记录总结）", "eg": "ark年度 2026"},
         ],
     },
     {
@@ -67,6 +71,7 @@ HELP_GROUPS = [
             {"cmd": "ark关卡 <关卡>", "desc": "关卡资料卡（敌方数值/地图）", "eg": "ark关卡 1-7"},
             {"cmd": "ark公招 <标签>", "desc": "公招标签组合查询", "eg": "ark公招 高级资深干员"},
             {"cmd": "ark藏品 <名字>", "desc": "肉鸽藏品效果查询", "eg": "ark藏品 钝爪-典训"},
+            {"cmd": "ark危机合约", "desc": "危机合约赛季时间线（18 期全录）", "eg": "ark危机合约"},
             {"cmd": "ark日历", "desc": "活动/卡池日历", "eg": "ark日历"},
         ],
     },
@@ -78,11 +83,17 @@ HELP_GROUPS = [
             {"cmd": "ark公告", "desc": "官方公告（森空岛）", "eg": "ark公告"},
             {"cmd": "ark刷图推荐 [分组]", "desc": "关卡效率榜（一图流）", "eg": "ark刷图推荐 主线"},
             {"cmd": "ark材料掉率 <材料>", "desc": "材料掉落关卡与期望理智", "eg": "ark材料掉率 固源岩组"},
+            {"cmd": "ark合成 <材料>", "desc": "加工站合成树（子材料递归）", "eg": "ark合成 聚酸酯块"},
+            {"cmd": "ark计划 <材料:数量 …>", "desc": "刷图规划：直刷 vs 合成，多少理智", "eg": "ark计划 聚酸酯块:10"},
+            {"cmd": "ark抽签", "desc": "明日方舟主题每日运势", "eg": "ark抽签"},
+            {"cmd": "ark帮助搜索 <关键词>", "desc": "按关键词找命令", "eg": "ark帮助搜索 肉鸽"},
             {"cmd": "订阅方舟活动", "desc": "群聊订阅新动态推送", "eg": "订阅方舟活动"},
             {"cmd": "ark订阅理智 [序号]", "desc": "理智回满推送提醒", "eg": "ark订阅理智"},
             {"cmd": "ark取消订阅理智", "desc": "取消理智回满推送", "eg": "ark取消订阅理智"},
             {"cmd": "ark订阅训练 [序号]", "desc": "专精训练完成提醒", "eg": "ark订阅训练"},
             {"cmd": "ark取消订阅训练", "desc": "取消专精训练推送", "eg": "ark取消订阅训练"},
+            {"cmd": "ark订阅剿灭 [序号]", "desc": "周五晚剿灭未完成提醒", "eg": "ark订阅剿灭"},
+            {"cmd": "ark取消订阅剿灭", "desc": "取消剿灭周提醒", "eg": "ark取消订阅剿灭"},
         ],
     },
 ]
@@ -141,3 +152,115 @@ async def send_ark_help(bot: Bot, ev: Event) -> None:
         "groups": assign_group_icons(HELP_GROUPS),
     }
     await send_card_or_text(bot, ev, "ark_help.html", context, HELP_TEXT)
+
+
+@help_sv.on_command(("帮助搜索", "搜指令"), block=True)
+async def search_ark_help(bot: Bot, ev: Event) -> None:
+    """ark帮助搜索 关键词 → 命中命令的纯文本清单（卡片帮助不打断）。"""
+    keyword = (ev.text or "").strip()
+    if not keyword:
+        return await _send_help_text(
+            bot, ev, "用法：ark帮助搜索 关键词（如 ark帮助搜索 肉鸽）"
+        )
+    lowered = keyword.lower()
+    hits: list[str] = []
+    for group in HELP_GROUPS:
+        for cmd in group["cmds"]:
+            haystack = f"{cmd['cmd']} {cmd['desc']} {cmd.get('eg', '')}".lower()
+            if lowered in haystack:
+                hits.append(f"[{group['name']}] {cmd['cmd']} - {cmd['desc']}")
+    if not hits:
+        return await _send_help_text(
+            bot, ev, f"没有命中「{keyword}」的命令；ark帮助 查看全部。"
+        )
+    lines = [f"「{keyword}」命中 {len(hits)} 条命令："]
+    lines.extend(f"- {h}" for h in hits[:15])
+    if len(hits) > 15:
+        lines.append(f"…共 {len(hits)} 条，仅显示前 15 条")
+    await _send_help_text(bot, ev, "\n".join(lines))
+
+
+async def _send_help_text(bot: Bot, ev: Event, msg: str) -> None:
+    await bot.send((" " if ev.group_id else "") + msg, at_sender=bool(ev.group_id))
+
+
+# ---------------------------------------------------------------------------
+# ark抽签：明日方舟主题每日运势（本地数据，签名按 用户+日期 确定）
+# ---------------------------------------------------------------------------
+fortune_sv = SV("ArknightsUID抽签", priority=5)
+
+_FORTUNE_LEVELS = ["大吉", "中吉", "小吉", "平", "小凶", "凶"]
+_FORTUNE_GOOD = [
+    "刷理智", "公开招募", "打肉鸽", "合成材料", "搓玉", "基建换班",
+    "攒合成玉", "清理任务", "打危机合约", "专精训练", "抽卡（垫刀已就绪）",
+]
+_FORTUNE_BAD = [
+    "十连", "赌黄票兑换", "硬搓低星材料", "越级打 N15", "拆基建",
+    "凌晨四点抽卡", "清空理智药", "连打剿灭", "赌模组任务",
+]
+# 干员池降级兜底（索引不可用时依然可抽）
+_FORTUNE_FALLBACK_CHARS = [
+    "阿米娅", "凯尔希", "银灰", "陈", "W", "史尔特尔", "艾雅法拉", "泥岩",
+    "缪尔赛思", "逻各斯", "维什戴尔", "荒芜拉普兰德",
+]
+
+
+def _daily_seed(user_id: str, today: str) -> int:
+    import hashlib
+
+    return int(
+        hashlib.sha256(f"{user_id}:{today}".encode("utf-8")).hexdigest()[:8], 16
+    )
+
+
+def _draw_fortune(seed: int) -> dict[str, str | list[str]]:
+    import random
+
+    rng = random.Random(seed)
+    return {
+        "level": rng.choice(_FORTUNE_LEVELS),
+        "char": rng.choice(_FORTUNE_FALLBACK_CHARS),
+        "good": rng.sample(_FORTUNE_GOOD, 3),
+        "bad": rng.sample(_FORTUNE_BAD, 2),
+    }
+
+
+@fortune_sv.on_fullmatch(("抽签", "方舟抽签", "运势"), block=True)
+async def send_daily_fortune(bot: Bot, ev: Event) -> None:
+    from datetime import date
+
+    today = date.today().isoformat()
+    seed = _daily_seed(f"{ev.bot_id}:{ev.user_id}", today)
+    fortune = _draw_fortune(seed)
+
+    # 有索引时从全干员池抽（六星更受运势眷顾的既视感）
+    try:
+        try:
+            from ArknightsUID.utils.gamedata.charinfo import load_char_index
+        except ModuleNotFoundError:
+            from ArknightsUID.ArknightsUID.utils.gamedata.charinfo import (
+                load_char_index,
+            )
+
+        index = await load_char_index()
+        if index:
+            import random
+
+            names = [
+                str(v.get("name") or "")
+                for v in index.values()
+                if str(v.get("name") or "")
+            ]
+            if names:
+                fortune["char"] = random.Random(seed + 1).choice(names)
+    except Exception:
+        pass
+
+    lines = [
+        f"「明日方舟」今日运势（{today}）",
+        f"{fortune['level']} · 今日同行干员：{fortune['char']}",
+        f"宜：{'、'.join(str(x) for x in fortune['good'])}",
+        f"忌：{'、'.join(str(x) for x in fortune['bad'])}",
+        "（同一人一天内结果固定；纯属娱乐）",
+    ]
+    await _send_help_text(bot, ev, "\n".join(lines))

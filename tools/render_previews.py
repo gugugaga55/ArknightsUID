@@ -916,10 +916,11 @@ async def _enrich_icons(name: str, context: dict) -> None:
         context["six_rows"] = six_rows
 
     if name == "ark_help.html":
-        # 逐命令 Q 版干员图标（与生产同一分配函数）
-        from ArknightsUID.arknightsuid_help import assign_group_icons
+        # 直接用生产 HELP_GROUPS（单一事实源：预览永远与帮助卡同步）
+        # + 逐命令 Q 版干员图标（与生产同一分配函数）
+        from ArknightsUID.arknightsuid_help import HELP_GROUPS, assign_group_icons
 
-        context["groups"] = assign_group_icons(context["groups"])
+        context["groups"] = assign_group_icons(HELP_GROUPS)
 
     if name == "ark_building.html":
         # 房间成员头像：名称反查 charId → 初始头像
