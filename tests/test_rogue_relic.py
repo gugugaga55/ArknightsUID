@@ -136,6 +136,34 @@ class RelicCardTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("tomimi.dev", html)
 
 
+class SourceOutageTest(unittest.IsolatedAsyncioTestCase):
+    """主题表整体不可用（无精简缓存 + 全量下载失败）→ 空索引，不抛异常。
+
+    处理器（send_relic_query）对空索引返回「藏品数据不可用」提示；
+    此处验证索引层在该场景的退化契约：返回 {} 而非异常/None。
+    """
+
+    async def test_load_relic_index_degrades_to_empty(self) -> None:
+        import tempfile
+        from unittest import mock
+
+        import ArknightsUID.utils.gamedata.rogue_relic as rr
+
+        with tempfile.TemporaryDirectory() as td:
+            with (
+                mock.patch.object(
+                    rr, "RELIC_INDEX_PATH", new=Path(td) / "no_index.json"
+                ),
+                mock.patch.object(
+                    rr,
+                    "ensure_rogue_topic_table",
+                    new=mock.AsyncMock(return_value=None),
+                ),
+            ):
+                result = await rr.load_relic_index()
+        self.assertEqual(result, {})
+
+
 class RogueCardUpgradeTest(unittest.TestCase):
     def _response(self) -> dict:
         return {

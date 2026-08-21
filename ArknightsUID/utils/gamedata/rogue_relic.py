@@ -16,8 +16,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-import httpx
-
+from ..http import download_bytes
 from ._table_cache import (
     GAMEDATA_CACHE_DIR,
     ROGUE_TOPIC_TABLE_PATH,
@@ -103,9 +102,13 @@ def build_relic_index(topic_table: dict[str, Any]) -> dict[str, list[dict]]:
 
 
 async def load_relic_index() -> dict[str, list[dict]]:
-    """藏品索引（精简缓存优先，TTL 同主题表 7 天）。失败返回 {}。"""
-    if RELIC_INDEX_PATH.exists() and _cache_fresh(
-        ROGUE_TOPIC_TABLE_PATH, 7 * 86400
+    """藏品索引（精简缓存优先，TTL 30 天——肉鸽数据只随版本更新）。
+
+    该检查先于 18MB 主题表 ensure：30 天内直接读精简 sidecar，
+    不触发全量表下载。失败返回 {}。
+    """
+    if RELIC_INDEX_PATH.exists() and await _cache_fresh(
+        ROGUE_TOPIC_TABLE_PATH, 30 * 86400
     ):
         cached = _read_sidecar(RELIC_INDEX_PATH)
         if isinstance(cached, dict) and cached:
@@ -192,12 +195,10 @@ async def relic_icon_b64(icon_id: str) -> str:
             miss_path.unlink()
         if not local_path.exists():
             url = f"{_TOMIMI_STATIC_BASE}/{filename}"
-            async with httpx.AsyncClient(
-                timeout=20.0, follow_redirects=True
-            ) as client:
-                resp = await client.get(url)
-                resp.raise_for_status()
-                local_path.write_bytes(resp.content)
+            raw = await download_bytes(url, timeout=20.0)
+            if raw is None:
+                raise ValueError(f"download failed: {filename}")
+            local_path.write_bytes(raw)
         data = local_path.read_bytes()
         if not data:
             raise ValueError("empty icon file")

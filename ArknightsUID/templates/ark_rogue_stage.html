@@ -1,0 +1,95 @@
+<!--
+  ark_rogue_stage.html —— 肉鸽关卡出怪面板卡（#17）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_rogue._build_rogue_stage_context 提供）：
+    name/code/level_id: str   关名 / ISW 编号 / levelId
+    theme_name: str           所属期
+    difficulty: int | None    指定难度（None = 基础面板）
+    difficulty_label: str     展示标签
+    elite: bool               是否叠加紧急作战效果
+    floors: str               出没层数（"1-2层"）
+    elite_descs: [str]        紧急作战描述原文
+    elite_chips: [str]        紧急 buff（人话化）
+    rows: [{key, name, icon, count, stats: {hp/atk/def/res},
+            level, elite_note, has_diff}]   折算后出怪行
+    row_count/skipped: int    收录数 / 跳过数（trap 等库外条目）
+    floor_note: str           每层增益说明（不折算）
+    source_note/version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="IS-STAGE">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 肉鸽关卡面板 I.S. STAGE</em></span>
+            <span class="mast-meta"><span class="idx">17</span>TOMIMI.DATA</span>
+        </div>
+
+        <div class="titleblock" style="align-items: center;">
+            <div>
+                <div class="eyebrow">集成战略 · 关卡档案</div>
+                <h1 class="title title--s">{{ name }}</h1>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_enemy.b64" %}" alt="">
+        </div>
+        <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">STAGE ROSTER</span></div>
+
+        <div class="chip-flow" style="margin-top: var(--space-4);">
+            <span class="chip chip--ink">{{ code }}</span>
+            <span class="chip chip--ink">{{ theme_name }}</span>
+            {% if floors %}<span class="chip chip--ghost">第{{ floors }}出没</span>{% endif %}
+            <span class="chip {% if difficulty is not none %}chip--red{% else %}chip--ghost{% endif %}">{{ difficulty_label }}</span>
+            {% if elite %}<span class="chip chip--red">紧急作战</span>{% endif %}
+        </div>
+
+        {% if elite_descs or elite_chips %}
+        <div class="sect" style="margin-top: var(--space-4);">
+            <span class="sect-label bk">紧急作战</span>
+            <span class="sect-en">ELITE OPS</span>
+        </div>
+        {% for d in elite_descs %}
+        <div class="prose" style="font-size: 12px;">· {{ d }}</div>
+        {% endfor %}
+        {% if elite_chips %}
+        <div class="chip-flow" style="margin-top: var(--space-2);">
+            {% for c in elite_chips %}<span class="chip chip--red">{{ c }}</span>{% endfor %}
+        </div>
+        {% endif %}
+        {% endif %}
+
+        <div class="sect" style="margin-top: var(--space-4);">
+            <span class="sect-label bk">出怪面板</span>
+            <span class="sect-en">ROSTER // {{ row_count }}{% if skipped %} +{{ skipped }} 未收录{% endif %}</span>
+        </div>
+        <div class="rows">
+            {% for r in rows %}
+            <div class="row" style="display: flex; align-items: center; gap: 10px;">
+                {% if r.icon %}<span class="iicon"><img src="{{ r.icon }}" alt=""></span>{% endif %}
+                <div style="flex: 1; min-width: 0;">
+                    <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                        <span class="row-value" style="font-size: 13px;">{{ r.name }}<span style="color: var(--tx-2); font-size: 11px;"> ×{{ r.count }}{% if r.level %} ·形态{{ r.level + 1 }}{% endif %}{% if r.elite_note %} ·{{ r.elite_note }}{% endif %}</span></span>
+                    </div>
+                    <div class="mono" style="margin-top: 2px; font-size: 10px; color: var(--tx-2); letter-spacing: 0.3px;">
+                        HP {{ r.stats.hp }} · 攻 {{ r.stats.atk }} · 防 {{ r.stats.def }} · 抗 {{ r.stats.res }}
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="prose" style="margin-top: var(--space-3); font-size: 11px;">
+            {% if floor_note %}{{ floor_note }}。<br>{% endif %}查具体敌人面板与技能：ark肉鸽敌人 &lt;敌名&gt; {{ name }}{% if difficulty is not none %} N{{ difficulty }}{% endif %}{% if elite %} 紧急{% endif %}。
+        </div>
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · {{ source_note }}</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// IS // STAGE ROSTER</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>
