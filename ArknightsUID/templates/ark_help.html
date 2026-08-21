@@ -32,10 +32,11 @@
         </div>
         <div class="grid grid-2">
             {% for c in group.cmds %}
-            <div class="cell">
+            <div class="cell{% if c.icon %} cell--chibi{% endif %}">
                 <div class="cell-cmd mono">{{ c.cmd }}</div>
                 <div class="cell-desc">{{ c.desc }}</div>
                 <div class="cell-eg">示例：{{ c.eg }}</div>
+                {% if c.icon %}<img class="cell-chibi" src="data:image/png;base64,{% include c.icon %}" alt="">{% endif %}
             </div>
             {% endfor %}
         </div>

@@ -3,10 +3,16 @@
   设计语言：罗德岛终端（见 ark_base.css 头部注释）
   上下文（由 arknightsuid_rogue._build_rogue_enemy_context 提供）：
     name/enemy_key/tags: str
+    resistances: [str]   异常免疫（各形态 status_immune 并集，中文）
     icon: str             头像 base64（tomimi enemy_icons，可空）
-    forms: [{title, hp, atk, def, res, weight, attack}]  基础形态面板
+    forms: [{title, hp, atk, def, res, weight, attack, extras: [str],
+             mechanics: [str]}]
+                          基础形态面板；extras 为移速/间隔/范围/进点等次级段，
+                          mechanics 为该形态机制（enemy_skills 词典翻译）
     theme_name: str       所属期（空 = 未识别，仅基础面板）
-    panels: [{grade, label, stats: {hp/atk/def/res}, notes: [str]}]  难度累积面板
+    panels: [...]         难度累积面板（未指定难度时）
+    focus: {grade, label, stats: {hp/atk/def/res}, buffs: [str]} | None
+                          指定期+难度下的精确面板与生效 buff（指定难度时）
     source_note/version: str
 -->
 <!DOCTYPE html>
@@ -28,9 +34,10 @@
                 </div>
             </div>
         </div>
-        {% if tags %}
+        {% if tags or resistances %}
         <div class="chip-flow" style="margin-top: var(--space-3);">
             {% for t in tags %}<span class="chip {% if t == '领袖' %}chip--red{% else %}chip--ink{% endif %}">{{ t }}</span>{% endfor %}
+            {% for r in resistances %}<span class="chip chip--ghost">免疫 · {{ r }}</span>{% endfor %}
         </div>
         {% endif %}
         <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">ENEMY PANEL</span></div>
@@ -47,13 +54,55 @@
                     <span class="bar-num">{{ f.attack }}</span>
                 </div>
                 <div class="mono" style="margin-top: 3px; font-size: 10px; color: var(--tx-2); letter-spacing: 0.3px;">
-                    HP {{ f.hp }} · 攻 {{ f.atk }} · 防 {{ f.def }} · 抗 {{ f.res }} · 重量 {{ f.weight }}
+                    HP {{ f.hp }} · 攻 {{ f.atk }} · 防 {{ f.def }} · 抗 {{ f.res }} · 重量 {{ f.weight }}{% if f.extras %} · {{ f.extras | join(" · ") }}{% endif %}
                 </div>
+                {% if f.mechanics %}
+                <div class="prose" style="margin-top: 4px; font-size: 11px; white-space: pre-line;">{{ f.mechanics | join("\n") }}</div>
+                {% endif %}
             </div>
             {% endfor %}
         </div>
 
-        {% if theme_name and panels %}
+        {% if stage_groups %}
+        <div class="sect" style="margin-top: var(--space-4);">
+            <span class="sect-label bk">出没关卡</span>
+            <span class="sect-en">STAGES // {{ stage_groups | map(attribute='total') | sum }} 关</span>
+        </div>
+        <div class="rows">
+            {% for g in stage_groups %}
+            <div class="row" style="display: block;">
+                <span class="row-label">{{ g.theme_name }}</span>
+                <div class="mono" style="margin-top: 3px; font-size: 10px; color: var(--tx-2); letter-spacing: 0.3px; line-height: 1.7;">
+                    {{ g.stages | join("、") }}{% if g.total > g.stages | length %} …等 {{ g.total }} 关{% endif %}
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        <div class="prose" style="margin-top: var(--space-2); font-size: 10px; color: var(--tx-2);">
+            注记：形态N = 以该形态数值块出场；紧急+ = 紧急作战额外出怪。岁/黑流两期关卡数据 tomimi 暂未收录。
+        </div>
+        {% endif %}
+
+        {% if focus %}
+        <div class="sect" style="margin-top: var(--space-4);">
+            <span class="sect-label bk">指定面板 · {{ theme_name }}{% if stage_label %} · {{ stage_label }}{% endif %}</span>
+            <span class="sect-en">{{ focus.label }} // FOCUS</span>
+        </div>
+        <div class="grid grid-4" style="margin-top: var(--space-3);">
+            <div class="cell"><div class="cell-label">生命 HP</div><div class="cell-value mono" style="font-size: 15px;">{{ focus.stats.hp }}</div></div>
+            <div class="cell"><div class="cell-label">攻击 ATK</div><div class="cell-value mono" style="font-size: 15px;">{{ focus.stats.atk }}</div></div>
+            <div class="cell"><div class="cell-label">防御 DEF</div><div class="cell-value mono" style="font-size: 15px;">{{ focus.stats.def }}</div></div>
+            <div class="cell"><div class="cell-label">法抗 RES</div><div class="cell-value mono" style="font-size: 15px;">{{ focus.stats.res }}</div></div>
+        </div>
+        {% if focus.buffs %}
+        <div class="chip-flow" style="margin-top: var(--space-3);">
+            {% for b in focus.buffs %}<span class="chip chip--red">{{ b }}</span>{% endfor %}
+        </div>
+        {% endif %}
+        <div class="prose" style="margin-top: var(--space-3); font-size: 11px;">
+            {{ focus.label }}（≤ 该档效果累积生效）；层数增益未计入，完整交互模拟见 tomimi.dev。
+        </div>
+        {% elif theme_name and panels %}
         <div class="sect" style="margin-top: var(--space-4);">
             <span class="sect-label bk">难度面板 · {{ theme_name }}</span>
             <span class="sect-en">DIFF CUMULATIVE</span>
@@ -76,7 +125,7 @@
         </div>
         {% else %}
         <div class="prose" style="margin-top: var(--space-4); font-size: 11px;">
-            未识别所属期（该敌人未被任何难度效果显式标注且无期标签），仅展示基础面板。
+            未识别所属期（该敌人未被任何难度效果显式标注且无期标签），仅展示基础面板；可用「ark肉鸽敌人 {{ name }} 期名 N难度」指定查询。
         </div>
         {% endif %}
 

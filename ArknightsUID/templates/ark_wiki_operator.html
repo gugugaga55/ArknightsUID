@@ -46,7 +46,10 @@
                 {% endif %}
             </div>
             {% if portrait %}
-            <div class="portrait"><img src="{{ portrait }}" alt=""></div>
+            <div class="portrait-wrap">
+<div class="portrait"><img src="{{ portrait }}" alt=""></div>
+                <img class="sticker sticker--sm" src="data:image/png;base64,{% include "assets/sticker_operator.b64" %}" alt="">
+            </div>
             {% endif %}
         </div>
         <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">OPERATOR FILE</span></div>

@@ -2,10 +2,13 @@
   ark_wiki_enemy.html —— PRTS 敌方资料卡（#11）
   设计语言：罗德岛终端（见 ark_base.css 头部注释）
   上下文（由 arknightsuid_wiki._build_enemy_context 提供）：
-    title/name/index/rank/description: str
+    title/name/index/rank/description/event/enemy_id: str
     damage_type/attack_type/move_type/kind: str
     has_stats: bool
-    max_hp/atk/defense/res/weight: str
+    max_hp/atk/defense/res: str
+    secondary_stats: [{label, value}]（移动/间隔/半径/重量/恢复/元素等，仅非 0 项）
+    resistances: [{label, value}]（生效异常抗性；has_resistances 为 False 表示全无）
+    variants: [{label, hp, atk, defense, res, abilities}]（等级 2+ 变体）
     abilities: [str]
     source_url/version: str
 -->
@@ -16,7 +19,7 @@
     <div class="container" data-ghost="ENEMY">
         <div class="mast">
             <span class="mast-brand">ArknightsUID <em>// 敌方档案 ENEMY FILE</em></span>
-            <span class="mast-meta"><span class="idx">11</span>{% if index %}NO.{{ index }}{% else %}PRTS.WIKI{% endif %}</span>
+            <span class="mast-meta"><span class="idx">11</span>{% if index %}NO.{{ index }}{% else %}PRTS.WIKI{% endif %}{% if enemy_id and enemy_id != index %} · {{ enemy_id }}{% endif %}</span>
         </div>
 
         <div class="titleblock" style="align-items: center;">
@@ -27,6 +30,7 @@
                     <h1 class="title title--s">{{ name }}</h1>
                 </div>
             </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_enemy.b64" %}" alt="">
         </div>
         <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">ENEMY FILE</span></div>
 
@@ -34,6 +38,7 @@
             {% if damage_type %}<span class="chip chip--red">伤害 · {{ damage_type }}</span>{% endif %}
             {% if attack_type %}<span class="chip chip--ink">攻击 · {{ attack_type }}</span>{% endif %}
             {% if move_type %}<span class="chip chip--ink">移动 · {{ move_type }}</span>{% endif %}
+            {% if event %}<span class="chip chip--ghost">登场 · {{ event }}</span>{% endif %}
         </div>
 
         {% if has_stats %}
@@ -57,23 +62,37 @@
         </div>
         {% endif %}
 
-        {% if has_level2 %}
-        <div class="rows" style="margin-top: var(--space-3);">
-            <div class="row" style="display: block;">
-                <span class="row-label">等级2变体 LV2</span>
-                <div class="mono" style="margin-top: 3px; font-size: 10px; color: var(--tx-2); letter-spacing: 0.3px;">
-                    HP {{ lv2_hp or "-" }} · 攻 {{ lv2_atk or "-" }} · 防 {{ lv2_defense or "-" }} · 抗 {{ lv2_res or "-" }}
-                </div>
+        {% if secondary_stats %}
+        <div class="grid grid-4" style="margin-top: var(--space-3);">
+            {% for stat in secondary_stats %}
+            <div class="cell">
+                <div class="cell-label">{{ stat.label }}</div>
+                <div class="cell-value mono" style="font-size: 13px;">{{ stat.value }}</div>
             </div>
+            {% endfor %}
         </div>
         {% endif %}
 
-        {% if weight %}
-        <div class="rows" style="margin-top: var(--space-4);">
-            <div class="row">
-                <span class="row-label">重量 WEIGHT</span>
-                <span class="row-value mono" style="font-size: 13px;">{{ weight }}</span>
+        {% if has_stats %}
+        <div class="chip-flow" style="margin-top: var(--space-3);">
+            {% if has_resistances %}
+                {% for r in resistances %}<span class="chip chip--red">抗性 · {{ r.label }}{% if r.value != "有" %} {{ r.value }}{% endif %}</span>{% endfor %}
+            {% else %}
+                <span class="chip chip--ghost">异常抗性 · 无</span>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        {% if variants %}
+        <div class="rows" style="margin-top: var(--space-3);">
+            {% for v in variants %}
+            <div class="row" style="display: block;">
+                <span class="row-label">{{ v.label }}变体 LV{{ loop.index + 1 }}</span>
+                <div class="mono" style="margin-top: 3px; font-size: 10px; color: var(--tx-2); letter-spacing: 0.3px;">
+                    HP {{ v.hp or "-" }} · 攻 {{ v.atk or "-" }} · 防 {{ v.defense or "-" }} · 抗 {{ v.res or "-" }}
+                </div>
             </div>
+            {% endfor %}
         </div>
         {% endif %}
 
@@ -84,13 +103,15 @@
         </div>
         <div class="prose" style="white-space: pre-line;">{{ abilities | join("\n") }}</div>
         {% endif %}
-        {% if lv2_abilities %}
-        <div class="sect">
-            <span class="sect-label bk">等级2机制</span>
-            <span class="sect-en">LV2 ABILITIES // {{ lv2_abilities | length }}</span>
-        </div>
-        <div class="prose" style="white-space: pre-line;">{{ lv2_abilities | join("\n") }}</div>
-        {% endif %}
+        {% for v in variants %}
+            {% if v.abilities %}
+            <div class="sect">
+                <span class="sect-label bk">{{ v.label }}机制</span>
+                <span class="sect-en">LV{{ loop.index + 1 }} ABILITIES // {{ v.abilities | length }}</span>
+            </div>
+            <div class="prose" style="white-space: pre-line;">{{ v.abilities | join("\n") }}</div>
+            {% endif %}
+        {% endfor %}
 
         {% if description %}
         <div class="prose">{{ description }}</div>

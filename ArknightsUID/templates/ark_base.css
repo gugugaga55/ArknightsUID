@@ -825,27 +825,36 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: var(--space-3);
 }
 
 .foot-brand {
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 14px;
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 0.14em;
     color: var(--tx-0);
     text-transform: uppercase;
     white-space: nowrap;
+    /* 防御：source_note 过长时收缩并裁切，不把 VER 挤出画幅 */
+    min-width: 0;
+    max-width: calc(100% - 96px);
+    overflow: hidden;
 }
 
+/* 菱形 logo 字标：黄芯墨边菱形 + 外环细线菱形（罗德岛终端标记，浅色版）*/
 .foot-brand::before {
     content: "";
-    width: 7px;
-    height: 7px;
+    width: 14px;
+    height: 14px;
+    transform: rotate(45deg);
     background: var(--yellow);
-    outline: 1px solid var(--ink-block);
-    outline-offset: -1px;
+    border: 2px solid var(--ink-block);
+    outline: 1px solid var(--tx-0);
+    outline-offset: 3px;
+    box-sizing: border-box;
     flex-shrink: 0;
 }
 
@@ -893,6 +902,22 @@ body {
 
 .aicon--md { width: 32px; height: 32px; }
 
+/* 命令格 Q 版干员图标（帮助卡，EndUID 帮助图式逐命令角色）*/
+.cell--chibi {
+    position: relative;
+    padding-right: 48px;
+}
+
+.cell-chibi {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    width: 32px;
+    height: auto;
+    border-radius: 4px;
+    filter: drop-shadow(0 2px 4px rgba(22, 24, 29, 0.15));
+}
+
 /* === 官方 Q 版表情包贴纸（烘焙资产，标题区右侧拍立得式装饰）=== */
 .sticker {
     width: 96px;
@@ -901,6 +926,21 @@ body {
     transform: rotate(4deg);
     filter: drop-shadow(0 5px 10px rgba(22, 24, 29, 0.22));
     border-radius: 4px;
+}
+
+/* 立绘角标迷你贴纸（挂在立绘左下角）*/
+.portrait-wrap {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.sticker--sm {
+    width: 54px;
+    transform: rotate(-6deg);
+    position: absolute;
+    left: -16px;
+    bottom: -8px;
+    z-index: 2;
 }
 
 /* === 装饰浮空立绘（帮助卡标题区右侧，透明 PNG 无框）=== */

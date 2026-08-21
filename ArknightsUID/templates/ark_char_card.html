@@ -37,7 +37,10 @@
                 </div>
             </div>
             {% if portrait %}
-            <div class="portrait portrait--lg"><img src="{{ portrait }}" alt=""></div>
+            <div class="portrait-wrap">
+                <div class="portrait portrait--lg"><img src="{{ portrait }}" alt=""></div>
+                <img class="sticker sticker--sm" src="data:image/png;base64,{% include "assets/sticker_char_card.b64" %}" alt="">
+            </div>
             {% elif avatar %}
             <div class="optile"><img src="{{ avatar }}" alt=""></div>
             {% endif %}
