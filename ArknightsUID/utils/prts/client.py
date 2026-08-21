@@ -1596,3 +1596,42 @@ async def query_game_info() -> dict[str, str]:
         if parsed:
             merged.update(parse_lst_sections(parsed.wikitext))
     return merged
+
+
+# --- 干员语音（PRTS 子页面 {干员}/语音记录）与危机合约词条（SMW） ---
+
+# 语音页模板参数：|标题N=交谈1 |台词N={{VoiceData/word|中文|……}}（多语言并列）
+_VOICE_TITLE_RE = re.compile(r"\|\s*标题(\d+)\s*=\s*([^\n|]+)")
+_VOICE_CN_RE = re.compile(
+    r"\|\s*台词(\d+)\s*=\s*.*?\{\{VoiceData/word\|中文\|([^{}]*)\}\}",
+    re.DOTALL,
+)
+
+
+def parse_voice_lines(wikitext: str) -> list[dict[str, str]]:
+    """语音记录 wikitext → [{title, text}]（只取中文台词）。
+
+    台词多语言并列在同一个参数值里，中文块用非贪婪配平花括号；
+    标题与台词按下标配对，缺失任一侧即丢弃该条。
+    """
+    titles = {m.group(1): m.group(2).strip() for m in _VOICE_TITLE_RE.finditer(wikitext)}
+    result: list[dict[str, str]] = []
+    for m in _VOICE_CN_RE.finditer(wikitext):
+        idx = m.group(1)
+        title = titles.get(idx, "")
+        text = html.unescape(m.group(2)).strip()
+        if title and text:
+            result.append({"title": title, "text": text})
+    return result
+
+
+async def query_voice_lines(char_name: str) -> list[dict[str, str]] | None:
+    """干员中文语音台词（页面缓存复用 parse_page 管线）。
+
+    页面不存在/无语音数据返回 None（调用方给"未收录"提示）。
+    """
+    parsed = await parse_page(f"{char_name}/语音记录")
+    wikitext = (parsed.wikitext if parsed else "") or ""
+    lines = parse_voice_lines(wikitext)
+    return lines or None
+

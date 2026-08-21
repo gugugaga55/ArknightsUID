@@ -48,6 +48,10 @@ UNIEQUIP_TABLE_URL = f"{GAMEDATA_BASE}/uniequip_table.json"
 BATTLE_EQUIP_TABLE_URL = f"{GAMEDATA_BASE}/battle_equip_table.json"
 # 肉鸽全量表（~18MB：6 期主题的藏品/结局/分队/招募券等；tomimi.dev 同源数据）
 ROGUE_TOPIC_TABLE_URL = f"{GAMEDATA_BASE}/roguelike_topic_table.json"
+# 加工站配方（~5MB：workshopFormulas 合成树）与危机合约赛季表（小表）
+BUILDING_TABLE_URL = f"{GAMEDATA_BASE}/building_data.json"
+CRISIS_TABLE_URL = f"{GAMEDATA_BASE}/crisis_table.json"
+CRISIS_V2_TABLE_URL = f"{GAMEDATA_BASE}/crisis_v2_table.json"
 
 GAMEDATA_CACHE_DIR = CACHE_PATH / "gamedata"
 GAMEDATA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -57,6 +61,9 @@ ITEM_TABLE_PATH = GAMEDATA_CACHE_DIR / "item_table.json"
 UNIEQUIP_TABLE_PATH = GAMEDATA_CACHE_DIR / "uniequip_table.json"
 BATTLE_EQUIP_TABLE_PATH = GAMEDATA_CACHE_DIR / "battle_equip_table.json"
 ROGUE_TOPIC_TABLE_PATH = GAMEDATA_CACHE_DIR / "roguelike_topic_table.json"
+BUILDING_TABLE_PATH = GAMEDATA_CACHE_DIR / "building_data.json"
+CRISIS_TABLE_PATH = GAMEDATA_CACHE_DIR / "crisis_table.json"
+CRISIS_V2_TABLE_PATH = GAMEDATA_CACHE_DIR / "crisis_v2_table.json"
 
 # 全量缓存 TTL（game data 随版本更新，7 天足够）
 CHAR_TABLE_TTL = 7 * 86400
@@ -73,19 +80,32 @@ def _lock_for(path: Path) -> asyncio.Lock:
     return lock
 
 
+# 下载镜像：raw 直链偶发 SSL 中断，jsdelivr CDN 兜底（同一仓库同一分支）
+_GAMEDATA_MIRROR_TEMPLATES = (
+    None,  # 占位：先用原始 raw URL
+    "https://cdn.jsdelivr.net/gh/Kengxxiao/ArknightsGameData@master"
+    "/zh_CN/gamedata/excel/{name}",
+    "https://fastly.jsdelivr.net/gh/Kengxxiao/ArknightsGameData@master"
+    "/zh_CN/gamedata/excel/{name}",
+)
+
+
 async def _download_json(url: str) -> Any | None:
-    """下载 JSON（共享 HTTP 层；全量表放宽到 120s）。失败返回 None。"""
-    raw = await download_bytes(url, timeout=120.0)
-    if raw is None:
-        return None
-    try:
-        return json.loads(raw)
-    except Exception as exc:
-        logger.warning(
-            f"[ArknightsUID·gamedata] 响应非 JSON {url.rsplit('/', 1)[-1]}: "
-            f"{exc.__class__.__name__}: {exc}"
-        )
-        return None
+    """下载 JSON（共享 HTTP 层；全量表放宽到 120s；raw 失败走 jsdelivr 镜像）。"""
+    name = url.rsplit("/", 1)[-1]
+    for template in _GAMEDATA_MIRROR_TEMPLATES:
+        try_url = url if template is None else template.format(name=name)
+        raw = await download_bytes(try_url, timeout=120.0)
+        if raw is None:
+            continue
+        try:
+            return json.loads(raw)
+        except Exception as exc:
+            logger.warning(
+                f"[ArknightsUID·gamedata] 响应非 JSON {try_url.rsplit('/', 1)[-1]}: "
+                f"{exc.__class__.__name__}: {exc}"
+            )
+    return None
 
 
 async def _read_wrapped_cache(path: Path) -> dict[str, Any] | None:
@@ -176,3 +196,27 @@ async def ensure_battle_equip_table(force: bool = False) -> dict[str, Any] | Non
     return await _ensure_table(
         BATTLE_EQUIP_TABLE_URL, BATTLE_EQUIP_TABLE_PATH, force=force
     )
+
+
+async def ensure_building_table(force: bool = False) -> dict[str, Any] | None:
+    """确保 building_data 可用（加工站配方 workshopFormulas，~5MB）。"""
+    return await _ensure_table(
+        BUILDING_TABLE_URL, BUILDING_TABLE_PATH, ttl=CHAR_TABLE_TTL, force=force
+    )
+
+
+async def ensure_crisis_tables(
+    force: bool = False,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """确保危机合约两代表可用（crisis + crisis_v2，均为小表）。
+
+    旧危机合约（#1-12 行动）在 crisis_table，新版（涤墨作战起）在
+    crisis_v2_table；任一失败返回该位 None，由调用方降级展示。
+    """
+    old = await _ensure_table(
+        CRISIS_TABLE_URL, CRISIS_TABLE_PATH, ttl=CHAR_TABLE_TTL, force=force
+    )
+    new = await _ensure_table(
+        CRISIS_V2_TABLE_URL, CRISIS_V2_TABLE_PATH, ttl=CHAR_TABLE_TTL, force=force
+    )
+    return old, new
