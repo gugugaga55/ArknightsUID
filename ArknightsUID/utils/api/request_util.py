@@ -14,9 +14,9 @@ from .smsdk import get_device_id  # 设备 ID（dId）
 
 
 class RespCode(IntEnum):
-    """森空岛 API 响应码。"""
+    """森空岛 API 业务码（响应 JSON 的 code 字段）。"""
+
     OK = 0                    # 请求成功
-    OK_HTTP = 200             # HTTP 成功
 
     # 认证相关
     TOKEN_INVALID = 220       # 登录过期
@@ -26,13 +26,22 @@ class RespCode(IntEnum):
 
     # 请求相关
     REQUEST_ERROR = 10000     # 请求异常
-    BAD_REQUEST = 400         # 错误请求
-    FORBIDDEN = 403           # 禁止访问
-    METHOD_NOT_ALLOWED = 405  # 方法不允许（可能是 IP 受限）
-
     # 验证码相关
     CAPTCHA_ERROR = 130       # 验证码错误
     CAPTCHA_EXPIRED = 132     # 验证码过期
+
+
+class HttpCode(IntEnum):
+    """HTTP 状态码（与 RespCode 的业务码是两个命名空间，勿混用）。
+
+    METHOD_NOT_ALLOWED 在 as.hypergryph.com OAuth 链上出现过，
+    含义是"当前 IP/服务受限"，并非单纯的方法不符。
+    """
+
+    OK = 200
+    BAD_REQUEST = 400
+    FORBIDDEN = 403
+    METHOD_NOT_ALLOWED = 405
 
 
 # === User-Agent ===

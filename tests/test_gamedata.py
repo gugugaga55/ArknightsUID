@@ -1,7 +1,10 @@
 """公招查询逻辑测试（build/match，不触发网络下载）。"""
 from __future__ import annotations
 
+import asyncio
+import tempfile
 import unittest
+from pathlib import Path
 
 from ArknightsUID.utils.gamedata import recruit
 
@@ -164,3 +167,51 @@ class IconNegativeCacheTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DiskCacheConcurrentWriteTest(unittest.IsolatedAsyncioTestCase):
+    """同路径并发 cache_write：tmp 名必须唯一，不得互相覆盖半成品。"""
+
+    async def test_concurrent_writes_all_succeed(self) -> None:
+        import json as json_mod
+        import tempfile
+        from pathlib import Path
+
+        from ArknightsUID.utils.disk_cache import cache_read, cache_write
+
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "c.json"
+            payload = {"blob": "x" * 2_000_000}
+            results = await asyncio.gather(
+                *(cache_write(path, payload) for _ in range(8)),
+                return_exceptions=True,
+            )
+            self.assertEqual([r for r in results if r is not None], [])
+            # 落盘内容完整可解析（无交错写入的撕裂）
+            data, _ts = await cache_read(path)
+            self.assertEqual(json_mod.loads(json_mod.dumps(payload)), data)
+            # 无残留 tmp 文件
+            leftovers = list(Path(td).glob("*.tmp*"))
+            self.assertEqual(leftovers, [])
+
+    async def test_table_download_single_flight(self) -> None:
+        """TTL 过期瞬间的并发 ensure：只触发一次下载（锁内复查新鲜度）。"""
+        from unittest import mock
+
+        import ArknightsUID.utils.gamedata._table_cache as tc
+
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "t.json"
+            calls = []
+
+            async def fake_download(url):
+                calls.append(url)
+                await asyncio.sleep(0.05)  # 模拟慢下载，让并发都堆在锁上
+                return {"v": 1}
+
+            with mock.patch.object(tc, "_download_json", new=fake_download):
+                results = await asyncio.gather(
+                    *(tc._ensure_table("http://x/t.json", path) for _ in range(6))
+                )
+            self.assertEqual(results, [{"v": 1}] * 6)
+            self.assertEqual(len(calls), 1)

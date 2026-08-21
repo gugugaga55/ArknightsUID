@@ -89,20 +89,30 @@ class PRTSClientSafetyTest(unittest.IsolatedAsyncioTestCase):
         self.cache_root.mkdir()
         self.logger = RecordingLogger()
         self.original_logger = prts_client.logger
-        self.original_async_client = prts_client.httpx.AsyncClient
+        self.original_get_client = prts_client.get_client
         self.original_cache_path = prts_client.PRTS_CACHE_PATH
         self.original_last_cleanup_at = prts_client._last_cleanup_at
         prts_client.logger = self.logger
-        prts_client.httpx.AsyncClient = FakeAsyncClient
+        fake_client = FakeAsyncClient()
+
+        async def fake_get_client():
+            return fake_client
+
+        prts_client.get_client = fake_get_client  # type: ignore[assignment]
         prts_client.PRTS_CACHE_PATH = self.cache_root
         # 重置节流时间戳，确保本测试用例能立即触发清理扫描。
         prts_client._last_cleanup_at = 0.0
         FakeAsyncClient.queue = []
         FakeAsyncClient.requests = []
+        # PRTS 最小请求间隔在测试中归零（避免每个用例固定 sleep 0.5s）
+        self.original_min_interval = prts_client._MIN_REQUEST_INTERVAL
+        prts_client._MIN_REQUEST_INTERVAL = 0.0
+        prts_client._last_request_at = 0.0
 
     def tearDown(self) -> None:
         prts_client.logger = self.original_logger
-        prts_client.httpx.AsyncClient = self.original_async_client
+        prts_client.get_client = self.original_get_client  # type: ignore[assignment]
+        prts_client._MIN_REQUEST_INTERVAL = self.original_min_interval
         prts_client.PRTS_CACHE_PATH = self.original_cache_path
         prts_client._last_cleanup_at = self.original_last_cleanup_at
         self.temp_dir.cleanup()
@@ -143,27 +153,33 @@ class PRTSClientSafetyTest(unittest.IsolatedAsyncioTestCase):
         assert_log_safe(self, self.all_logs())
 
     async def test_cache_save_failure_log_is_safe(self) -> None:
-        class FailingCachePath:
-            def exists(self) -> bool:
-                return False
+        # 缓存写入走统一磁盘缓存层（utils.disk_cache）：底层 _write_sync
+        # 失败由 cache_write 内部吞掉（debug 类名-only 日志），不影响 _api 返回
+        from ArknightsUID.utils import disk_cache as disk_cache_module
 
-            def write_text(self, *args: Any, **kwargs: Any) -> None:
-                raise RuntimeError(
-                    "cache path failure "
-                    f"cookie={SENTINEL_CRED} token={SENTINEL_TOKEN}"
-                )
+        def failing_write_sync(path: Any, payload: Any) -> None:
+            raise RuntimeError(
+                "cache path failure "
+                f"cookie={SENTINEL_CRED} token={SENTINEL_TOKEN}"
+            )
 
-        original_cache_file = prts_client._cache_file
-        prts_client._cache_file = lambda params: FailingCachePath()  # type: ignore[assignment]
+        original_write_sync = disk_cache_module._write_sync
+        disk_cache_module._write_sync = failing_write_sync  # type: ignore[assignment]
+        cache_logger = RecordingLogger()
+        original_cache_logger = disk_cache_module.logger
+        disk_cache_module.logger = cache_logger
         FakeAsyncClient.queue = [FakeResponse(200, {"query": {"search": []}})]
         try:
             result = await prts_client._api({"action": "query"}, cache_seconds=86400)
         finally:
-            prts_client._cache_file = original_cache_file  # type: ignore[assignment]
+            disk_cache_module._write_sync = original_write_sync  # type: ignore[assignment]
+            disk_cache_module.logger = original_cache_logger
 
         self.assertEqual(result, {"query": {"search": []}})
-        self.assertIn("RuntimeError", self.all_logs())
-        assert_log_safe(self, self.all_logs())
+        cache_logs = "\n".join(cache_logger.debugs + cache_logger.warnings)
+        self.assertIn("写入失败", cache_logs)
+        self.assertIn("RuntimeError", cache_logs)
+        assert_log_safe(self, cache_logs)
 
     async def test_stale_cache_cleanup_removes_old_files_and_keeps_recent(self) -> None:
         # 旧缓存：mtime 设为 30 天前；新缓存：当前时间。

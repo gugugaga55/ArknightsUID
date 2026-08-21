@@ -79,26 +79,33 @@ class AuthHttpTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_get_cred_by_token_405(self) -> None:
         FakeRequest.queue = [(405, None)]
-        self.assertEqual(await ark_auth.get_cred_by_token("T"), "405")
+        payload, err = await ark_auth.get_cred_by_token("T")
+        self.assertIsNone(payload)
+        self.assertEqual(err, ark_auth.CRED_ERR_UNAVAILABLE)
 
     async def test_get_cred_by_token_success(self) -> None:
         FakeRequest.queue = [
             (200, {"status": 0, "data": {"code": "OAUTH_CODE"}}),
             (200, {"code": 0, "data": {"cred": "CRED", "userId": 999}}),
         ]
-        result = await ark_auth.get_cred_by_token("T")
-        self.assertEqual(result, {"cred": "CRED", "skland_user_id": "999"})
+        payload, err = await ark_auth.get_cred_by_token("T")
+        self.assertEqual(err, ark_auth.CRED_ERR_OK)
+        self.assertEqual(payload, {"cred": "CRED", "skland_user_id": "999"})
 
     async def test_get_cred_by_token_oauth_step_fail(self) -> None:
         FakeRequest.queue = [(200, {"status": 1})]
-        self.assertIsNone(await ark_auth.get_cred_by_token("T"))
+        payload, err = await ark_auth.get_cred_by_token("T")
+        self.assertIsNone(payload)
+        self.assertEqual(err, ark_auth.CRED_ERR_FAILED)
 
     async def test_get_cred_by_token_cred_step_fail(self) -> None:
         FakeRequest.queue = [
             (200, {"status": 0, "data": {"code": "C"}}),
             (200, {"code": 1}),
         ]
-        self.assertIsNone(await ark_auth.get_cred_by_token("T"))
+        payload, err = await ark_auth.get_cred_by_token("T")
+        self.assertIsNone(payload)
+        self.assertEqual(err, ark_auth.CRED_ERR_FAILED)
 
 
 class ListArkRolesTest(unittest.IsolatedAsyncioTestCase):

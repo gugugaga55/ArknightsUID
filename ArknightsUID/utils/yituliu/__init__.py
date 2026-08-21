@@ -19,13 +19,23 @@ import time
 from pathlib import Path
 from typing import Any
 
-import httpx
-
 from gsuid_core.logger import logger
 
 try:
+    from ArknightsUID.ArknightsUID.utils.http import download_bytes
+    from ArknightsUID.ArknightsUID.utils.disk_cache import (
+        cache_read,
+        cache_write,
+        is_fresh,
+    )
     from ArknightsUID.ArknightsUID.utils.path import CACHE_BASE
 except ModuleNotFoundError:
+    from ArknightsUID.utils.http import download_bytes
+    from ArknightsUID.utils.disk_cache import (
+        cache_read,
+        cache_write,
+        is_fresh,
+    )
     from ArknightsUID.utils.path import CACHE_BASE
 
 STAGE_INFO_URL = "https://backend.yituliu.cn/stage/info"
@@ -51,17 +61,17 @@ DEFAULT_GROUPS = ("限时活动", "主线", "别传")
 
 async def fetch_stage_info(force: bool = False) -> list[dict[str, Any]] | None:
     """拉取关卡效率数据（缓存优先，失败回退过期缓存）。"""
-    if not force and _cache_fresh_at(_STAGE_CACHE, _TTL):
-        cached = _load_wrapped(_STAGE_CACHE)
-        if isinstance(cached, list) and cached:
-            return cached
-    payload = await _download_json(STAGE_INFO_URL)
-    data = payload.get("data") if isinstance(payload, dict) else None
+    if not force:
+        payload, saved_ts = await cache_read(_STAGE_CACHE)
+        if isinstance(payload, list) and payload and is_fresh(saved_ts, _TTL):
+            return payload
+    raw = await _download_json(STAGE_INFO_URL)
+    data = raw.get("data") if isinstance(raw, dict) else None
     if isinstance(data, list) and data:
-        _save_wrapped(_STAGE_CACHE, data)
+        await cache_write(_STAGE_CACHE, data)
         return data
-    cached = _load_wrapped(_STAGE_CACHE)
-    return cached if isinstance(cached, list) else None
+    payload, _ = await cache_read(_STAGE_CACHE)
+    return payload if isinstance(payload, list) else None
 
 
 def _is_open(record: dict[str, Any], now: float | None = None) -> bool:
@@ -135,48 +145,17 @@ def format_stage_board(
 # ==================== 材料掉率（COS 掉落矩阵） ====================
 
 
-def _cache_fresh_at(path: Path, ttl: float) -> bool:
-    if not path.exists():
-        return False
-    try:
-        meta = json.loads(path.read_text(encoding="utf-8"))
-        return time.time() - float(meta.get("_cache_time", 0)) <= ttl
-    except Exception:
-        return False
-
-
-def _load_wrapped(path: Path) -> Any:
-    try:
-        meta = json.loads(path.read_text(encoding="utf-8"))
-        return meta.get("payload")
-    except Exception:
-        return None
-
-
-def _save_wrapped(path: Path, payload: Any) -> None:
-    try:
-        _CACHE_DIR.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps({"_cache_time": time.time(), "payload": payload},
-                       ensure_ascii=False),
-            encoding="utf-8",
-        )
-    except Exception as exc:
-        logger.debug(
-            f"[ArknightsUID·一图流] 缓存写入失败: {exc.__class__.__name__}"
-        )
-
-
 async def _download_json(url: str) -> Any | None:
+    """下载 JSON（走共享 HTTP 层，大文件放宽超时）。失败返回 None。"""
+    raw = await download_bytes(url, timeout=60.0)
+    if raw is None:
+        return None
     try:
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            return resp.json()
+        return json.loads(raw)
     except Exception as exc:
         logger.warning(
-            f"[ArknightsUID·一图流] {url.rsplit('/', 1)[-1]} 拉取失败: "
-            f"{exc.__class__.__name__}"
+            f"[ArknightsUID·一图流] {url.rsplit('/', 1)[-1]} 响应非 JSON: "
+            f"{exc.__class__.__name__}: {exc}"
         )
         return None
 
@@ -187,17 +166,19 @@ async def fetch_drop_matrix(force: bool = False) -> list[dict[str, Any]] | None:
     结构：[{stageId, itemId, times, quantity, stdDev, start, end}]，
     同一 (stageId, itemId) 可能存在多个时间窗（取 end 最新，见 latest_matrix_by_item）。
     """
-    if not force and _cache_fresh_at(_MATRIX_CACHE, _MATRIX_TTL):
-        cached = _load_wrapped(_MATRIX_CACHE)
-        if isinstance(cached, list) and cached:
-            return cached
-    payload = await _download_json(DROP_MATRIX_URL)
-    data = payload.get("matrix") if isinstance(payload, dict) else None
+    if not force:
+        payload, saved_ts = await cache_read(_MATRIX_CACHE)
+        if isinstance(payload, list) and payload and is_fresh(
+            saved_ts, _MATRIX_TTL
+        ):
+            return payload
+    raw = await _download_json(DROP_MATRIX_URL)
+    data = raw.get("matrix") if isinstance(raw, dict) else None
     if isinstance(data, list) and data:
-        _save_wrapped(_MATRIX_CACHE, data)
+        await cache_write(_MATRIX_CACHE, data)
         return data
-    cached = _load_wrapped(_MATRIX_CACHE)
-    return cached if isinstance(cached, list) else None
+    payload, _ = await cache_read(_MATRIX_CACHE)
+    return payload if isinstance(payload, list) else None
 
 
 def latest_matrix_by_item(

@@ -95,7 +95,7 @@ async def fetch_cached_player_info(
         except Exception as exc:
             logger.warning(
                 f"[ArknightsUID·player] 缓存写入失败 uid={credential.uid}: "
-                f"{exc.__class__.__name__}"
+                f"{exc.__class__.__name__}: {exc}"
             )
     return response
 
@@ -109,5 +109,5 @@ async def drop_cached_player_info(uid: str) -> None:
             remove_player_json(_cache_path(uid))
     except Exception as exc:
         logger.warning(
-            f"[ArknightsUID·player] 缓存清理失败 uid={uid}: {exc.__class__.__name__}"
+            f"[ArknightsUID·player] 缓存清理失败 uid={uid}: {exc.__class__.__name__}: {exc}"
         )

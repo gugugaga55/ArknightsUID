@@ -43,7 +43,7 @@ def _save(state: dict[str, str]) -> None:
         )
     except Exception as exc:
         logger.warning(
-            f"[ArknightsUID·切换] 状态写入失败: {exc.__class__.__name__}"
+            f"[ArknightsUID·切换] 状态写入失败: {exc.__class__.__name__}: {exc}"
         )
 
 

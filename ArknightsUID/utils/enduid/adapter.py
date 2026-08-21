@@ -80,6 +80,7 @@ def _split_uid_list(value: Any) -> list[str]:
 
 
 def _exception_type(exc: Exception) -> str:
+    # import 失败的异常 message 可能携带环境路径/凭据（零泄漏测试背书），只打类名
     return exc.__class__.__name__
 
 
@@ -106,16 +107,6 @@ def _enduid_models() -> ModuleType | None:
             "EndUID.utils.database.models",
             "plugins.EndUID.EndUID.utils.database.models",
             "gsuid_core.plugins.EndUID.EndUID.utils.database.models",
-        )
-    )
-
-
-def _enduid_requests() -> ModuleType | None:
-    return _import_first(
-        (
-            "EndUID.utils.api.requests",
-            "plugins.EndUID.EndUID.utils.api.requests",
-            "gsuid_core.plugins.EndUID.EndUID.utils.api.requests",
         )
     )
 
@@ -251,151 +242,42 @@ async def resolve_credential(
             return account
 
     return "已找到明日方舟账号，但 EndUID 凭据为空或已失效，请重新使用 EndUID 登录。"
-
-
 async def fetch_player_info(credential: ArkCredential) -> dict[str, Any] | str:
-    response = await local_skland.get_player_info(credential)
-    if response is not None:
-        return response
+    """玩家信息（核心富数据 dump）。本地 Skland 客户端直连。
 
-    requests = _enduid_requests()
-    if requests is None:
-        return "森空岛玩家信息接口请求失败。"
-    end_api = requests.end_api
-    response = await end_api.get_player_info(
-        credential.cred,
-        credential.uid,
-        game_id=ARKNIGHTS_GAME_ID,
-    )
+    v2 起不再回退 EndUID 请求：本地实现已覆盖全部接口，"本地失败再试
+    EndUID"会把凭据失效/网络故障也当成可回退场景，双倍延迟且掩盖问题。
+    EndUID 仅剩账号数据（resolve_accounts）的读取回退。
+    """
+    response = await local_skland.get_player_info(credential)
     if response is None:
         return "森空岛玩家信息接口请求失败。"
     return response
 
 
 async def ark_attendance(credential: ArkCredential) -> dict[str, Any] | str:
+    """明日方舟每日签到。"""
     response = await local_skland.ark_attendance(credential)
-    if response is not None:
-        return response
-
-    requests = _enduid_requests()
-    if requests is None:
-        return "森空岛签到接口请求失败。"
-    end_api = requests.end_api
-    if not hasattr(end_api, "ark_attendance"):
-        return "当前 EndUID 版本缺少明日方舟签到接口，请更新 EndUID。"
-    response = await end_api.ark_attendance(credential.cred, credential.uid)
     if response is None:
         return "森空岛签到接口请求失败。"
-    return response
-
-
-async def fetch_user_info(credential: ArkCredential) -> dict[str, Any] | str:
-    response = await local_skland.get_user_info(credential)
-    if response is not None:
-        return response
-
-    requests = _enduid_requests()
-    if requests is None:
-        return "森空岛用户信息接口请求失败。"
-    end_api = requests.end_api
-    if not hasattr(end_api, "get_user_info"):
-        return "当前 EndUID 版本缺少明日方舟用户信息接口，请更新 EndUID。"
-    # 待 EndUID 实现后以其实测签名为准
-    response = await end_api.get_user_info(credential.cred)
-    if response is None:
-        return "森空岛用户信息接口请求失败。"
-    return response
-
-
-async def fetch_binding(credential: ArkCredential) -> dict[str, Any] | str:
-    response = await local_skland.get_binding(credential)
-    if response is not None:
-        return response
-
-    requests = _enduid_requests()
-    if requests is None:
-        return "森空岛绑定列表接口请求失败。"
-    end_api = requests.end_api
-    if not hasattr(end_api, "get_binding"):
-        return "当前 EndUID 版本缺少明日方舟绑定列表接口，请更新 EndUID。"
-    # 待 EndUID 实现后以其实测签名为准
-    response = await end_api.get_binding(credential.cred)
-    if response is None:
-        return "森空岛绑定列表接口请求失败。"
-    return response
-
-
-async def fetch_attendance_status(credential: ArkCredential) -> dict[str, Any] | str:
-    response = await local_skland.ark_attendance_query(credential)
-    if response is not None:
-        return response
-
-    requests = _enduid_requests()
-    if requests is None:
-        return "森空岛签到状态接口请求失败。"
-    end_api = requests.end_api
-    if not hasattr(end_api, "ark_attendance_query"):
-        return "当前 EndUID 版本缺少明日方舟签到状态接口，请更新 EndUID。"
-    # 待 EndUID 实现后以其实测签名为准
-    response = await end_api.ark_attendance_query(credential.cred, credential.uid)
-    if response is None:
-        return "森空岛签到状态接口请求失败。"
     return response
 
 
 async def fetch_cultivate_character(
     credential: ArkCredential, character_id: str
 ) -> dict[str, Any] | str:
-    response = await local_skland.get_cultivate_character(credential, character_id)
-    if response is not None:
-        return response
-
-    requests = _enduid_requests()
-    if requests is None:
-        return "森空岛单干员养成材料接口请求失败。"
-    end_api = requests.end_api
-    if not hasattr(end_api, "get_cultivate_character"):
-        return "当前 EndUID 版本缺少明日方舟养成材料接口，请更新 EndUID。"
-    # 待 EndUID 实现后以其实测签名为准
-    response = await end_api.get_cultivate_character(
-        credential.cred, credential.uid, character_id
+    """单干员养成材料（按 characterId）。"""
+    response = await local_skland.get_cultivate_character(
+        credential, character_id
     )
     if response is None:
         return "森空岛单干员养成材料接口请求失败。"
     return response
 
 
-async def fetch_cultivate_info(credential: ArkCredential) -> dict[str, Any] | str:
-    response = await local_skland.get_cultivate_info(credential)
-    if response is not None:
-        return response
-
-    requests = _enduid_requests()
-    if requests is None:
-        return "森空岛养成通用信息接口请求失败。"
-    end_api = requests.end_api
-    if not hasattr(end_api, "get_cultivate_info"):
-        return "当前 EndUID 版本缺少明日方舟养成通用信息接口，请更新 EndUID。"
-    # 待 EndUID 实现后以其实测签名为准
-    response = await end_api.get_cultivate_info(credential.cred)
-    if response is None:
-        return "森空岛养成通用信息接口请求失败。"
-    return response
-
-
 async def fetch_cultivate_player(credential: ArkCredential) -> dict[str, Any] | str:
+    """玩家养成进度（按 uid）。"""
     response = await local_skland.get_cultivate_player(credential)
-    if response is not None:
-        return response
-
-    requests = _enduid_requests()
-    if requests is None:
-        return "森空岛玩家养成进度接口请求失败。"
-    end_api = requests.end_api
-    if not hasattr(end_api, "get_cultivate_player"):
-        return "当前 EndUID 版本缺少明日方舟养成进度接口，请更新 EndUID。"
-    # 待 EndUID 实现后以其实测签名为准
-    response = await end_api.get_cultivate_player(credential.cred, credential.uid)
     if response is None:
         return "森空岛玩家养成进度接口请求失败。"
     return response

@@ -72,7 +72,7 @@ def build_char_index(char_table: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 async def load_char_index() -> dict[str, dict[str, Any]]:
     """加载干员索引（精简缓存优先，TTL 同 character_table 7 天）。失败返回 {}。"""
-    if CHARINDEX_PATH.exists() and _cache_fresh(CHAR_TABLE_PATH, CHAR_TABLE_TTL):
+    if CHARINDEX_PATH.exists() and await _cache_fresh(CHAR_TABLE_PATH, CHAR_TABLE_TTL):
         cached = _read_sidecar(CHARINDEX_PATH)
         if isinstance(cached, dict) and cached:
             return cached
@@ -135,7 +135,7 @@ def build_item_index(item_table: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 async def load_item_index() -> dict[str, dict[str, Any]]:
     """加载物品索引（精简缓存优先，TTL 同 character_table）。失败返回 {}。"""
-    if ITEMINDEX_PATH.exists() and _cache_fresh(ITEM_TABLE_PATH, CHAR_TABLE_TTL):
+    if ITEMINDEX_PATH.exists() and await _cache_fresh(ITEM_TABLE_PATH, CHAR_TABLE_TTL):
         cached = _read_sidecar(ITEMINDEX_PATH)
         if isinstance(cached, dict) and cached:
             return cached

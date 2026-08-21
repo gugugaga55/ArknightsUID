@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ..path import TEMPLATES_PATH, RESOURCE_PATH
 from ..config import ArkConfig, CONFIG_DEFAULT
+from ..http import get_client
 
 logging.getLogger("uvicorn.access").addFilter(
     lambda record: "/ark/fonts" not in record.getMessage()
@@ -241,22 +242,23 @@ async def _render_via_remote(html_content: str, remote_url: str) -> Optional[byt
     try:
         logger.debug(f"[ARK·渲染] 尝试使用外置渲染服务: {remote_url}")
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                remote_url,
-                json={"html": html_content},
-                headers={"Content-Type": "application/json"}
-            )
+        client = await get_client()
+        response = await client.post(
+            remote_url,
+            json={"html": html_content},
+            headers={"Content-Type": "application/json"},
+            timeout=60.0,
+        )
 
-            if response.status_code == 200:
-                image_data = response.content
-                elapsed_time = time.time() - start_time
-                html_kb = len(html_content) / 1024
-                logger.info(f"[ARK·渲染] 外置渲染成功，耗时: {elapsed_time:.2f}s，HTML大小: {html_kb:.1f}KB，图片大小: {len(image_data)} bytes")
-                return image_data
-            else:
-                logger.warning(f"[ARK·渲染] 外置渲染失败，状态码: {response.status_code}, 错误: {response.text}")
-                return None
+        if response.status_code == 200:
+            image_data = response.content
+            elapsed_time = time.time() - start_time
+            html_kb = len(html_content) / 1024
+            logger.info(f"[ARK·渲染] 外置渲染成功，耗时: {elapsed_time:.2f}s，HTML大小: {html_kb:.1f}KB，图片大小: {len(image_data)} bytes")
+            return image_data
+        else:
+            logger.warning(f"[ARK·渲染] 外置渲染失败，状态码: {response.status_code}, 错误: {response.text}")
+            return None
     except httpx.TimeoutException:
         elapsed_time = time.time() - start_time
         logger.warning(f"[ARK·渲染] 外置渲染超时 ({elapsed_time:.2f}s)，将回退到本地渲染")
@@ -392,45 +394,6 @@ def image_to_base64(image_path: Union[str, Path], quality: int = 0) -> str:
     except Exception as e:
         logger.warning(f"[ARK·渲染] 图片转 base64 失败: {image_path}, {e}")
         return ""
-
-
-def get_logo_b64() -> Optional[str]:
-    try:
-        logo_path = RESOURCE_PATH / "logo.png"
-
-        if not logo_path.exists():
-            return None
-
-        with open(logo_path, "rb") as f:
-            data = f.read()
-            return f"data:image/png;base64,{base64.b64encode(data).decode('utf-8')}"
-    except Exception as e:
-        logger.warning(f"[ARK·渲染] Logo loading failed: {e}")
-        return None
-
-
-def get_footer_b64(footer_type: str = "black") -> Optional[str]:
-    try:
-        from pathlib import Path
-
-        current_file_path = Path(__file__).resolve()
-        footer_path = current_file_path.parent / "texture2d" / f"footer_{footer_type}.png"
-
-        if not footer_path.exists():
-            if footer_type == "black":
-                footer_path = current_file_path.parent / "texture2d" / "footer_white.png"
-            else:
-                footer_path = current_file_path.parent / "texture2d" / "footer_black.png"
-
-        if not footer_path.exists():
-            return None
-
-        with open(footer_path, "rb") as f:
-            data = f.read()
-            return f"data:image/png;base64,{base64.b64encode(data).decode('utf-8')}"
-    except Exception as e:
-        logger.warning(f"[ARK·渲染] Footer loading failed: {e}")
-        return None
 
 
 async def get_image_b64_with_cache(

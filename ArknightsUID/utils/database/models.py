@@ -99,6 +99,29 @@ class ArkUser(User, table=True):
 
     @classmethod
     @with_session
+    async def update_token_by_cred(
+        cls,
+        session: AsyncSession,
+        cred: str,
+        token: str,
+        game_id: Optional[int] = ARKNIGHTS_CHANNEL_OFFICIAL,
+    ) -> int:
+        """按 cred 更新 token（refresh 回写）。返回更新行数。
+
+        token 是短期凭据：请求链路 refresh 成功后回写，避免后续每条命令
+        都重复「旧 token 请求 → 220 → refresh → 重试」三个往返。
+        """
+        filters = [cls.cookie == cred]
+        if game_id is not None:
+            filters.append(cls.game_id == game_id)
+        result = await session.execute(select(cls).where(*filters))
+        rows = result.scalars().all()
+        for row in rows:
+            row.token = token
+        return len(rows)
+
+    @classmethod
+    @with_session
     async def delete_by_user(
         cls,
         session: AsyncSession,

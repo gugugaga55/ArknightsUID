@@ -1,24 +1,21 @@
 """森空岛登录链（脱离 EndUID）。
 
-httpx 风格照搬 client.refresh_token；header 复用本地 request_util 的
+请求走共享 HTTP 层（utils/http）；header 复用本地 request_util 的
 get_oauth_header / get_cred_header（已是本地复刻，非 import EndUID）。
 
 两类接口成功字段不同：
 - as.hypergryph.com 系列（OAuth grant / scan / token_by_scan）：status == 0
 - zonai.skland.com 系列（cred / binding）：code == 0
-
-待真实凭据 联调（环境无真实账号，单测全 mock httpx）。
 """
 from __future__ import annotations
 
-import types
+from dataclasses import dataclass
 from typing import Any
-
-import httpx
 
 from gsuid_core.logger import logger
 
 from ..api.request_util import get_cred_header, get_oauth_header
+from ..http import request_json
 from . import client as skland_client
 
 # === 登录链 URL ===
@@ -30,6 +27,11 @@ SCAN_LOGIN_API = "https://as.hypergryph.com/general/v1/gen_scan/login"
 SCAN_STATUS_API = "https://as.hypergryph.com/general/v1/scan_status"
 TOKEN_BY_SCAN_CODE_API = "https://as.hypergryph.com/user/auth/v1/token_by_scan_code"
 
+# get_cred_by_token 的错误码（结构化，替代此前的字面量 "405" 三态返回）
+CRED_ERR_OK = ""
+CRED_ERR_UNAVAILABLE = "unavailable"   # 服务暂不可用（HTTP 405：IP 受限/风控）
+CRED_ERR_FAILED = "failed"             # 网络/业务失败
+
 
 async def _request(
     method: str,
@@ -38,26 +40,21 @@ async def _request(
     headers: dict[str, str] | None = None,
     body: dict[str, Any] | None = None,
 ) -> tuple[int, dict[str, Any] | None]:
-    """通用 httpx 请求，返回 (status_code, json_or_None)。异常/非 json 返回 (status, None)。"""
-    try:
-        async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
-            if method == "GET":
-                resp = await client.get(url, headers=headers)
-            else:
-                resp = await client.post(url, headers=headers, json=body)
-    except Exception as exc:
-        logger.warning(
-            f"[ArknightsUID·auth] {method} {url} error: {exc.__class__.__name__}"
-        )
-        return 0, None
-    try:
-        data = resp.json()
-    except Exception:
-        logger.warning(
-            f"[ArknightsUID·auth] {url} non-json response, HTTP {resp.status_code}"
-        )
-        return resp.status_code, None
-    return resp.status_code, data
+    """通用请求，返回 (status_code, json_or_None)。异常/非 json 返回 (status, None)。"""
+    result = await request_json(
+        method, url, headers=headers, json_body=body, timeout=25.0
+    )
+    data = result.data if isinstance(result.data, dict) else None
+    return result.status, data
+
+
+@dataclass(slots=True)
+class _CredOnlyCredential:
+    """仅带 cred 的最小凭证（duck typing 兼容 _signed_request 的字段访问）。"""
+
+    cred: str
+    token: str = ""
+    uid: str = ""
 
 
 def parse_credential(text: str) -> tuple[str | None, str]:
@@ -113,10 +110,12 @@ async def get_token_by_scan_code(scan_code: str) -> dict[str, str] | None:
     }
 
 
-async def get_cred_by_token(token: str) -> dict[str, str] | str | None:
-    """token → {"cred", "skland_user_id"}。
+async def get_cred_by_token(token: str) -> tuple[dict[str, str] | None, str]:
+    """token → ({"cred", "skland_user_id"}, CRED_ERR_OK)。
 
-    token 暂不可用时返回字面量 "405"；网络/业务失败返回 None。
+    失败返回 (None, 错误码)：
+    - CRED_ERR_UNAVAILABLE：OAuth API 405（当前服务暂时无法使用 token）
+    - CRED_ERR_FAILED：网络/业务失败（token 无效等）
     """
     # 1. token → OAuth code
     status, data = await _request(
@@ -127,14 +126,14 @@ async def get_cred_by_token(token: str) -> dict[str, str] | str | None:
     )
     if status == 405:
         logger.warning("[ArknightsUID·auth] OAuth API 405，当前服务暂时无法使用 token")
-        return "405"
+        return None, CRED_ERR_UNAVAILABLE
     if status != 200 or not data:
-        return None
+        return None, CRED_ERR_FAILED
     if data.get("status") != 0:
-        return None
+        return None, CRED_ERR_FAILED
     code = (data.get("data") or {}).get("code")
     if not code:
-        return None
+        return None, CRED_ERR_FAILED
 
     # 2. OAuth code → cred
     status, data = await _request(
@@ -144,13 +143,13 @@ async def get_cred_by_token(token: str) -> dict[str, str] | str | None:
         body={"kind": 1, "code": code},
     )
     if status != 200 or not data:
-        return None
+        return None, CRED_ERR_FAILED
     if data.get("code") != 0:
-        return None
+        return None, CRED_ERR_FAILED
     payload = data.get("data") or {}
     cred = payload.get("cred")
     if not cred:
-        return None
+        return None, CRED_ERR_FAILED
     skland_user_id = (
         payload.get("userId")
         or payload.get("user_id")
@@ -161,7 +160,7 @@ async def get_cred_by_token(token: str) -> dict[str, str] | str | None:
     return {
         "cred": cred,
         "skland_user_id": str(skland_user_id) if skland_user_id else "",
-    }
+    }, CRED_ERR_OK
 
 
 async def list_ark_roles_by_cred(
@@ -169,10 +168,13 @@ async def list_ark_roles_by_cred(
 ) -> list[dict[str, str]] | None:
     """用 cred 拉绑定列表，筛 gameId==1 的明日方舟角色。
 
-    不重写签名：构造临时 credential（duck typing，_signed_request 仅用 .cred/.token）
-    调现成 client.get_binding，token 空会自动 refresh。签名待联调收敛到 client.py。
+    不重写签名：构造最小 credential 调现成 client.get_binding，
+    token 空会自动 refresh（含缓存/回写，见 client._token_for_cred）。
+
+    roles 元素的 record_uid 是森空岛账号 uid（抽卡 OAuth 链要用），
+    hypergryph.resolve_record_uid 也复用本函数，避免同一接口两套解析。
     """
-    cred_obj = types.SimpleNamespace(cred=cred, token="", uid="")
+    cred_obj = _CredOnlyCredential(cred=cred)
     response = await skland_client.get_binding(cred_obj)
     if not response or response.get("code") != 0:
         return None

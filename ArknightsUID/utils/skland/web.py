@@ -15,11 +15,10 @@ from __future__ import annotations
 import time
 from typing import Any
 
-import httpx
-
 from gsuid_core.logger import logger
 
-from ..api.request_util import SIGN_VNAME
+from ..api.request_util import SIGN_VNAME, RespCode
+from ..http import request_json
 from . import client as skland_client
 
 WEB_BASE = "https://zonai.skland.com"
@@ -35,8 +34,8 @@ WEB_USER_AGENT = (
 ARK_GAME_ID = 1
 ARK_ANN_CATE_ID = 1
 
-# 请求异常码（token 失效）→ 刷新重试
-_REQUEST_ERROR_CODE = 10000
+# 请求异常码（token 失效）→ 刷新重试；与 RespCode.REQUEST_ERROR 同一业务码
+_REQUEST_ERROR_CODE = int(RespCode.REQUEST_ERROR)
 
 # 进程内公共 token 缓存（25 分钟，服务端短期）
 _token_cache: dict[str, Any] = {"token": "", "ts": 0.0}
@@ -57,16 +56,9 @@ def _web_headers(sign_data: dict[str, str]) -> dict[str, str]:
 
 
 async def _http_get_json(url: str, headers: dict[str, str]) -> dict[str, Any] | None:
-    """httpx GET → json（测试缝：单测 patch 此函数）。异常返回 None。"""
-    try:
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-            resp = await client.get(url, headers=headers)
-            return resp.json()
-    except Exception as exc:
-        logger.warning(
-            f"[ArknightsUID·公告] GET 请求异常: {exc.__class__.__name__}"
-        )
-        return None
+    """GET → json（测试缝：单测 patch 此函数）。异常返回 None。"""
+    result = await request_json("GET", url, headers=headers, timeout=20.0)
+    return result.data if isinstance(result.data, dict) else None
 
 
 async def refresh_public_web_token(force: bool = False) -> str:
@@ -93,7 +85,7 @@ async def refresh_public_web_token(force: bool = False) -> str:
     token = str((data.get("data") or {}).get("token") or "")
     if token:
         _token_cache["token"] = token
-        _token_cache["ts"] = now
+        _token_cache["ts"] = time.time()
     return token
 
 

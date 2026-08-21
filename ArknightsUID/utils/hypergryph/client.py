@@ -23,9 +23,10 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
-import httpx
-
 from gsuid_core.logger import logger
+
+from ..http import request_json
+from ..skland.auth import list_ark_roles_by_cred
 
 if TYPE_CHECKING:
     from ..enduid.adapter import ArkCredential
@@ -58,26 +59,17 @@ async def _request(
     params: dict[str, Any] | None = None,
 ) -> tuple[int, dict[str, Any] | None, list[str]]:
     """通用请求 → (status_code, json, set_cookie 头列表)。异常/非 json 的 json 为 None。"""
-    try:
-        async with httpx.AsyncClient(timeout=25.0, follow_redirects=False) as client:
-            if method == "GET":
-                resp = await client.get(url, headers=headers, params=params)
-            else:
-                resp = await client.post(url, headers=headers, json=body)
-    except Exception as exc:
-        logger.warning(
-            f"[ArknightsUID·hypergryph] {method} {url} error: {exc.__class__.__name__}"
-        )
-        return 0, None, []
-    try:
-        data = resp.json()
-    except Exception:
-        logger.warning(
-            f"[ArknightsUID·hypergryph] {url} non-json, HTTP {resp.status_code}"
-        )
-        return resp.status_code, None, []
-    cookies = resp.headers.get_list("set-cookie") or []
-    return resp.status_code, data, cookies
+    result = await request_json(
+        method,
+        url,
+        headers=headers,
+        params=params,
+        json_body=body,
+        timeout=25.0,
+        follow_redirects=False,
+    )
+    data = result.data if isinstance(result.data, dict) else None
+    return result.status, data, list(result.cookies)
 
 
 async def get_grant_token(hg_token: str) -> str:
@@ -147,28 +139,30 @@ class ArkGachaAuth:
 
 
 async def resolve_record_uid(credential: "ArkCredential") -> str:
-    """取森空岛账号 uid：优先 credential.record_id，缺则拉 binding 反查。"""
+    """取森空岛账号 uid：优先 credential.record_id，缺则拉 binding 反查。
+
+    绑定列表解析复用 auth.list_ark_roles_by_cred（带 gameId==1 过滤）——
+    此前这里按嵌套 bindingList[].roleId 自行解析，形状与真实响应不符
+    （roleId 匹配永不命中，靠外层 uid 兜底返回，且不过滤 gameId，
+    多游戏绑定账号会拿错 u8_token 用的 record_uid）。
+    """
     record_uid = getattr(credential, "record_id", "") or ""
     if record_uid:
         return record_uid
     try:
-        from ..skland import client as skland_client
-
-        response = await skland_client.get_binding(credential)
-        if isinstance(response, dict) and response.get("code") == 0:
-            for binding_item in (response.get("data") or {}).get("list") or []:
-                for entry in binding_item.get("bindingList") or []:
-                    roles = entry.get("bindingList") or []
-                    for role in roles:
-                        if str(role.get("roleId", "")) == credential.uid:
-                            return str(entry.get("uid") or "")
-                    # 无角色明细时退回外层 uid
-                    if str(entry.get("uid") or ""):
-                        return str(entry["uid"])
+        roles = await list_ark_roles_by_cred(credential.cred)
+        if not roles:
+            return ""
+        for role in roles:
+            if role["role_id"] == credential.uid:
+                return role["record_uid"]
+        # 绑定列表里没匹配到当前 uid（角色未启用等）：同一 cred 下
+        # gameId==1 条目的 record_uid 相同（森空岛账号 uid），取首条兜底
+        return roles[0]["record_uid"] or ""
     except Exception as exc:
         logger.warning(
             "[ArknightsUID·hypergryph] binding 反查 record_uid 失败: "
-            f"{exc.__class__.__name__}"
+            f"{exc.__class__.__name__}: {exc}"
         )
     return ""
 

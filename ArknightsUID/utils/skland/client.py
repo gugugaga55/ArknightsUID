@@ -8,17 +8,22 @@ P0 升级要点：
 3. `ARKNIGHTS_GAME_ID` 重命名为 `ARKNIGHTS_CHANNEL_OFFICIAL`，并加注释说明
    它实际是 channelMasterId（官服渠道 ID），不是"游戏 ID"——这个命名误导
    在 EndUID 注释"为啥到这就是1了"里有同样的困惑。
+
+token 管理（v2）：
+- refresh 成功后回写 ArkUser 并缓存（cred → token，TTL 25 分钟），
+  存储里的旧 token 过期后不再每条命令重复 3 个往返
+- 同一 cred 的 refresh 持进程锁（推送任务与用户命令并发时只刷一次）
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import json
+import re
 import time
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
-
-import httpx
 
 from gsuid_core.logger import logger
 
@@ -34,6 +39,7 @@ from ..api.request_util import (
     get_device_id,
     get_skland_app_headers,
 )
+from ..http import describe_error, get_client
 
 if TYPE_CHECKING:
     from ..enduid.adapter import ArkCredential
@@ -54,7 +60,6 @@ GAME_BINDING_URL = f"{MAIN_URL}api/{API_VERSION}/game/player/binding"
 CULTIVATE_CHARACTER_URL = f"{MAIN_URL}api/{API_VERSION}/game/cultivate/character"
 CULTIVATE_INFO_URL = f"{MAIN_URL}api/{API_VERSION}/game/cultivate/info"
 CULTIVATE_PLAYER_URL = f"{MAIN_URL}api/{API_VERSION}/game/cultivate/player"
-GAME_CARDS_URL = f"{MAIN_URL}api/{API_VERSION}/game/cards"
 
 # 明日方舟在 Skland 的"游戏 ID"实际是 channelMasterId（官服渠道 ID）。
 # 这个值跟 EndUID 的 ENDFIELD_GAME_ID=3 并存于同一套森空岛账号体系。
@@ -67,9 +72,26 @@ ARKNIGHTS_GAME_ID = ARKNIGHTS_CHANNEL_OFFICIAL
 # 拿到这些 code 表示 token 失效，需要 refresh 后重试一次
 TOKEN_INVALID_CODES = {int(RespCode.TOKEN_INVALID), int(RespCode.LOGIN_EXPIRED)}
 
+# === token 管理：进程内缓存 + per-cred refresh 锁 ===
+# 服务端 token 是短期凭据（约 30 分钟），缓存 25 分钟
+_TOKEN_CACHE_TTL = 25 * 60
+_token_cache: dict[str, tuple[str, float]] = {}
+_refresh_locks: dict[str, asyncio.Lock] = {}
+_UNSAFE_QUERY_RE = re.compile(r"[^0-9A-Za-z_.\-]")
 
-def _safe_error_type(exc: Exception) -> str:
-    return exc.__class__.__name__
+
+def _safe_error(exc: Exception, *secrets: str) -> str:
+    """异常描述（类名 + message）并对已知凭据脱敏。
+
+    旧实现只打类名，线上排障无法区分超时/SSL/连接错误；直接打 message
+    又可能把异常文本里携带的 cred/token 泄漏进日志（签名请求的合成异常
+    含完整 headers）。折中：保留 message，把当前请求的敏感值替换为 ***。
+    """
+    text = describe_error(exc)
+    for secret in secrets:
+        if secret:
+            text = text.replace(secret, "***")
+    return text
 
 
 def _generate_sign(
@@ -108,10 +130,20 @@ def _generate_sign(
 
 def _query_string(params: dict[str, Any] | None) -> str:
     # 刻意不做 URL 编码：Skland 官方签名要求按原始键值拼接（sorted by key），
-    # 编码会破坏签名一致性。调用方应仅传入无特殊字符的参数（如 uid/gameId 数字）。
+    # 编码会破坏签名一致性。调用方应仅传入无特殊字符的参数（如 uid/gameId 数字）；
+    # 出现其它字符说明调用方破坏了这一契约，打 warning 暴露问题（不阻断）。
     if not params:
         return ""
-    return "&".join(f"{key}={value}" for key, value in sorted(params.items()))
+    pairs: list[str] = []
+    for key, value in sorted(params.items()):
+        pair = f"{key}={value}"
+        if _UNSAFE_QUERY_RE.search(pair):
+            logger.warning(
+                "[ArknightsUID] Skland 签名参数含特殊字符，签名可能失效: "
+                f"{pair!r}"
+            )
+        pairs.append(pair)
+    return "&".join(pairs)
 
 
 def _base_headers(
@@ -147,7 +179,7 @@ def _base_headers(
 
 
 async def refresh_token(cred: str) -> str:
-    """刷新 Skland token。失败返回空字符串。"""
+    """刷新 Skland token（纯网络操作，无缓存）。失败返回空字符串。"""
     if not cred:
         return ""
     headers = {
@@ -155,13 +187,15 @@ async def refresh_token(cred: str) -> str:
         "User-Agent": IOS_USER_AGENT,
         "Content-Type": "application/json",
     }
+    client = await get_client()
     try:
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-            response = await client.get(REFRESH_TOKEN_URL, headers=headers)
+        response = await client.get(
+            REFRESH_TOKEN_URL, headers=headers, timeout=20.0
+        )
     except Exception as exc:
         logger.warning(
             "[ArknightsUID] Skland token refresh request failed: "
-            f"{_safe_error_type(exc)}"
+            f"{_safe_error(exc, cred)}"
         )
         return ""
 
@@ -175,9 +209,15 @@ async def refresh_token(cred: str) -> str:
     try:
         data = response.json()
     except Exception as exc:
+        # 解析类异常的 message 无法穷举脱敏（可能携带任意响应片段）：
+        # warning 只打类名，脱敏详情放 debug
         logger.warning(
             "[ArknightsUID] Skland token refresh non-json response: "
-            f"HTTP {response.status_code} ({_safe_error_type(exc)})"
+            f"HTTP {response.status_code} ({exc.__class__.__name__})"
+        )
+        logger.debug(
+            "[ArknightsUID] Skland token refresh non-json detail: "
+            f"{_safe_error(exc, cred)}"
         )
         return ""
 
@@ -190,6 +230,63 @@ async def refresh_token(cred: str) -> str:
         f"{data.get('code')}"
     )
     return ""
+
+
+async def _persist_token(cred: str, token: str) -> None:
+    """refresh 产物回写 ArkUser；失败仅 debug（不影响请求主流程）。"""
+    try:
+        from ..database.models import ArkUser
+
+        await ArkUser.update_token_by_cred(cred, token)
+    except Exception as exc:
+        logger.debug(
+            f"[ArknightsUID] token 回写失败（不影响本次请求）: {describe_error(exc)}"
+        )
+
+
+async def _token_for_cred(cred: str, *, force: bool = False, stale: str = "") -> str:
+    """取该 cred 的有效 token：缓存命中直接返回，否则持锁 refresh 一次。
+
+    并发调用（推送任务 + 用户命令同时踩到 token 过期）只会产生一次网络
+    refresh（per-cred 锁 + 双检）；成功后写进程缓存并回写数据库。
+    force=True 表示缓存里的 token 刚被服务端判失效（220），跳过缓存强制刷新；
+    stale 传入刚失败的那个 token——持锁后若缓存已被并发协程换成别的新 token，
+    直接复用，不再重复 refresh（避免旧 token 被第二次 refresh 吊销）。
+    """
+    now = time.time()
+    if not force:
+        cached = _token_cache.get(cred)
+        if cached and now - cached[1] < _TOKEN_CACHE_TTL:
+            return cached[0]
+
+    lock = _refresh_locks.setdefault(cred, asyncio.Lock())
+    async with lock:
+        cached = _token_cache.get(cred)
+        if cached and time.time() - cached[1] < _TOKEN_CACHE_TTL:
+            if not force or cached[0] != stale:
+                return cached[0]
+        token = await refresh_token(cred)
+        if token:
+            _token_cache[cred] = (token, time.time())
+            await _persist_token(cred, token)
+            _prune_token_state(keep=cred)
+        return token
+
+
+def _prune_token_state(*, keep: str = "") -> None:
+    """清理过期 token 缓存与不再需要的 refresh 锁（防无界增长）。
+
+    删除登录后 cred 对应条目不会立刻消失，这里在 refresh 成功的时机
+    顺带清扫：过期的缓存条目直接删；空闲（未加锁）且 cred 已无缓存
+    的锁也一并回收。持有中的锁绝不删除（保证互斥语义）。
+    """
+    now = time.time()
+    for key, (_token, ts) in list(_token_cache.items()):
+        if key != keep and now - ts >= _TOKEN_CACHE_TTL:
+            _token_cache.pop(key, None)
+    for key, lock in list(_refresh_locks.items()):
+        if key != keep and key not in _token_cache and not lock.locked():
+            _refresh_locks.pop(key, None)
 
 
 async def _signed_request(
@@ -217,7 +314,15 @@ async def _signed_request(
         use_device_id: True 时为本次请求生成真实 dId（高敏感接口建议开启）。
                       False 时 dId 留空（普通查询足够，且省一次加密开销）。
     """
-    token = credential.token or await refresh_token(credential.cred)
+    # 进程缓存优先（refresh 后的 token 只在缓存里，DB 回写是异步兜底）：
+    # 否则存储里的旧 token 会让每条命令都先失败一次再 refresh
+    cached = _token_cache.get(credential.cred)
+    if cached and time.time() - cached[1] < _TOKEN_CACHE_TTL:
+        token = cached[0]
+    else:
+        token = credential.token or ""
+    if not token:
+        token = await _token_for_cred(credential.cred)
     if not token:
         return None
 
@@ -264,16 +369,19 @@ async def _signed_request(
         request_url = url
         if method == "GET" and query:
             request_url = f"{url}?{query}"
+        client = await get_client()
         try:
-            async with httpx.AsyncClient(timeout=25.0, follow_redirects=True) as client:
-                if method == "GET":
-                    response = await client.get(request_url, headers=headers)
-                else:
-                    response = await client.post(
-                        request_url,
-                        headers=headers,
-                        content=body_string if body is not None else None,
-                    )
+            if method == "GET":
+                response = await client.get(
+                    request_url, headers=headers, timeout=25.0
+                )
+            else:
+                response = await client.post(
+                    request_url,
+                    headers=headers,
+                    content=body_string if body is not None else None,
+                    timeout=25.0,
+                )
             if not response.content:
                 return None
             try:
@@ -294,13 +402,15 @@ async def _signed_request(
         except Exception as exc:
             logger.warning(
                 "[ArknightsUID] Skland request error: "
-                f"{_safe_error_type(exc)}"
+                f"{_safe_error(exc, credential.cred, request_token)}"
             )
             return None
 
     result = await do_request(token)
     if isinstance(result, dict) and result.get("code") in TOKEN_INVALID_CODES:
-        fresh_token = await refresh_token(credential.cred)
+        fresh_token = await _token_for_cred(
+            credential.cred, force=True, stale=token
+        )
         if fresh_token:
             result = await do_request(fresh_token)
     return result
@@ -426,16 +536,3 @@ async def get_cultivate_player(credential: "ArkCredential") -> dict[str, Any] | 
         params={"uid": credential.uid},
     )
 
-
-async def get_cards(credential: "ArkCredential") -> dict[str, Any] | None:
-    """查询游戏卡片/成就信息（cred 作用域，不带角色头）。
-
-    对应 gxy12345 sklandApi.js 的 cards 接口（与 cal_info 同型：仅 URL，无 query/body）。
-    签名组合同 get_cultivate_info（zonai.skland.com GET 同源默认签名）。
-    EndUID 无此接口实现，真实联调待验证响应结构。
-    """
-    return await _signed_request(
-        credential,
-        url=GAME_CARDS_URL,
-        method="GET",
-    )

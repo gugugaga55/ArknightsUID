@@ -92,7 +92,7 @@ async def load_recruit_data() -> list[dict[str, Any]]:
 
     拉取失败时用过期精简缓存兜底；都没有则返回空列表。
     """
-    if RECRUIT_DATA_PATH.exists() and _cache_fresh(CHAR_TABLE_PATH, CHAR_TABLE_TTL):
+    if RECRUIT_DATA_PATH.exists() and await _cache_fresh(CHAR_TABLE_PATH, CHAR_TABLE_TTL):
         cached = _read_sidecar(RECRUIT_DATA_PATH)
         if isinstance(cached, list):
             return cached

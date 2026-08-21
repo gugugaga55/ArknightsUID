@@ -12,13 +12,23 @@ from dataclasses import field, dataclass
 from typing import Any
 from urllib.parse import quote
 
-import httpx
-
 from gsuid_core.logger import logger
 
 try:
+    from ArknightsUID.ArknightsUID.utils.http import get_client
+    from ArknightsUID.ArknightsUID.utils.disk_cache import (
+        cache_read,
+        cache_write,
+        is_fresh,
+    )
     from ArknightsUID.ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
 except ModuleNotFoundError:
+    from ArknightsUID.utils.http import get_client
+    from ArknightsUID.utils.disk_cache import (
+        cache_read,
+        cache_write,
+        is_fresh,
+    )
     from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
 
 
@@ -40,6 +50,28 @@ _MAX_ENEMY_FIELDS = 80
 _CACHE_MAX_AGE_SECONDS = 7 * 86400
 _CACHE_CLEANUP_INTERVAL = 3600
 _last_cleanup_at: float = 0.0
+
+# 对 PRTS 的最小请求间隔（秒）：社区 wiki 的反爬阈值远比商业 API 敏感，
+# 一条命令最多连打 9+ 个请求（直查 + 搜索回退 + Cargo 补全），不隔开
+# 容易整段 IP 被 403。缓存命中不经过 _api 网络路径，不受此间隔影响。
+_MIN_REQUEST_INTERVAL = 0.5
+_last_request_at: float = 0.0
+_request_gap_lock: "asyncio.Lock | None" = None
+
+
+async def _throttle() -> None:
+    """保证本模块发出的相邻两个 PRTS 请求之间至少隔 _MIN_REQUEST_INTERVAL。"""
+    global _last_request_at, _request_gap_lock
+    import asyncio
+
+    if _request_gap_lock is None:
+        _request_gap_lock = asyncio.Lock()
+    async with _request_gap_lock:
+        now = time.monotonic()
+        wait = _MIN_REQUEST_INTERVAL - (now - _last_request_at)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        _last_request_at = time.monotonic()
 
 
 @dataclass(slots=True)
@@ -105,12 +137,42 @@ class EnemyLevel:
     attack_interval: str = ""
     attack_radius: str = ""
     weight: str = ""
+    hp_regen: str = ""       # 生命恢复速度
+    sp_regen: str = ""       # sp恢复速度
+    ep_res: str = ""         # 元素抗性
+    ep_damage_res: str = ""  # 损伤抵抗
+    taunt: str = ""          # 基础嘲讽等级
     stun_res: str = ""
     silence_res: str = ""
     sleep_res: str = ""
     freeze_res: str = ""
     levitate_res: str = ""
+    tremor_res: str = ""     # 战栗抗性
+    fear_res: str = ""       # 恐惧抗性
+    paralysis_res: str = ""  # 麻痹抗性
+    lure_res: str = ""       # 诱导抗性
+    teleport_res: str = ""   # 传送抗性
+    bind_res: str = ""       # 缚地抗性
     abilities: list[str] = field(default_factory=list)
+
+
+# 全部异常抗性（attr, 中文标签）：取值 "有"/"无"（个别敌人可能是部分抗性描述）
+RESISTANCE_FIELDS: tuple[tuple[str, str], ...] = (
+    ("stun_res", "眩晕"), ("silence_res", "沉默"), ("sleep_res", "沉睡"),
+    ("freeze_res", "冻结"), ("levitate_res", "浮空"), ("tremor_res", "战栗"),
+    ("fear_res", "恐惧"), ("paralysis_res", "麻痹"), ("lure_res", "诱导"),
+    ("teleport_res", "传送"), ("bind_res", "缚地"),
+)
+
+
+def level_resistances(level: EnemyLevel) -> list[tuple[str, str]]:
+    """等级块的生效抗性 [(标签, 原值)]：空/无 视为无抗性，不进列表。"""
+    pairs = []
+    for attr, label in RESISTANCE_FIELDS:
+        value = (getattr(level, attr) or "").strip()
+        if value and value != "无":
+            pairs.append((label, value))
+    return pairs
 
 
 @dataclass(slots=True)
@@ -309,43 +371,16 @@ def _cache_file(params: dict[str, Any]) -> Path:
     return PRTS_CACHE_PATH / f"{digest}.json"
 
 
-def _load_cache(path: Path, cache_seconds: int) -> dict[str, Any] | None:
-    if not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    if time.time() - float(data.get("_cache_time", 0)) <= cache_seconds:
-        return data.get("payload")
+async def _load_cache(path: Path, cache_seconds: int) -> dict[str, Any] | None:
+    payload, saved_ts = await cache_read(path)
+    if payload is not None and is_fresh(saved_ts, cache_seconds):
+        return payload if isinstance(payload, dict) else None
     return None
 
 
-def _load_stale_cache(path: Path) -> dict[str, Any] | None:
-    if not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    payload = data.get("payload")
+async def _load_stale_cache(path: Path) -> dict[str, Any] | None:
+    payload, _saved_ts = await cache_read(path)
     return payload if isinstance(payload, dict) else None
-
-
-def _save_cache(path: Path, payload: dict[str, Any]) -> None:
-    try:
-        path.write_text(
-            json.dumps(
-                {"_cache_time": time.time(), "payload": payload},
-                ensure_ascii=False,
-            ),
-            encoding="utf-8",
-        )
-    except Exception as exc:
-        logger.debug(
-            "[ArknightsUID] PRTS cache save failed: "
-            f"{exc.__class__.__name__}"
-        )
 
 
 def _cleanup_stale_cache(max_age_seconds: int = _CACHE_MAX_AGE_SECONDS) -> None:
@@ -367,12 +402,12 @@ def _cleanup_stale_cache(max_age_seconds: int = _CACHE_MAX_AGE_SECONDS) -> None:
             except Exception as exc:
                 logger.debug(
                     "[ArknightsUID] PRTS cache entry cleanup failed: "
-                    f"{exc.__class__.__name__}"
+                    f"{exc.__class__.__name__}: {exc}"
                 )
     except Exception as exc:
         logger.debug(
             "[ArknightsUID] PRTS cache cleanup scan failed: "
-            f"{exc.__class__.__name__}"
+            f"{exc.__class__.__name__}: {exc}"
         )
 
 
@@ -382,30 +417,34 @@ async def _api(
     cache_seconds: int = 86400,
 ) -> dict[str, Any] | None:
     cache_path = _cache_file(params)
-    cached = _load_cache(cache_path, cache_seconds)
+    cached = await _load_cache(cache_path, cache_seconds)
     if cached is not None:
         _cleanup_stale_cache()
         return cached
 
+    await _throttle()
     request_params = {"format": "json", **params}
+    client = await get_client()
     try:
-        async with httpx.AsyncClient(
-            timeout=20.0,
-            follow_redirects=True,
+        response = await client.get(
+            PRTS_API_URL,
+            params=request_params,
             headers={"User-Agent": USER_AGENT},
-        ) as client:
-            response = await client.get(PRTS_API_URL, params=request_params)
-            response.raise_for_status()
-            payload = response.json()
-            _save_cache(cache_path, payload)
-            _cleanup_stale_cache()
-            return payload
+            timeout=20.0,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        await cache_write(cache_path, payload)
+        _cleanup_stale_cache()
+        return payload
     except Exception as exc:
+        # PRTS 层无脱敏上下文（异常 message 可能携带 srsearch 参数等
+        # 任意文本），按安全约定只打类名
         logger.warning(
             "[ArknightsUID] PRTS API request failed: "
             f"{exc.__class__.__name__}"
         )
-        return _load_stale_cache(cache_path)
+        return await _load_stale_cache(cache_path)
 
 
 async def search_pages(query: str, limit: int = 5) -> list[SearchResult]:
@@ -443,12 +482,25 @@ def _redirect_target(wikitext: str) -> str:
     return match.group(1).split("|", 1)[0].strip()
 
 
-async def parse_page(title: str, *, follow_redirect: bool = True) -> PageWikitext | None:
+async def parse_page(
+    title: str,
+    *,
+    follow_redirect: bool = True,
+    deadline: float | None = None,
+) -> PageWikitext | None:
+    """解析页面 wikitext（跟随重定向，最多 3 跳）。
+
+    deadline 为 time.monotonic() 时刻：查询链总预算耗尽时立即放弃
+    （单次 _api 已有 20s 超时，deadline 防的是"直查+搜索回退 8 个候选页"
+    这类多请求链路把命令卡住数分钟）。
+    """
     current = title.strip()
     if not current:
         return None
     seen: set[str] = set()
     for _ in range(3):
+        if deadline is not None and time.monotonic() > deadline:
+            return None
         if current in seen:
             return None
         seen.add(current)
@@ -520,6 +572,37 @@ def _fields_from_template(lines: list[str]) -> dict[str, str]:
     return fields
 
 
+# 变动数值 参数2是方向：-=下调 → 绿色下箭头，+=上调 → 红色上箭头
+_ARROW_MARKS = {"-": "↓", "+": "↑"}
+# 变动数值lite 参数1是字面符号（+/−）或方向图标（up/down）
+_SIGN_MARKS = {"up": "↑", "down": "↓", "+": "+", "-": "-"}
+
+
+def _collapse_inline_template(match: re.Match[str]) -> str:
+    """内嵌模板 {{名|参数…}} → 纯文本（数值模板必须保数值，不能只取末段）。
+
+    通用兜底取最后一个管道段（color 等模板显示段在末尾）；
+    变动数值/异常效果等语义模板按显示规则展开：
+    - {{变动数值|5%|-}} → 5%↓（参数1为值，参数2为相对上一级的方向）
+    - {{变动数值lite|up|蓝|+20%}} → ↑+20%（参数1图标，参数3为值）
+    - {{异常效果|眩晕|免疫}} → 眩晕免疫（参数拼接，跳过 color= 等命名参数）
+    """
+    parts = match.group(1).split("|")
+    name = parts[0].strip()
+    args = [p.strip() for p in parts[1:]]
+    if name == "变动数值":
+        value = args[0] if args else ""
+        mark = args[1] if len(args) > 1 else ""
+        return f"{value}{_ARROW_MARKS.get(mark, '')}"
+    if name in ("变动数值lite", "变动数值Lite"):
+        mark = _SIGN_MARKS.get(args[0], "") if args else ""
+        value = args[2] if len(args) > 2 else (args[-1] if args else "")
+        return f"{mark}{value}"
+    if name in ("异常效果", "异常状态"):
+        return "".join(a for a in args if a and "=" not in a)
+    return (parts[-1] or "").strip()
+
+
 def _clean_wiki_value(value: str) -> str:
     text = html.unescape(value or "")
     text = text.replace("\xa0", " ")
@@ -536,7 +619,7 @@ def _clean_wiki_value(value: str) -> str:
         previous = text
         text = re.sub(
             r"\{\{([^{}]*)\}\}",
-            lambda m: m.group(1).split("|")[-1],
+            _collapse_inline_template,
             text,
         )
 
@@ -731,12 +814,25 @@ def parse_stage_wikitext(page: PageWikitext) -> StageInfo | None:
     )
 
 
+# 查询链总预算（秒）：直查 + 搜索回退逐页解析 + Cargo 补全共用一个 deadline
+_QUERY_DEADLINE_SECONDS = 90.0
+
+
+def _new_deadline() -> float:
+    return time.monotonic() + _QUERY_DEADLINE_SECONDS
+
+
+def _expired(deadline: float) -> bool:
+    return time.monotonic() > deadline
+
+
 async def query_stage(query: str) -> StageInfo | None:
     query = query.strip()
     if not query:
         return None
+    deadline = _new_deadline()
 
-    page = await parse_page(query)
+    page = await parse_page(query, deadline=deadline)
     if page:
         stage = parse_stage_wikitext(page)
         if stage:
@@ -744,10 +840,12 @@ async def query_stage(query: str) -> StageInfo | None:
 
     results = await search_pages(query, limit=8)
     for result in results:
+        if _expired(deadline):
+            break
         title = result.title
         if "/" in title and not re.search(r"\s\d+-\d+", title):
             continue
-        page = await parse_page(title)
+        page = await parse_page(title, deadline=deadline)
         if not page:
             continue
         stage = parse_stage_wikitext(page)
@@ -759,9 +857,9 @@ async def query_stage(query: str) -> StageInfo | None:
 # 等级变体块可从上一级继承的数值字段（index/描述/能力不继承）
 _LEVEL_STAT_FIELDS = (
     "max_hp", "atk", "defense", "res", "move_speed", "attack_interval",
-    "attack_radius", "weight", "stun_res", "silence_res", "sleep_res",
-    "freeze_res", "levitate_res",
-)
+    "attack_radius", "weight", "hp_regen", "sp_regen", "ep_res",
+    "ep_damage_res", "taunt",
+) + tuple(attr for attr, _ in RESISTANCE_FIELDS)
 
 
 def _inherit_level_stats(levels: list[EnemyLevel]) -> None:
@@ -858,11 +956,22 @@ def parse_enemy_wikitext(page: PageWikitext) -> EnemyInfo | None:
                 attack_interval=fields.get("攻击间隔", ""),
                 attack_radius=fields.get("攻击范围半径", ""),
                 weight=fields.get("重量等级", ""),
+                hp_regen=fields.get("生命恢复速度", ""),
+                sp_regen=fields.get("sp恢复速度", ""),
+                ep_res=fields.get("元素抗性", ""),
+                ep_damage_res=fields.get("损伤抵抗", ""),
+                taunt=fields.get("基础嘲讽等级", ""),
                 stun_res=fields.get("眩晕抗性", ""),
                 silence_res=fields.get("沉默抗性", ""),
                 sleep_res=fields.get("沉睡抗性", ""),
                 freeze_res=fields.get("冻结抗性", ""),
                 levitate_res=fields.get("浮空抗性", ""),
+                tremor_res=fields.get("战栗抗性", ""),
+                fear_res=fields.get("恐惧抗性", ""),
+                paralysis_res=fields.get("麻痹抗性", ""),
+                lure_res=fields.get("诱导抗性", ""),
+                teleport_res=fields.get("传送抗性", ""),
+                bind_res=fields.get("缚地抗性", ""),
                 abilities=abilities,
             )
         )
@@ -1131,8 +1240,9 @@ async def query_enemy(query: str) -> EnemyInfo | None:
     query = query.strip()
     if not query:
         return None
+    deadline = _new_deadline()
 
-    page = await parse_page(query)
+    page = await parse_page(query, deadline=deadline)
     if page:
         enemy = parse_enemy_wikitext(page)
         if enemy:
@@ -1140,9 +1250,11 @@ async def query_enemy(query: str) -> EnemyInfo | None:
 
     results = await search_pages(query, limit=8)
     for result in results:
+        if _expired(deadline):
+            break
         if "/" in result.title:
             continue
-        page = await parse_page(result.title)
+        page = await parse_page(result.title, deadline=deadline)
         if not page:
             continue
         enemy = parse_enemy_wikitext(page)
@@ -1223,16 +1335,19 @@ async def query_page(query: str) -> WikiPageSummary | None:
     query = query.strip()
     if not query:
         return None
+    deadline = _new_deadline()
 
-    page = await parse_page(query)
+    page = await parse_page(query, deadline=deadline)
     if page:
         return parse_generic_page(page)
 
     results = await search_pages(query, limit=8)
     for result in results:
+        if _expired(deadline):
+            break
         if result.title.endswith(("/spine", "/BEG", "/END")):
             continue
-        page = await parse_page(result.title)
+        page = await parse_page(result.title, deadline=deadline)
         if page:
             return parse_generic_page(page)
     return None
@@ -1248,7 +1363,11 @@ async def query_base_skill(name: str) -> tuple[str, str] | None:
     if not name:
         return None
     # 技能名来自 wiki 干员页（外部可编辑），MySQL 语义下单引号 doubling、
-    # 反斜杠成对，防止 where 条件被拼接注入
+    # 反斜杠成对，防止 where 条件被拼接注入（注入向量只有 ' 与 \；
+    # %/_ 在 = 比较中是字面量，不拦截）；控制字符不属于合法技能名，直接拒绝
+    if re.search(r"[\x00-\x1f\x7f]", name):
+        logger.warning(f"[ArknightsUID] 拒绝可疑技能名 Cargo 查询: {name[:16]!r}")
+        return None
     safe_name = name.replace("\\", "\\\\").replace("'", "''")
     data = await _api(
         {
@@ -1282,15 +1401,18 @@ async def query_operator(query: str) -> OperatorInfo | None:
     query = query.strip()
     if not query:
         return None
+    deadline = _new_deadline()
 
-    page = await parse_page(query)
+    page = await parse_page(query, deadline=deadline)
     op = parse_operator_wikitext(page) if page else None
     if not op:
         results = await search_pages(query, limit=8)
         for result in results:
+            if _expired(deadline):
+                break
             if "/" in result.title:
                 continue
-            page = await parse_page(result.title)
+            page = await parse_page(result.title, deadline=deadline)
             if not page:
                 continue
             op = parse_operator_wikitext(page)
@@ -1299,9 +1421,10 @@ async def query_operator(query: str) -> OperatorInfo | None:
     if not op:
         return None
 
-    # 后勤技能效果补全（Cargo 表，逐技能一次查询，_api 缓存 1 天）
+    # 后勤技能效果补全（Cargo 表，逐技能一次查询，_api 缓存 1 天；
+    # 同受查询链 deadline 约束，预算耗尽时留空由展示层降级）
     for base in op.base_skills:
-        if base.description:
+        if base.description or _expired(deadline):
             continue
         effect = await query_base_skill(base.name)
         if effect:
@@ -1368,13 +1491,16 @@ async def _smw_ask(query: str) -> dict[str, Any] | None:
     )
 
 
-async def query_activities(limit: int = 15) -> list[ActivityInfo]:
+async def query_activities(limit: int = 15, now_ts: float | None = None) -> list[ActivityInfo]:
     """进行中/未来的限时活动（按结束时间升序）。
 
     数据来自 PRTS 活动页的 SMW 属性（分类:有活动信息的页面），
     与 PRTS 首页轮播同源。now 取北京日期做过滤，已结束的由展示层兜底。
+    now_ts 仅供测试注入固定时钟；None 用真实时间。
     """
-    today = datetime.now(_BEIJING_TZ).strftime("%Y-%m-%d")
+    today = datetime.fromtimestamp(
+        now_ts if now_ts is not None else time.time(), _BEIJING_TZ
+    ).strftime("%Y-%m-%d")
     query = (
         f"[[分类:有活动信息的页面]][[活动结束时间::>{today}]]"
         "|?活动开始时间|?活动结束时间"
@@ -1385,7 +1511,7 @@ async def query_activities(limit: int = 15) -> list[ActivityInfo]:
     if not data:
         return []
     results = (data.get("query") or {}).get("results") or {}
-    now_ts = time.time()
+    now_ts = now_ts if now_ts is not None else time.time()
     activities: list[ActivityInfo] = []
     for title, info in results.items():
         prints = info.get("printouts") or {}
@@ -1407,9 +1533,13 @@ async def query_activities(limit: int = 15) -> list[ActivityInfo]:
     return activities
 
 
-async def query_gacha_pools(limit: int = 10) -> list[ActivityInfo]:
-    """进行中/未来的限定卡池（SMW：Category:国服寻访）。"""
-    today = datetime.now(_BEIJING_TZ).strftime("%Y-%m-%d")
+async def query_gacha_pools(
+    limit: int = 10, now_ts: float | None = None
+) -> list[ActivityInfo]:
+    """进行中/未来的限定卡池（SMW：Category:国服寻访）。now_ts 仅供测试注入。"""
+    today = datetime.fromtimestamp(
+        now_ts if now_ts is not None else time.time(), _BEIJING_TZ
+    ).strftime("%Y-%m-%d")
     query = (
         f"[[Category:国服寻访]][[寻访关闭时间cn::>{today}]]"
         "|?卡池名|?寻访开启时间cn|?寻访关闭时间cn"
@@ -1420,7 +1550,7 @@ async def query_gacha_pools(limit: int = 10) -> list[ActivityInfo]:
     if not data:
         return []
     results = (data.get("query") or {}).get("results") or {}
-    now_ts = time.time()
+    now_ts = now_ts if now_ts is not None else time.time()
     pools: list[ActivityInfo] = []
     for title, info in results.items():
         prints = info.get("printouts") or {}

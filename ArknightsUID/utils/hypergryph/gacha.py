@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -72,7 +73,13 @@ def _normalize_record(raw: dict[str, Any], category: str) -> dict[str, Any]:
 
 
 def _six_threshold(records: list[dict[str, Any]]) -> int:
-    """六星判定阈值：批量里出现过 rarity==6 → 1 基（六=6），否则 0 基（六=5）。"""
+    """六星判定阈值：批量里出现过 6 → 1 基（六=6），否则 0 基（六=5）。
+
+    rarity 量纲官方未文档化（两种历史口径并存）。已知局限：1 基账号
+    从未出过六星时（全 3-5），与 0 基的四五六星集合同形，不可判定——
+    此处按官方 inquiry 接口的主流量纲 0 基处理（与 gxy12345 口径一致，
+    单测契约见 test_hypergryph_gacha）。
+    """
     if any(r.get("rarity") == 6 for r in records):
         return 6
     return 5
@@ -111,7 +118,7 @@ async def save_local_logs(uid: str, records: list[dict[str, Any]]) -> None:
         await write_player_json(_logs_path(uid), records)
     except Exception as exc:
         logger.warning(
-            f"[ArknightsUID·抽卡] 本地记录写入失败 uid={uid}: {exc.__class__.__name__}"
+            f"[ArknightsUID·抽卡] 本地记录写入失败 uid={uid}: {exc.__class__.__name__}: {exc}"
         )
 
 
@@ -145,11 +152,9 @@ async def sync_gacha_logs(
     local = await load_local_logs(credential.uid)
     local_max_ts = max((r.get("gacha_ts", 0) for r in local), default=0)
 
-    incoming: list[dict[str, Any]] = []
-    for cate in categories:
-        category = str(cate.get("id") or "")
-        if not category:
-            continue
+    async def fetch_category(category: str) -> list[dict[str, Any]]:
+        """单个卡池类别的增量翻页（类目间互不依赖，可并发）。"""
+        records: list[dict[str, Any]] = []
         gacha_ts: int | None = None
         pos: int | None = None
         for _ in range(_MAX_PAGES):
@@ -166,15 +171,30 @@ async def sync_gacha_logs(
                 if not isinstance(raw, dict):
                     continue
                 record = _normalize_record(raw, category)
-                incoming.append(record)
+                records.append(record)
                 # 已翻到比本地最新更旧的记录 → 后面全是旧的，停止
                 if local_max_ts and record["gacha_ts"] < local_max_ts:
                     stop = True
             last = items[-1] if isinstance(items[-1], dict) else {}
-            gacha_ts = _norm_ts(last.get("gachaTs")) or None
+            next_ts = _norm_ts(last.get("gachaTs"))
+            if not next_ts:
+                # 游标失效（末条无时间戳）：继续翻会从头重复，停止该类别
+                break
+            gacha_ts = next_ts
             pos = last.get("pos")
             if stop or not page.get("hasMore"):
                 break
+        return records
+
+    category_ids = [
+        str(cate.get("id") or "") for cate in categories if cate.get("id")
+    ]
+    # 各类别并发拉取（此前串行：3 类 × 最多 50 页 × 25s 超时）
+    incoming: list[dict[str, Any]] = []
+    for records in await asyncio.gather(
+        *(fetch_category(category) for category in category_ids)
+    ):
+        incoming.extend(records)
 
     if not incoming and not local:
         return [], "未拉到任何抽卡记录（官方接口可能已过期清理，或该账号无记录）。"

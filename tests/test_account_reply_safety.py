@@ -210,7 +210,11 @@ class AccountReplySafetyTest(unittest.TestCase):
             assert_reply_safe(self, reply)
 
     def test_help_and_readme_keep_commands_without_sensitive_field_names(self) -> None:
-        readme = Path("README.md").read_text(encoding="utf-8")
+        # 锚定插件自身 README：相对路径在仓库根跑整套测试时会读到外层
+        # gsuid_core 的 README，导致这里的断言随机失败
+        readme = Path(__file__).resolve().parents[1].joinpath(
+            "README.md"
+        ).read_text(encoding="utf-8")
         combined = f"{HELP_TEXT}\n{readme}"
 
         for command in (

@@ -6,6 +6,7 @@ import json
 import time
 import unittest
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -62,16 +63,26 @@ class PRTSParserTest(unittest.IsolatedAsyncioTestCase):
         self.cache_root.mkdir()
         self.original_api = prts_client._api
         self.original_cache_path = prts_client.PRTS_CACHE_PATH
-        self.original_async_client = prts_client.httpx.AsyncClient
+        self.original_get_client = prts_client.get_client
         prts_client.PRTS_CACHE_PATH = self.cache_root
-        prts_client.httpx.AsyncClient = FakeAsyncClient
+        fake_client = FakeAsyncClient()
+
+        async def fake_get_client():
+            return fake_client
+
+        prts_client.get_client = fake_get_client  # type: ignore[assignment]
         FakeAsyncClient.queue = []
         FakeAsyncClient.requests = []
+        # PRTS 最小请求间隔在测试中归零（避免每个用例固定 sleep 0.5s）
+        self.original_min_interval = prts_client._MIN_REQUEST_INTERVAL
+        prts_client._MIN_REQUEST_INTERVAL = 0.0
+        prts_client._last_request_at = 0.0
 
     def tearDown(self) -> None:
         prts_client._api = self.original_api  # type: ignore[assignment]
         prts_client.PRTS_CACHE_PATH = self.original_cache_path
-        prts_client.httpx.AsyncClient = self.original_async_client
+        prts_client.get_client = self.original_get_client  # type: ignore[assignment]
+        prts_client._MIN_REQUEST_INTERVAL = self.original_min_interval
         self.temp_dir.cleanup()
 
     async def test_redirect_target_handles_case_whitespace_alias_and_rejects_normal_page(self) -> None:
@@ -547,7 +558,10 @@ class PRTSParserTest(unittest.IsolatedAsyncioTestCase):
 
         prts_client._api = fake_api  # type: ignore[assignment]
 
-        activities = await prts_client.query_activities()
+        # 注入固定时钟（2099-08-10）：夹具开闭时间相对该点在未来，
+        # 测试不随真实日期漂移（防时间炸弹）
+        fixed_now = datetime(2099, 8, 10, 12, 0, tzinfo=prts_client._BEIJING_TZ).timestamp()
+        activities = await prts_client.query_activities(now_ts=fixed_now)
 
         # 已结束（2020）与无结束时间条目被剔除，仅剩未来活动
         self.assertEqual(len(activities), 1)
@@ -566,8 +580,8 @@ class PRTSParserTest(unittest.IsolatedAsyncioTestCase):
                         "卡池页": {
                             "printouts": {
                                 "卡池名": [{"raw": "·深水 Nile"}],
-                                "寻访开启时间cn": [{"raw": "1/2026/8/7/4/0/0/0"}],
-                                "寻访关闭时间cn": [{"raw": "1/2026/8/21/3/59/0/0"}],
+                                "寻访开启时间cn": [{"raw": "1/2099/8/7/4/0/0/0"}],
+                                "寻访关闭时间cn": [{"raw": "1/2099/8/21/3/59/0/0"}],
                             }
                         }
                     }
@@ -576,11 +590,13 @@ class PRTSParserTest(unittest.IsolatedAsyncioTestCase):
 
         prts_client._api = fake_api  # type: ignore[assignment]
 
-        pools = await prts_client.query_gacha_pools()
+        # 同 test_query_activities：固定时钟，卡池未到期恒成立
+        fixed_now = datetime(2099, 8, 10, 12, 0, tzinfo=prts_client._BEIJING_TZ).timestamp()
+        pools = await prts_client.query_gacha_pools(now_ts=fixed_now)
 
         self.assertEqual(len(pools), 1)
         self.assertEqual(pools[0].title, "·深水 Nile")
-        self.assertEqual(pools[0].end, "2026-08-21 03:59")
+        self.assertEqual(pools[0].end, "2099-08-21 03:59")
 
     async def test_query_game_info_merges_lst_pages(self) -> None:
         pages = {
@@ -654,6 +670,76 @@ class StageMapFileTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(url_found, "")  # 查无文件降级空串
 
 
+class InlineValueTemplateTest(unittest.TestCase):
+    """机制文本的内嵌数值模板必须展开为纯文本（数值不丢）。
+
+    实测 爱国者 等级2 差异块：{{变动数值|5%|-}} 曾被通用"取末段"规则
+    吃成 "-"，等级 2 的献祭伤害数值整体丢失。
+    """
+
+    def test_value_templates_keep_numbers(self) -> None:
+        cases = {
+            "{{变动数值|5%|-}}": "5%↓",
+            "{{变动数值|750|+}}": "750↑",
+            "{{变动数值lite|down|蓝|16}}": "↓16",
+            "{{变动数值lite|up|蓝|+20%}}": "↑+20%",
+            "{{变动数值lite||橙|击倒敌人时获得1点技力}}": "击倒敌人时获得1点技力",
+            "{{异常效果|眩晕|免疫}}": "眩晕免疫",
+            "{{异常效果|不可阻挡}}": "不可阻挡",
+            "{{color|#FF4F0B|行军姿态}}": "行军姿态",
+        }
+        for raw, want in cases.items():
+            self.assertEqual(prts_client._clean_wiki_value(raw), want, raw)
+
+    def test_level2_ability_keeps_changed_value(self) -> None:
+        """等级2 差异块技能效果中的变动数值展开后进机制条目。"""
+        wikitext = """
+{{敌人信息/common2|名称=测试敌人}}
+{{敌人信息/levelcontent
+|index=0
+|技能0=献祭
+|技能0效果=造成相当于攻击力5.21%的真实伤害
+|技能0初始=9999
+|技能0消耗=9999
+}}
+{{敌人信息/levelcontent
+|index=1
+|最大生命值=60000
+|技能0效果=造成相当于攻击力{{变动数值|5%|-}}的真实伤害
+}}
+"""
+        enemy = prts_client.parse_enemy_wikitext(
+            prts_client.PageWikitext(title="测试敌人", wikitext=wikitext)
+        )
+        self.assertIsNotNone(enemy)
+        assert enemy is not None
+        lv2_text = "\n".join(enemy.levels[1].abilities)
+        self.assertIn("攻击力5%↓", lv2_text)
+        self.assertNotIn("{{", lv2_text)
+
+    def test_talent_markup_fully_cleaned(self) -> None:
+        """天赋里的 color/链接/粗体/异常效果/注释全部清理，数值保留。"""
+        wikitext = """
+{{敌人信息/common2|名称=测试敌人}}
+{{敌人信息/levelcontent
+|index=0
+|天赋=[[源石祭坛|免疫脉冲波]]<br>'''{{color|#FF4F0B|行军姿态}}'''：攻击力+50%<br>{{异常效果|眩晕|免疫}}<!--注释-->,攻击间隔-0.4
+}}
+"""
+        enemy = prts_client.parse_enemy_wikitext(
+            prts_client.PageWikitext(title="测试敌人", wikitext=wikitext)
+        )
+        self.assertIsNotNone(enemy)
+        assert enemy is not None
+        talent = enemy.levels[0].abilities[0]
+        self.assertIn("免疫脉冲波", talent)
+        self.assertIn("行军姿态：攻击力+50%", talent)
+        self.assertIn("眩晕免疫", talent)
+        self.assertIn("攻击间隔-0.4", talent)
+        for residue in ("{{", "}}", "[[", "]]", "'''", "<br", "<!--", "注释"):
+            self.assertNotIn(residue, talent)
+
+
 class EnemyLevelInheritTest(unittest.TestCase):
     """等级 2+ 变体块只写差异字段：空数值从上一级继承（实测爱国者页行为）。"""
 
@@ -663,6 +749,7 @@ class EnemyLevelInheritTest(unittest.TestCase):
 |id=E1
 |index=E1
 |地位级别=普通
+|登场活动=生于黑夜
 }}
 {{敌人信息/levelcontent
 |index=0
@@ -671,6 +758,16 @@ class EnemyLevelInheritTest(unittest.TestCase):
 |防御力=100
 |法术抗性=10
 |重量等级=3
+|移动速度=1.1
+|攻击间隔=2.0
+|攻击范围半径=2.5
+|生命恢复速度=50
+|sp恢复速度=0.2
+|元素抗性=0
+|基础嘲讽等级=1
+|眩晕抗性=无
+|沉默抗性=有
+|战栗抗性=无
 }}
 {{敌人信息/levelcontent
 |index=1
@@ -686,14 +783,37 @@ class EnemyLevelInheritTest(unittest.TestCase):
         self.assertIsNotNone(enemy)
         assert enemy is not None
         self.assertEqual(len(enemy.levels), 2)
-        lv2 = enemy.levels[1]
+        self.assertEqual(enemy.event, "生于黑夜")
+        lv1, lv2 = enemy.levels
         # 有差异字段用变体值
         self.assertEqual(lv2.max_hp, "2000")
         self.assertEqual(lv2.atk, "300")
-        # 空字段从等级 1 继承
+        # 空字段从等级 1 继承（含次级属性与抗性）
         self.assertEqual(lv2.defense, "100")
         self.assertEqual(lv2.res, "10")
         self.assertEqual(lv2.weight, "3")
+        self.assertEqual(lv2.move_speed, "1.1")
+        self.assertEqual(lv2.attack_interval, "2.0")
+        self.assertEqual(lv2.silence_res, "有")
+
+    def test_extended_level_fields_parsed(self) -> None:
+        """攻击间隔/范围/恢复/嘲讽等扩展字段 + 生效抗性收集。"""
+        enemy = prts_client.parse_enemy_wikitext(
+            prts_client.PageWikitext(title="测试敌人", wikitext=self.WIKITEXT)
+        )
+        self.assertIsNotNone(enemy)
+        assert enemy is not None
+        lv1 = enemy.levels[0]
+        self.assertEqual(lv1.attack_radius, "2.5")
+        self.assertEqual(lv1.hp_regen, "50")
+        self.assertEqual(lv1.sp_regen, "0.2")
+        self.assertEqual(lv1.taunt, "1")
+        # 元素抗性 0 原样保留（展示层过滤），解析层不做判断
+        self.assertEqual(lv1.ep_res, "0")
+        # 生效抗性只收 "有"/非 "无" 项
+        self.assertEqual(
+            prts_client.level_resistances(lv1), [("沉默", "有")]
+        )
 
     def test_skill_fields_merged_into_readable_abilities(self) -> None:
         """技能N/效果/初始/消耗 重组为单条；等级2 孤儿效果回查技能名。"""

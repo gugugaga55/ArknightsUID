@@ -81,15 +81,26 @@ class SklandClientTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.logger = RecordingLogger()
         self.original_logger = skland_client.logger
-        self.original_async_client = skland_client.httpx.AsyncClient
+        self.original_get_client = skland_client.get_client
         skland_client.logger = self.logger
-        skland_client.httpx.AsyncClient = FakeAsyncClient
+        # 共享 client 层的测试缝：get_client() 返回队列桩
+        fake_client = FakeAsyncClient()
+
+        async def fake_get_client():
+            return fake_client
+
+        skland_client.get_client = fake_get_client  # type: ignore[assignment]
+        # 模块级 token 缓存/锁跨测试会泄漏（同 cred 命中旧缓存导致不发请求）
+        skland_client._token_cache.clear()
+        skland_client._refresh_locks.clear()
         FakeAsyncClient.queue = []
         FakeAsyncClient.requests = []
 
     def tearDown(self) -> None:
         skland_client.logger = self.original_logger
-        skland_client.httpx.AsyncClient = self.original_async_client
+        skland_client.get_client = self.original_get_client  # type: ignore[assignment]
+        skland_client._token_cache.clear()
+        skland_client._refresh_locks.clear()
 
     def warning_text(self) -> str:
         return "\n".join(self.logger.warnings)
@@ -228,18 +239,3 @@ class SklandClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("/api/v1/game/cultivate/player", url)
         self.assertIn("uid=123456789", url)
 
-    async def test_get_cards_hits_cards_endpoint_without_query(self) -> None:
-        FakeAsyncClient.queue = [FakeResponse(200, {"code": 0, "data": {}})]
-
-        result = await skland_client.get_cards(Credential())
-
-        self.assertIsNotNone(result)
-        method, url, _kwargs = FakeAsyncClient.requests[-1]
-        self.assertEqual(method, "GET")
-        self.assertIn("/api/v1/game/cards", url)
-        # 与 get_cultivate_info 同型：cred 作用域，无 params，url 不拼 query string
-        self.assertNotIn("?", url)
-
-
-if __name__ == "__main__":
-    unittest.main()

@@ -183,9 +183,9 @@ def main() -> None:
     cred = ""
     if args[0] == "--token" and len(args) >= 2:
         print("=== 0. token → cred 兑换 ===")
-        info = asyncio.run(ark_auth.get_cred_by_token(args[1]))
-        if not isinstance(info, dict) or not info.get("cred"):
-            print(f"  兑换失败: {info!r}")
+        info, err = asyncio.run(ark_auth.get_cred_by_token(args[1]))
+        if not info or not info.get("cred"):
+            print(f"  兑换失败: {err or info!r}")
             sys.exit(1)
         cred = info["cred"]
         print(f"  cred: OK (len={len(cred)}), skland_user_id={info.get('skland_user_id')}")
