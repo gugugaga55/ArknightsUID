@@ -19,12 +19,14 @@ except ModuleNotFoundError:
 try:
     from ArknightsUID.ArknightsUID.utils.prts.client import (
         EnemyInfo,
+        EnemyLevel,
         OperatorInfo,
         OperatorSkill,
         SkillLevelDetail,
         StageInfo,
         WikiPageSummary,
         final_level,
+        level_resistances,
         query_activities,
         query_enemy,
         query_gacha_pools,
@@ -40,12 +42,14 @@ except ModuleNotFoundError:
     from ArknightsUID.utils.prts.client import (
         ActivityInfo,
         EnemyInfo,
+        EnemyLevel,
         OperatorInfo,
         OperatorSkill,
         SkillLevelDetail,
         StageInfo,
         WikiPageSummary,
         final_level,
+        level_resistances,
         query_activities,
         query_enemy,
         query_gacha_pools,
@@ -286,6 +290,7 @@ def _format_enemy(enemy: EnemyInfo) -> str:
         ("攻击", enemy.attack_type),
         ("移动", enemy.move_type),
         ("种类", enemy.kind),
+        ("登场", enemy.event),
     ):
         if value:
             basics.append(f"{label}：{value}")
@@ -297,37 +302,48 @@ def _format_enemy(enemy: EnemyInfo) -> str:
     if enemy.levels:
         level = enemy.levels[0]
         stats = []
+        for row in _enemy_secondary_stats(level):
+            stats.append(f"{row['label']} {row['value']}")
         for label, value in (
             ("生命", level.max_hp),
             ("攻击", level.atk),
             ("防御", level.defense),
             ("法抗", level.res),
-            ("重量", level.weight),
         ):
             if value:
                 stats.append(f"{label} {value}")
         if stats:
             lines.append("属性：" + "，".join(stats))
+        resistances = level_resistances(level)
+        if resistances:
+            lines.append(
+                "抗性："
+                + "，".join(
+                    f"{label}（{value}）" if value != "有" else label
+                    for label, value in resistances
+                )
+            )
         if level.abilities:
             # 合并后的机制条目（技能·名：效果（初始/消耗）+ 天赋/能力），逐条成行
             lines.append("机制：" + _clip("\n".join(level.abilities), 600))
-        # 等级2变体（差异字段已在解析层从等级1继承补全）
-        if len(enemy.levels) > 1:
-            lv2 = enemy.levels[1]
+        # 等级 2+ 变体（弑君者等有 3 个等级；差异字段已在解析层继承补全）
+        for i, lv in enumerate(enemy.levels[1:], start=2):
             stats2 = [
                 f"{label} {value}"
                 for label, value in (
-                    ("生命", lv2.max_hp),
-                    ("攻击", lv2.atk),
-                    ("防御", lv2.defense),
-                    ("法抗", lv2.res),
+                    ("生命", lv.max_hp),
+                    ("攻击", lv.atk),
+                    ("防御", lv.defense),
+                    ("法抗", lv.res),
                 )
                 if value
             ]
             if stats2:
-                lines.append("等级2：" + "，".join(stats2))
-            if lv2.abilities:
-                lines.append("等级2机制：" + _clip("\n".join(lv2.abilities), 300))
+                lines.append(f"等级{i}：" + "，".join(stats2))
+            if lv.abilities:
+                lines.append(
+                    f"等级{i}机制：" + _clip("\n".join(lv.abilities), 300)
+                )
 
     _append_source(lines, enemy.source_url)
     return "\n".join(lines)
@@ -740,9 +756,46 @@ async def _build_operator_context(op: OperatorInfo, owner: dict | None = None) -
     }
 
 
+def _enemy_secondary_stats(level: EnemyLevel | None) -> list[dict]:
+    """次级属性行 [{label, value}]：非空且非 "0" 才有展示价值（PRTS 默认 0）。"""
+    rows = []
+    for label, value in (
+        ("移动速度", level.move_speed),
+        ("攻击间隔", level.attack_interval),
+        ("攻击范围半径", level.attack_radius),
+        ("重量", level.weight),
+        ("生命恢复", level.hp_regen),
+        ("SP恢复", level.sp_regen),
+        ("元素抗性", level.ep_res),
+        ("损伤抵抗", level.ep_damage_res),
+        ("嘲讽等级", level.taunt),
+    ):
+        text = (value or "").strip()
+        if text and text != "0":
+            rows.append({"label": label, "value": text})
+    return rows
+
+
 async def _build_enemy_context(enemy: EnemyInfo) -> dict:
     level = enemy.levels[0] if enemy.levels else None
-    level2 = enemy.levels[1] if enemy.levels and len(enemy.levels) > 1 else None
+    # 等级 2+ 变体通用化（弑君者等有 3 个等级块；差异字段已在解析层继承补全）
+    variants = [
+        {
+            "label": f"等级{i + 1}",
+            "hp": lv.max_hp,
+            "atk": lv.atk,
+            "defense": lv.defense,
+            "res": lv.res,
+            # 差异块未写则与等级1一致，不重复展示
+            "abilities": list(lv.abilities) if lv.abilities else [],
+        }
+        for i, lv in enumerate(enemy.levels[1:], start=1)
+    ]
+    resistances = (
+        [{"label": label, "value": value} for label, value in level_resistances(level)]
+        if level
+        else []
+    )
     return {
         "title": enemy.title,
         "name": enemy.name or enemy.title,
@@ -753,23 +806,18 @@ async def _build_enemy_context(enemy: EnemyInfo) -> dict:
         "attack_type": enemy.attack_type,
         "move_type": enemy.move_type,
         "kind": enemy.kind,
+        "event": enemy.event,
+        "enemy_id": enemy.enemy_id,
         "has_stats": bool(level),
         "max_hp": level.max_hp if level else "",
         "atk": level.atk if level else "",
         "defense": level.defense if level else "",
         "res": level.res if level else "",
-        # 等级2变体（PRTS 只写差异字段，空值已在解析层从等级1继承）
-        "has_level2": bool(level2),
-        "lv2_hp": level2.max_hp if level2 else "",
-        "lv2_atk": level2.atk if level2 else "",
-        "lv2_defense": level2.defense if level2 else "",
-        "lv2_res": level2.res if level2 else "",
-        "weight": level.weight if level else "",
+        "secondary_stats": _enemy_secondary_stats(level) if level else [],
+        "resistances": resistances,
+        "has_resistances": bool(resistances),
+        "variants": variants,
         "abilities": list(level.abilities) if level else [],
-        # 等级2 变体独立机制（差异块未写则与等级1一致，不重复展示）
-        "lv2_abilities": (
-            list(level2.abilities) if level2 and level2.abilities else []
-        ),
         "icon": await enemy_icon_b64(enemy.name or enemy.title),
         "source_url": enemy.source_url,
         "version": ArknightsUID_version,
@@ -885,6 +933,354 @@ async def _build_stage_context(stage: StageInfo) -> dict:
         "source_url": stage.source_url,
         "version": ArknightsUID_version,
     }
+
+
+# ark面板 条件解析的正则（模块级预编译）
+_RE_PHASE = re.compile(r"^精([012])$")
+_RE_LV = re.compile(r"^(?:[Ll][Vv]?(\d{1,3})|(\d{1,3})级|(满级))$")
+_RE_POT = re.compile(r"^(?:潜(\d)|满潜)$")
+_RE_SKILL = re.compile(r"^(?:技能([123])|([一二三])技能)$")
+_RE_MASTERY = re.compile(r"^专([123])$")
+_RE_SKILL_LV = re.compile(r"^([1-7])级$")
+_RE_MODULE_TYPE = re.compile(r"^([XYxｙy])模组?$")
+_RE_MODULE_LV = re.compile(r"^模组?([123])$")
+_CN_NUM = {"一": 1, "二": 2, "三": 3}
+
+
+def _parse_panel_query(text: str) -> dict:
+    """`干员名 [精2] [Lv45/满级] [潜6/满潜] [技能2] [7级/专3] [X模/Y模/无模] [模3] [满好]`。
+
+    「N级」1-7 视为技能等级（独立或在 技能K 后）；干员等级用 Lv45/
+    45级（≥10）/满级。返回 {name, phase, level, potential, favor,
+    skill_index, skill_level, mastery, module_type, no_module,
+    module_level}，未指定的键为 None/False。
+    """
+    config: dict = {
+        "name": "", "phase": None, "level": None, "potential": None,
+        "favor": None, "skill_index": None, "skill_level": None,
+        "mastery": None, "module_type": None, "no_module": False,
+        "module_level": None,
+    }
+    tokens = (text or "").strip().split()
+    if not tokens:
+        return config
+    kept: list[str] = []
+    skill_context = False
+    for token in tokens:
+        if m := _RE_PHASE.match(token):
+            config["phase"] = int(m.group(1))
+        elif m := _RE_SKILL_LV.match(token):
+            # 独立 N级（1-7）：视为技能等级——干员等级低于 10 实战无意义，
+            # 指定低干员等级应写 Lv7，两位数以上（45级）在 _RE_LV 兜底
+            config["skill_level"] = int(m.group(1))
+        elif m := _RE_LV.match(token):
+            if m.group(3) is not None:  # 满级
+                config["level"] = -1
+            else:
+                lv = int(m.group(1) or m.group(2))
+                if skill_context and lv <= 7:
+                    config["skill_level"] = lv
+                else:
+                    config["level"] = lv
+                    skill_context = False
+        elif m := _RE_POT.match(token):
+            config["potential"] = int(m.group(1)) if m.group(1) else -1  # -1=满潜
+        elif m := _RE_SKILL.match(token):
+            idx = m.group(1) or _CN_NUM.get(m.group(2))
+            if idx:
+                config["skill_index"] = int(idx)
+                skill_context = True
+        elif m := _RE_MASTERY.match(token):
+            config["mastery"] = int(m.group(1))
+            skill_context = False
+        elif m := _RE_MODULE_TYPE.match(token):
+            config["module_type"] = m.group(1).upper()
+        elif _RE_MODULE_LV.match(token):
+            config["module_level"] = int(_RE_MODULE_LV.match(token).group(1))
+        elif token in ("无模", "无模组"):
+            config["no_module"] = True
+        elif token == "满好":
+            config["favor"] = 200
+        else:
+            kept.append(token)
+            skill_context = False
+    config["name"] = " ".join(kept)
+    return config
+
+
+_PROFESSION_NAMES = {
+    "PIONEER": "先锋", "GUARD": "近卫", "DEFENDER": "重装", "SNIPER": "狙击",
+    "CASTER": "术师", "MEDIC": "医疗", "SUPPORTER": "辅助", "SPECIALIST": "特种",
+}
+
+
+def _format_op_panel(context: dict) -> str:
+    lines = [f"「明日方舟」面板模拟：{context['name']}"]
+    lines.append("配置：" + " · ".join(context["config_labels"]))
+    attrs = context["attrs"]
+    lines.append(
+        f"面板：生命 {attrs['hp']} 攻击 {attrs['atk']} 防御 {attrs['def']} "
+        f"法抗 {attrs['res']}｜费用 {attrs['cost']} 阻挡 {attrs['block']} "
+        f"再部署 {attrs['respawn']}s 间隔 {attrs['interval']}s"
+    )
+    for line in context.get("breakdown") or []:
+        lines.append(f"  {line}")
+    for talent in context.get("talents") or []:
+        lines.append(f"天赋·{talent['name']}：{_clip(talent['description'], 120)}")
+    skill = context.get("skill")
+    if skill:
+        sp = f"（初始{skill['sp_init']}·消耗{skill['sp_cost']}"
+        sp += f"·持续{skill['duration']}" if skill.get("duration") else ""
+        sp += "）"
+        lines.append(f"{skill['title']}：{_clip(skill['description'], 200)}{sp}")
+    if context.get("potentials"):
+        lines.append("潜能：" + "、".join(context["potentials"]))
+    lines.append(f"来源：{context['source_url']}")
+    return "\n".join(lines)
+
+
+async def _owner_panel_config(ev: Event, char_id: str) -> dict | None:
+    """已绑定账号持有该干员时 → 当前面板配置（等级/潜能/好感/技能/模组）。"""
+    try:
+        from ..utils.enduid.adapter import resolve_credential
+        from ..utils.player import fetch_cached_player_info, parse_player_info
+
+        credential = await resolve_credential(ev.user_id, ev.bot_id)
+        if isinstance(credential, str):
+            return None
+        response = await fetch_cached_player_info(credential)
+        if not isinstance(response, dict):
+            return None
+        data = parse_player_info(response)
+        if data is None:
+            return None
+        entry = next((c for c in data.chars if c.char_id == char_id), None)
+        if entry is None:
+            return None
+        # 默认技能：取专精等级最高的技能（配对取该技能自身的专精档，
+        # 避免「技能2专3、技能3专1」时误按技能3×专3 折算），无专精则 1 技能
+        skill_index, specialize = 1, 0
+        for i, skill in enumerate(entry.skills or [], start=1):
+            level = skill.specialize_level or 0
+            if level > specialize:
+                skill_index, specialize = i, level
+        equip_level = 0
+        if entry.default_equip_id:
+            for equip in entry.equips or []:
+                if equip.equip_id == entry.default_equip_id:
+                    equip_level = equip.level
+        return {
+            "owned": True,
+            "phase": entry.evolve_phase,
+            "level": entry.level,
+            "potential": entry.potential_rank,
+            "favor": entry.favor_percent,
+            "skill_index": skill_index,
+            "main_skill_lvl": entry.main_skill_lvl,
+            "specialize": specialize,
+            "default_equip_id": entry.default_equip_id,
+            "equip_level": equip_level,
+        }
+    except Exception:
+        return None
+
+
+async def _build_op_panel_context(query: str, ev: Event) -> dict | str:
+    """ark面板：任意 精英/等级/潜能/好感/模组 配置下的干员面板模拟。
+
+    数值来自游戏解包表（character_table 插值 + 潜能/好感/模组累加），
+    技能逐级文本来自 PRTS（skill_table 描述是未填充模板变量，不可用）。
+    默认配置 = 用户自己的干员（未绑定/未持有 → 精2满级 潜0 技能7级 无模组）。
+    """
+    from ..utils.gamedata import oppanel
+    from ..utils.gamedata.charinfo import load_char_index, resolve_char
+
+    config = _parse_panel_query(query)
+    name = config["name"]
+    if not name:
+        return "用法：ark面板 干员名 [精2] [Lv45/满级] [潜6/满潜] [技能2 专3] [X模/Y模/无模] [模3] [满好]"
+    name = await _resolve_alias(name)
+    index = await load_char_index()
+    hit = resolve_char(name, index) if index else None
+    if not hit:
+        return f"未找到干员：{name}"
+    char_id, _ = hit[0], hit[1]
+    char_entry = await oppanel.load_char_entry(char_id)
+    if not char_entry:
+        return "干员数据表不可用（gamedata 拉取失败），请稍后再试。"
+
+    # 默认配置：用户自己 > PRTS 基准（精2满级/潜0/技能7级/无模组）
+    owner = await _owner_panel_config(ev, char_id)
+    phases_count = len(char_entry.get("phases") or [])
+    base_phase = min((owner or {}).get("phase", phases_count - 1), phases_count - 1)
+    phase = config["phase"] if config["phase"] is not None else base_phase
+    phase = max(0, min(phase, phases_count - 1))
+    max_level = oppanel.max_level_at(char_entry, phase)
+    level = config["level"] if config["level"] is not None else (
+        (owner or {}).get("level") or max_level
+    )
+    if level == -1:
+        level = max_level
+    level = max(1, min(level, max_level))
+    max_potential = int(char_entry.get("maxPotentialLevel") or 0)
+    potential = config["potential"] if config["potential"] is not None else (
+        (owner or {}).get("potential", 0)
+    )
+    if potential == -1:
+        potential = max_potential
+    potential = max(0, min(potential, max_potential))
+    favor = config["favor"] if config["favor"] is not None else (
+        (owner or {}).get("favor", 0)
+    )
+
+    # 模组：显式 X/Y > 用户默认装备 > 无
+    uniequip, battle_equip = await oppanel.load_module_tables()
+    choices = oppanel.module_choices(char_id, uniequip)
+    module = None
+    module_level = config["module_level"]
+    if config["no_module"]:
+        module = None
+    elif config["module_type"]:
+        module = oppanel.find_module(choices, config["module_type"])
+    elif owner and owner.get("default_equip_id"):
+        module = next(
+            (c for c in choices if c["id"] == owner["default_equip_id"]), None
+        )
+        if module_level is None:
+            module_level = owner.get("equip_level") or 3
+    if module and module_level is None:
+        module_level = 3
+    module_modifiers = (
+        oppanel.module_stat_modifiers(battle_equip, module["id"], module_level)
+        if module
+        else {}
+    )
+
+    panel = oppanel.compute_panel(
+        char_entry, phase, level, potential, favor, module_modifiers
+    )
+    talents = oppanel.talents_at(char_entry, phase, level, potential)
+    potentials = oppanel.potential_texts(char_entry, potential)
+
+    # 技能（PRTS 逐级文本；选中技能 + 等级/专精）
+    skill_ctx = None
+    skill_list = []
+    op = await query_operator(char_entry.get("name") or name)
+    if op and op.skills:
+        skill_index = config["skill_index"] or (owner or {}).get("skill_index", 1)
+        skill_index = max(1, min(skill_index, len(op.skills)))
+        skill = op.skills[skill_index - 1]
+        mastery = config["mastery"]
+        if mastery is None and not config["skill_level"]:
+            mastery = (owner or {}).get("specialize", 0) or None
+        main_lvl = (
+            config["skill_level"]
+            or (owner or {}).get("main_skill_lvl")
+            or 7
+        )
+        detail = select_owner_level(
+            skill.levels, mastery if mastery else 0, int(main_lvl)
+        )
+        if detail:
+            title = skill.name or f"技能{skill_index}"
+            label = f"专{mastery}" if mastery else f"{main_lvl}级"
+            skill_ctx = {
+                "title": title,
+                "label": label,
+                "description": detail.description,
+                "sp_init": detail.sp_init or "0",
+                "sp_cost": detail.sp_cost or "0",
+                "duration": detail.duration or "",
+            }
+        skill_list = [
+            {"name": s.name or f"技能{i}", "type": s.skill_type}
+            for i, s in enumerate(op.skills, start=1)
+        ]
+
+    # 修正来源分项（基础/潜能/好感/模组）
+    breakdown = []
+    parts = panel["parts"]
+    for label, key in (("生命", "hp"), ("攻击", "atk"), ("防御", "def")):
+        seg = parts.get(key) or {}
+        extra = sum(
+            seg.get(k, 0.0) for k in ("potential", "favor", "module")
+        )
+        if extra:
+            source_bits = []
+            if seg.get("potential"):
+                source_bits.append(f"潜能+{oppanel._fmt(seg['potential'])}")
+            if seg.get("favor"):
+                source_bits.append(f"好感+{oppanel._fmt(seg['favor'])}")
+            if seg.get("module"):
+                source_bits.append(f"模组+{oppanel._fmt(seg['module'])}")
+            breakdown.append(f"{label}：基础 {oppanel._fmt(seg['base'])} → " + "、".join(source_bits))
+
+    profession = _PROFESSION_NAMES.get(
+        str(char_entry.get("profession") or ""), ""
+    )
+    # character_table 的稀有度是 TIER_x（=x 星）
+    rarity_text = str(char_entry.get("rarity") or "")
+    try:
+        rarity = int(rarity_text.rsplit("_", 1)[-1])
+    except ValueError:
+        rarity = 0
+    from ..utils.player.context import char_avatar_b64
+
+    config_labels = [
+        f"精{phase} Lv{level}", f"潜能{potential}",
+        f"好感{favor}%",
+    ]
+    if module:
+        config_labels.append(
+            f"{module['type']}模组·{module['name']} Lv{module_level}"
+        )
+    else:
+        config_labels.append("无模组")
+    if skill_ctx:
+        config_labels.append(f"技能：{skill_ctx['title']}·{skill_ctx['label']}")
+    return {
+        "name": str(char_entry.get("name") or name),
+        "char_id": char_id,
+        "profession": profession,
+        "rarity": rarity,
+        "avatar": await char_avatar_b64(char_id),
+        "config_labels": config_labels,
+        "owned": bool(owner),
+        "attrs": panel["attrs"],
+        "breakdown": breakdown,
+        "talents": talents,
+        "skill": skill_ctx,
+        "skills": skill_list,
+        "potentials": potentials,
+        "module_choices": [
+            {"type": c["type"], "name": c["name"]} for c in choices
+        ],
+        "source_url": op.source_url if op else page_url_title(char_entry.get("name") or name),
+        "source_note": "数值 ArknightsGameData · 技能文本 PRTS Wiki",
+        "version": ArknightsUID_version,
+    }
+
+
+def page_url_title(title: str) -> str:
+    from ..utils.prts.client import page_url
+
+    return page_url(title)
+
+
+@wiki_sv.on_command(("面板", "干员面板", "oppanel"), block=True)
+async def send_op_panel(bot: Bot, ev: Event) -> None:
+    query = _clean_query(ev.text)
+    if not query:
+        return await _send_text(
+            bot, ev,
+            "用法：ark面板 干员名 [精2 Lv45 潜6 满好 X模 模3 技能2 专3]（默认取你自己的练度）",
+        )
+    context = await _build_op_panel_context(query, ev)
+    if isinstance(context, str):
+        return await _send_text(bot, ev, context)
+    await _render_or_text(
+        bot, ev, "ark_op_panel.html", context, _format_op_panel(context)
+    )
 
 
 @wiki_sv.on_command(("wiki", "百科", "词条"), block=True)

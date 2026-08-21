@@ -518,17 +518,34 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
             rank="普通",
             description="最常见的感染生物。",
             damage_type="物理",
-            levels=[EnemyLevel(max_hp="1000", atk="100", defense="0", res="0", weight="1")],
+            event="初始",
+            levels=[
+                EnemyLevel(
+                    max_hp="1000", atk="100", defense="0", res="0", weight="1",
+                    move_speed="1.1", attack_interval="1.7", silence_res="有",
+                ),
+            ],
         )
-        context = await _build_enemy_context(enemy)
+        with mock.patch(
+            "ArknightsUID.arknightsuid_wiki.enemy_icon_b64",
+            new=mock.AsyncMock(return_value=""),
+        ):
+            context = await _build_enemy_context(enemy)
 
         self.assertEqual(context["name"], "源石虫")
         self.assertTrue(context["has_stats"])
         self.assertEqual(context["max_hp"], "1000")
         self.assertEqual(context["atk"], "100")
         self.assertEqual(context["defense"], "0")
-        # 单等级：无等级 2 变体区块
-        self.assertFalse(context["has_level2"])
+        self.assertEqual(context["event"], "初始")
+        # 次级属性行：非 0 项进入（重量/移动/间隔），防御 "0" 不进
+        labels = {row["label"] for row in context["secondary_stats"]}
+        self.assertEqual(labels, {"重量", "移动速度", "攻击间隔"})
+        # 生效抗性（有）→ chips；"无" 抗性不进
+        self.assertEqual(context["resistances"], [{"label": "沉默", "value": "有"}])
+        self.assertTrue(context["has_resistances"])
+        # 单等级：无变体区块
+        self.assertEqual(context["variants"], [])
 
     async def test_build_enemy_context_includes_level2_variant(self) -> None:
         enemy = EnemyInfo(
@@ -537,6 +554,8 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
             levels=[
                 EnemyLevel(
                     max_hp="45000", atk="1600", defense="500", res="45",
+                    weight="7", move_speed="0.4", attack_interval="4.0",
+                    silence_res="有", hp_regen="100",
                     abilities=["行军姿态：防御力大幅提升，阻挡数+1"],
                 ),
                 # 等级2 变体（差异字段已在解析层从等级1继承补全）+ 独立机制
@@ -546,25 +565,75 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
                 ),
             ],
         )
-        context = await _build_enemy_context(enemy)
-        self.assertTrue(context["has_level2"])
-        self.assertEqual(context["lv2_hp"], "60000")
-        self.assertEqual(context["lv2_atk"], "2000")
-        self.assertEqual(context["lv2_defense"], "500")
-        self.assertEqual(context["lv2_res"], "45")
+        with mock.patch(
+            "ArknightsUID.arknightsuid_wiki.enemy_icon_b64",
+            new=mock.AsyncMock(return_value=""),
+        ):
+            context = await _build_enemy_context(enemy)
+        self.assertEqual(len(context["variants"]), 1)
+        variant = context["variants"][0]
+        self.assertEqual(variant["label"], "等级2")
+        self.assertEqual(variant["hp"], "60000")
+        self.assertEqual(variant["atk"], "2000")
+        self.assertEqual(variant["defense"], "500")
+        self.assertEqual(variant["res"], "45")
         self.assertEqual(
             context["abilities"], ["行军姿态：防御力大幅提升，阻挡数+1"]
         )
-        self.assertEqual(context["lv2_abilities"], ["毁灭姿态：攻击造成范围伤害"])
+        self.assertEqual(variant["abilities"], ["毁灭姿态：攻击造成范围伤害"])
+        # 次级属性含生命恢复（非 0）；抗性 chips 命中沉默
+        secondary = {row["label"]: row["value"] for row in context["secondary_stats"]}
+        self.assertEqual(secondary["生命恢复"], "100")
+        self.assertEqual(secondary["攻击间隔"], "4.0")
+        self.assertEqual(context["resistances"], [{"label": "沉默", "value": "有"}])
         text = _format_enemy(enemy)
         self.assertIn("等级2：", text)
         self.assertIn("生命 60000", text)
         self.assertIn("等级2机制：毁灭姿态：攻击造成范围伤害", text)
+        self.assertIn("抗性：沉默", text)
         html_render = ark_templates.get_template("ark_wiki_enemy.html").render(
             font_css_url="about:blank", **context
         )
         self.assertIn("毁灭姿态", html_render)
         self.assertIn("等级2机制", html_render)
+        self.assertIn("攻击间隔", html_render)
+        self.assertIn("抗性 · 沉默", html_render)
+
+    async def test_build_enemy_context_level3_variant_and_no_resistance(self) -> None:
+        """弑君者类 3 等级敌人：变体逐级展示；全无抗性 → has_resistances False。"""
+        enemy = EnemyInfo(
+            title="弑君者",
+            name="弑君者",
+            levels=[
+                EnemyLevel(max_hp="6000", atk="400", defense="120", res="50"),
+                EnemyLevel(max_hp="10000", atk="550", defense="150", res="50"),
+                EnemyLevel(
+                    max_hp="20000", atk="700", defense="250", res="50",
+                    abilities=["技能·闪现：仅被阻挡时可触发"],
+                ),
+            ],
+        )
+        with mock.patch(
+            "ArknightsUID.arknightsuid_wiki.enemy_icon_b64",
+            new=mock.AsyncMock(return_value=""),
+        ):
+            context = await _build_enemy_context(enemy)
+        self.assertEqual(
+            [v["label"] for v in context["variants"]], ["等级2", "等级3"]
+        )
+        self.assertEqual(context["variants"][1]["hp"], "20000")
+        self.assertEqual(
+            context["variants"][1]["abilities"], ["技能·闪现：仅被阻挡时可触发"]
+        )
+        self.assertFalse(context["has_resistances"])
+        text = _format_enemy(enemy)
+        self.assertIn("等级3：生命 20000", text)
+        self.assertIn("等级3机制：技能·闪现", text)
+        html_render = ark_templates.get_template("ark_wiki_enemy.html").render(
+            font_css_url="about:blank", **context
+        )
+        self.assertIn("等级3变体", html_render)
+        self.assertIn("异常抗性 · 无", html_render)
 
     async def test_build_stage_context_without_map_file(self) -> None:
         """地图文件不存在/解析失败：map_image 留空，其余字段不受影响。"""

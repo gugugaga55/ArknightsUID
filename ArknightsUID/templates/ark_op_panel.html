@@ -1,0 +1,127 @@
+<!--
+  ark_op_panel.html —— 干员面板模拟卡（#18）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_wiki._build_op_panel_context 提供）：
+    name/char_id/profession/rarity: str
+    avatar: str            头像 base64（可空）
+    owned: bool            是否用户自有干员（默认配置来源）
+    config_labels: [str]   生效配置（精X LvN/潜能/好感/模组/技能）
+    attrs: {hp/atk/def/res/cost/block/respawn/interval: str}
+    breakdown: [str]       数值修正分项（基础 → 潜能/好感/模组来源）
+    talents: [{name, description}]
+    skill: {title, label, description, sp_init, sp_cost, duration} | None
+    potentials: [str]      当前潜能已生效列表
+    module_choices: [{type, name}]
+    source_url/source_note/version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="OP-SIM">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 面板模拟 OP SIMULATOR</em></span>
+            <span class="mast-meta"><span class="idx">18</span>{% if owned %}MY OPERATOR{% else %}PRTS BASE{% endif %}</span>
+        </div>
+
+        <div class="titleblock" style="align-items: center;">
+            <div style="display: flex; align-items: center; gap: 14px;">
+                {% if avatar %}<span class="iicon iicon--lg"><img src="{{ avatar }}" alt=""></span>{% endif %}
+                <div>
+                    <div class="eyebrow">{% if profession %}{{ profession }} · {% endif %}{{ rarity }}★{% if owned %} · 你的干员{% else %} · 未持有基准{% endif %}</div>
+                    <h1 class="title title--s">{{ name }}</h1>
+                </div>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_operator.b64" %}" alt="">
+        </div>
+        <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">PANEL SIMULATION</span></div>
+
+        <div class="chip-flow" style="margin-top: var(--space-4);">
+            {% for c in config_labels %}<span class="chip chip--ink">{{ c }}</span>{% endfor %}
+        </div>
+
+        <div class="sect" style="margin-top: var(--space-4);">
+            <span class="sect-label bk">面板数值</span>
+            <span class="sect-en">ATTRIBUTES</span>
+        </div>
+        <div class="grid grid-4">
+            <div class="cell"><div class="cell-label">生命 HP</div><div class="cell-value mono" style="font-size: 16px;">{{ attrs.hp }}</div></div>
+            <div class="cell"><div class="cell-label">攻击 ATK</div><div class="cell-value mono" style="font-size: 16px;">{{ attrs.atk }}</div></div>
+            <div class="cell"><div class="cell-label">防御 DEF</div><div class="cell-value mono" style="font-size: 16px;">{{ attrs.def }}</div></div>
+            <div class="cell"><div class="cell-label">法抗 RES</div><div class="cell-value mono" style="font-size: 16px;">{{ attrs.res }}</div></div>
+        </div>
+        <div class="rows" style="margin-top: var(--space-3);">
+            <div class="row">
+                <span class="row-label">部署 COST / 阻挡</span>
+                <span class="row-value mono" style="font-size: 13px;">{{ attrs.cost }} / {{ attrs.block }}</span>
+            </div>
+            <div class="row">
+                <span class="row-label">再部署 / 攻击间隔</span>
+                <span class="row-value mono" style="font-size: 13px;">{{ attrs.respawn }}s / {{ attrs.interval }}s</span>
+            </div>
+        </div>
+
+        {% if breakdown %}
+        <div class="sect" style="margin-top: var(--space-4);">
+            <span class="sect-label bk">数值来源</span>
+            <span class="sect-en">BREAKDOWN</span>
+        </div>
+        {% for line in breakdown %}
+        <div class="prose" style="font-size: 11px;">· {{ line }}</div>
+        {% endfor %}
+        {% endif %}
+
+        {% if talents %}
+        <div class="sect" style="margin-top: var(--space-4);">
+            <span class="sect-label bk">天赋（当前配置生效档）</span>
+            <span class="sect-en">TALENTS // {{ talents | length }}</span>
+        </div>
+        {% for t in talents %}
+        <div class="row" style="display: block;">
+            <span class="row-value" style="font-size: 13px;">{{ t.name }}</span>
+            <div class="prose" style="margin-top: 2px; font-size: 11px; white-space: pre-line;">{{ t.description }}</div>
+        </div>
+        {% endfor %}
+        {% endif %}
+
+        {% if skill %}
+        <div class="sect" style="margin-top: var(--space-4);">
+            <span class="sect-label bk">技能 · {{ skill.label }}</span>
+            <span class="sect-en">{{ skill.title }}</span>
+        </div>
+        <div class="prose" style="font-size: 12px; white-space: pre-line;">{{ skill.description }}</div>
+        <div class="rows" style="margin-top: var(--space-2);">
+            <div class="row">
+                <span class="row-label">SP 初始 / 消耗{% if skill.duration %} / 持续{% endif %}</span>
+                <span class="row-value mono" style="font-size: 13px;">{{ skill.sp_init }} / {{ skill.sp_cost }}{% if skill.duration %} / {{ skill.duration }}s{% endif %}</span>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if potentials %}
+        <div class="sect" style="margin-top: var(--space-4);">
+            <span class="sect-label bk">潜能（已生效）</span>
+            <span class="sect-en">POTENTIALS // {{ potentials | length }}</span>
+        </div>
+        <div class="chip-flow" style="margin-top: var(--space-2);">
+            {% for p in potentials %}<span class="chip chip--ghost">{{ p }}</span>{% endfor %}
+        </div>
+        {% endif %}
+
+        {% if module_choices %}
+        <div class="prose" style="margin-top: var(--space-3); font-size: 11px; color: var(--tx-2);">
+            可用模组：{% for m in module_choices %}{{ m.type }}模·{{ m.name }}{% if not loop.last %}、{% endif %}{% endfor %}（X模/Y模 切换，无模 关闭）
+        </div>
+        {% endif %}
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · {{ source_note }}</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// OP // PANEL SIMULATOR</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>
