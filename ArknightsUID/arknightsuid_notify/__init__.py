@@ -18,6 +18,7 @@ import json
 import os
 import random
 import re
+import time
 from pathlib import Path
 
 from gsuid_core.aps import scheduler
@@ -86,6 +87,37 @@ def evaluate_sanity(ap: int, ap_max: int, notified: bool) -> tuple[bool, bool]:
         return False, False
     is_full = ap >= ap_max
     return is_full, is_full and not notified
+
+
+# 理智预警阈值：达到上限的 85% 先提醒一次（回满前还有 ~2-4 小时）
+SANITY_WARN_RATIO = 0.85
+
+
+def evaluate_sanity_warn(
+    ap: int, ap_max: int, warned: bool
+) -> tuple[bool, bool]:
+    """预警状态机（与回满推送互补）：返回 (should_warn, new_warned)。
+
+    - 进入 [85%, 100%) 区间且本轮未预警过 → should_warn
+    - warned 落盘规则：仅在区间内为 True——低于 85%（用理智后）或已回满
+      （由回满推送接管）自动复位，下次回充周期重新武装。
+    """
+    if ap_max <= 0:
+        return False, False
+    ratio = ap / ap_max
+    in_band = SANITY_WARN_RATIO <= ratio < 1
+    return in_band and not warned, in_band
+
+
+def format_sanity_warn_message(
+    name: str, ap: int, ap_max: int, uid_masked: str
+) -> str:
+    remaining = max(0, ap_max - ap)
+    return (
+        "「明日方舟」理智即将回满（85% 预警）\n"
+        f"{name or '博士'}（UID {uid_masked}）{ap}/{ap_max}\n"
+        f"距回满还差 {remaining} 点，安排一下上号时间～"
+    )
 
 
 def _write_state_atomic(path: Path, state: dict) -> None:
@@ -225,6 +257,7 @@ async def check_sanity_push() -> None:
         key = _state_key(subscribe.bot_id, subscribe.user_id, uid)
         prev = load_push_state().get(key, {})
         notified = bool(prev.get("notified"))
+        warned = bool(prev.get("warned"))
 
         credential = await resolve_credential(
             subscribe.user_id, subscribe.bot_id, uid=uid
@@ -247,6 +280,7 @@ async def check_sanity_push() -> None:
 
         ap = effective_ap(data)
         is_full, should_push = evaluate_sanity(ap, data.ap_max, notified)
+        should_warn, new_warned = evaluate_sanity_warn(ap, data.ap_max, warned)
         if should_push:
             message = format_push_message(
                 data.name or credential.nickname, data.ap_max, hide_uid(uid)
@@ -261,8 +295,23 @@ async def check_sanity_push() -> None:
                 logger.warning(
                     f"[ArknightsUID·理智推送] 推送失败: {exc.__class__.__name__}"
                 )
-        if bool(is_full) != notified:
-            changes[key] = {"notified": is_full}
+        elif should_warn:
+            message = format_sanity_warn_message(
+                data.name or credential.nickname, ap, data.ap_max, hide_uid(uid)
+            )
+            try:
+                await subscribe.send(message)
+                logger.info(
+                    f"[ArknightsUID·理智预警] 已推送 user={subscribe.user_id} "
+                    f"uid={hide_uid(uid)} {ap}/{data.ap_max}"
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"[ArknightsUID·理智预警] 推送失败: {exc.__class__.__name__}"
+                )
+        if bool(is_full) != notified or new_warned != warned:
+            # 整键覆盖：带上 prev 保住未变化的标志位（changes 在轮询末合并落盘）
+            changes[key] = {**prev, "notified": is_full, "warned": new_warned}
         await asyncio.sleep(random.uniform(1, 2))
 
     if changes:
@@ -461,3 +510,120 @@ async def check_training_push() -> None:
         fresh = _load_train_state()
         fresh.update(changes)
         _save_train_state(fresh)
+
+
+# ==================== 剿灭周提醒（周五晚未完成 → 提醒一次） ====================
+
+CAMPAIGN_TASK_NAME = "订阅剿灭推送"
+
+
+def _iso_week_key(now_ts: float | None = None) -> str:
+    """ISO 周标识（如 2026-W34）：一周只提醒一次的状态键。"""
+    from datetime import datetime
+
+    moment = datetime.fromtimestamp(now_ts or time.time())
+    year, week, _ = moment.isocalendar()
+    return f"{year}-W{week:02d}"
+
+
+@notify_sv.on_command(("订阅剿灭", "剿灭推送"), block=True)
+async def subscribe_campaign_push(bot: Bot, ev: Event) -> None:
+    uid, index = _extract_target(ev.text)
+    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
+    if isinstance(credential, str):
+        return await _send_text(bot, ev, credential)
+
+    await gs_subscribe.add_subscribe(
+        "single", task_name=CAMPAIGN_TASK_NAME, event=ev, uid=credential.uid
+    )
+    shown = credential.nickname or hide_uid(credential.uid)
+    await _send_text(
+        bot, ev,
+        f"已订阅剿灭周提醒：{shown}\n"
+        f"每周五 20:00 检查本周合成玉，没拿满会提醒你。\n"
+        f"取消：ark取消订阅剿灭",
+    )
+
+
+@notify_sv.on_command(("取消订阅剿灭", "退订剿灭推送"), block=True)
+async def unsubscribe_campaign_push(bot: Bot, ev: Event) -> None:
+    uid, index = _extract_target(ev.text)
+    if uid or index:
+        credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
+        if isinstance(credential, str):
+            return await _send_text(bot, ev, credential)
+        await gs_subscribe.delete_subscribe(
+            "single", task_name=CAMPAIGN_TASK_NAME, event=ev, uid=credential.uid
+        )
+        return await _send_text(bot, ev, "已取消该账号的剿灭周提醒。")
+
+    await gs_subscribe.delete_subscribe(
+        "single", task_name=CAMPAIGN_TASK_NAME, event=ev
+    )
+    await _send_text(bot, ev, "已取消全部剿灭周提醒。")
+
+
+def evaluate_campaign(
+    campaign_current: int, campaign_total: int
+) -> tuple[bool, int]:
+    """剿灭提醒判定：未拿满 → (需提醒, 剩余合成玉)。"""
+    if campaign_total <= 0:
+        return False, 0
+    remaining = max(0, campaign_total - campaign_current)
+    return remaining > 0, remaining
+
+
+@scheduler.scheduled_job("cron", day_of_week="fri", hour=20, id="ark_campaign_push")
+async def check_campaign_push() -> None:
+    """周五 20:00 检查订阅账号的本周剿灭进度，未拿满提醒一次。"""
+    datas = await gs_subscribe.get_subscribe(CAMPAIGN_TASK_NAME)
+    if not datas:
+        return
+    week_key = _iso_week_key()
+    state = load_push_state()
+    # 每账号每周只提醒一次：{key: {"campaign_week": "2026-W34"}}
+    for subscribe in datas:
+        uid = str(subscribe.uid or "")
+        if not uid:
+            continue
+        key = _state_key(subscribe.bot_id, subscribe.user_id, uid)
+        if (state.get(key) or {}).get("campaign_week") == week_key:
+            continue
+
+        credential = await resolve_credential(
+            subscribe.user_id, subscribe.bot_id, uid=uid
+        )
+        if isinstance(credential, str):
+            continue
+        response = await fetch_cached_player_info(credential, force=True)
+        if isinstance(response, str):
+            continue
+        data = parse_player_info(response)
+        if data is None:
+            continue
+        should_push, remaining = evaluate_campaign(
+            data.campaign_current, data.campaign_total
+        )
+        if should_push:
+            message = (
+                "「明日方舟」剿灭周提醒\n"
+                f"{data.name or credential.nickname}（UID {hide_uid(uid)}）"
+                f"本周合成玉 {data.campaign_current}/{data.campaign_total}\n"
+                f"还有 {remaining} 合成玉没拿，周末别忘了打剿灭！"
+            )
+            try:
+                await subscribe.send(message)
+                logger.info(
+                    f"[ArknightsUID·剿灭提醒] 已推送 user={subscribe.user_id} "
+                    f"uid={hide_uid(uid)} 剩余{remaining}"
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"[ArknightsUID·剿灭提醒] 推送失败: {exc.__class__.__name__}"
+                )
+                continue  # 发送失败不落周标记：重启后的下次触发还能补发
+        # 无论是否需要提醒，本周已检查过就落标记（未拿满也只提醒一次）
+        state = load_push_state()
+        state[key] = {**state.get(key, {}), "campaign_week": week_key}
+        save_push_state(state)
+        await asyncio.sleep(random.uniform(1, 2))
