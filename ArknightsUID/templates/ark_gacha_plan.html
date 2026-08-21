@@ -1,0 +1,122 @@
+<!--
+  ark_gacha_plan.html —— 攒抽规划卡（抽卡规划，#9）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  口径：ark.yituliu.cn/tools/gachaCalc 逆向（资源换算 + UP 占比 + 300 井），
+  概率为严格状态 DP（含陪跑六星重置垫刀），与一图流表对照验证
+  上下文（build_plan_context）：
+    name, uid, pool_name, pool_end, days_left: str
+    pity: int, pity_source: str          垫刀与来源（本地记录/手动指定/默认）
+    current_draws: int, res_text: str    库存折算抽数与资源明细
+    up_mode: str, up_share_pct: str      单UP(70)/双UP(35)
+    target_draws: int, well_gap: int, well_pct: int, daily_needed: str
+    chance_now/50/100/150: str           拿到限定概率（百分比数字）
+    notes: [str], version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="PLAN">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 攒抽规划 GACHA PLAN</em></span>
+            <span class="mast-meta"><span class="idx">09</span>{% if uid %}UID {{ uid }}{% else %}匿名规划{% endif %}</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">{% if name %}{{ name }} · {% endif %}限定卡池攒抽规划</div>
+                <h1 class="title">攒抽<em>规划</em></h1>
+                <div class="title-rule"><span class="en">GACHA PLAN</span></div>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_gacha.b64" %}" alt="">
+        </div>
+
+        <div class="sect" style="margin-top: var(--space-5);">
+            <span class="sect-label bk">目标卡池</span>
+            <span class="sect-en">POOL</span>
+        </div>
+        <div class="panel" style="margin-top: var(--space-3);">
+            <div class="row">
+                <span class="row-value">{{ pool_name }}</span>
+                <span class="bar-num mono">{% if days_left != "0.0" %}剩 {{ days_left }} 天{% else %}—{% endif %}</span>
+            </div>
+            {% if pool_end %}
+            <div class="row">
+                <span class="row-value u-mute" style="font-size: 12px;">结束时间 {{ pool_end }}</span>
+                <span class="bar-num">{% if daily_needed != "0.0" and well_gap > 0 %}每天需攒 {{ daily_needed }} 抽{% else %}—{% endif %}</span>
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="grid grid-4" style="margin-top: var(--space-4);">
+            <div class="cell">
+                <div class="cell-label">现有抽数 READY</div>
+                <div class="cell-value">{{ current_draws }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">垫刀 PITY</div>
+                <div class="cell-value">{{ pity }}<span style="font-size: 12px;">（{{ pity_source }}）</span></div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">井缺口 GAP</div>
+                <div class="cell-value">{{ well_gap }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">UP 占比 SHARE</div>
+                <div class="cell-value">{{ up_share_pct }}<span style="font-size: 12px;">% {{ up_mode }}</span></div>
+            </div>
+        </div>
+
+        <div class="sect" style="margin-top: var(--space-4);">
+            <span class="sect-label bk">井进度</span>
+            <span class="sect-en">WELL // {{ current_draws }} / {{ target_draws }}</span>
+        </div>
+        <div class="bar is-yellow" style="margin-top: var(--space-3);">
+            <i style="width: {{ well_pct }}%;"></i>
+        </div>
+        <div class="u-mute" style="font-size: 11px; margin-top: 6px;">
+            库存：{{ res_text }} ≈ {{ current_draws }} 抽（玉/600 + 石×0.3 + 券，一图流口径）
+        </div>
+
+        <div class="sect" style="margin-top: var(--space-4);">
+            <span class="sect-label bk">拿到限定概率</span>
+            <span class="sect-en">DROP CHANCE</span>
+        </div>
+        <div class="grid grid-4" style="margin-top: var(--space-3);">
+            <div class="cell">
+                <div class="cell-label">现有抽数</div>
+                <div class="cell-value">{{ chance_now }}<span style="font-size: 12px;">%</span></div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">再补 50 抽</div>
+                <div class="cell-value">{{ chance_50 }}<span style="font-size: 12px;">%</span></div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">再补 100 抽</div>
+                <div class="cell-value">{{ chance_100 }}<span style="font-size: 12px;">%</span></div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">再补 150 抽</div>
+                <div class="cell-value">{{ chance_150 }}<span style="font-size: 12px;">%</span></div>
+            </div>
+        </div>
+
+        <div class="panel" style="margin-top: var(--space-4);">
+            {% for note in notes %}
+            <div class="row">
+                <span class="row-value u-mute" style="font-size: 11px;">· {{ note }}</span>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 攒抽规划 · 口径同源 ark.yituliu.cn/tools/gachaCalc</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// GACHA PLAN</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>
