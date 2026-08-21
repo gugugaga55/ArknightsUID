@@ -57,6 +57,28 @@ def asset_b64(key: str) -> str:
 
 
 # 各模板的假数据（数据层接入前的设计验证用）
+def _gacha_plan_preview() -> dict:
+    """攒抽规划卡预览：走真实计算链（build_summary/build_plan_context）。"""
+    from ArknightsUID.utils.gacha_plan import (
+        PlanArgs,
+        build_plan_context,
+        build_summary,
+    )
+    from ArknightsUID.version import ArknightsUID_version
+
+    args = PlanArgs(
+        orundum=60000, originium=30, single_tickets=2, ten_tickets=1, pity=37
+    )
+    summary = build_summary(
+        args,
+        {"title": "·跨洲远航·", "end": "2026-09-01 04:00", "end_ts": 1e11},
+        pity=37,
+    )
+    return build_plan_context(
+        summary, "刀客塔不吃香菜", "12****89", ArknightsUID_version
+    )
+
+
 MOCK_CONTEXTS = {
     "ark_help.html": {
         "version": VERSION,
@@ -91,6 +113,7 @@ MOCK_CONTEXTS = {
                     {"cmd": "ark抽卡记录", "desc": "抽卡记录统计卡", "eg": "ark抽卡记录"},
                     {"cmd": "ark兑换码", "desc": "礼包码兑换", "eg": "ark兑换码 <code>"},
                     {"cmd": "ark养成", "desc": "养成材料缺口计算", "eg": "ark养成 银灰"},
+                    {"cmd": "ark攒抽 [参数]", "desc": "攒抽规划（自动垫刀/卡池）", "eg": "ark攒抽 玉:60000 石:30 垫刀:20"},
                 ],
             },
             {
@@ -235,6 +258,7 @@ MOCK_CONTEXTS = {
         ],
         "version": VERSION,
     },
+    "ark_gacha_plan.html": _gacha_plan_preview(),
     "ark_wiki_page.html": {
         "title": "源石",
         "summary": "泰拉大陆上普遍存在的黑色半透明矿物，蕴含着巨大的能量，也是天灾与矿石病的源头。它被广泛用于能源、工业与法术催化等领域，是这个世界运转的基石之一。",
@@ -246,6 +270,36 @@ MOCK_CONTEXTS = {
             {"key": "描述", "value": "接触过量源石会导致矿石病感染"},
         ],
         "source_url": "https://prts.wiki/w/源石",
+        "version": VERSION,
+    },
+    "ark_op_panel.html": {
+        "name": "银灰",
+        "char_id": "char_172_svrash",
+        "profession": "近卫",
+        "rarity": 6,
+        "avatar": "",
+        "owned": True,
+        "config_labels": ["精2 Lv90", "潜能6", "好感200%", "X模组·雪境羽兽护理套组 Lv3", "技能：真银斩·专3"],
+        "attrs": {"hp": "2990", "atk": "859", "def": "397", "res": "10",
+                  "cost": "18", "block": "2", "respawn": "66", "interval": "1.3"},
+        "breakdown": [
+            "生命：基础 2560 → 好感+100、模组+330",
+            "攻击：基础 713 → 潜能+26、好感+50、模组+70",
+        ],
+        "talents": [
+            {"name": "领袖", "description": "攻击力+12%（+2%），编入队伍时所有我方单位的再部署时间-10%"},
+            {"name": "鹰眼视觉", "description": "攻击范围内敌人的隐匿效果失效"},
+        ],
+        "skill": {
+            "title": "真银斩", "label": "专3",
+            "description": "攻击力+200%，攻击范围扩大，最多同时攻击3个敌人（满潜后攻击范围内所有敌人）",
+            "sp_init": "15", "sp_cost": "60", "duration": "30",
+        },
+        "skills": [],
+        "potentials": ["部署费用-1", "再部署时间-4秒", "攻击力+26", "第一天赋效果增强", "部署费用-1", "第二天赋效果增强"],
+        "module_choices": [{"type": "X", "name": "雪境羽兽护理套组"}],
+        "source_url": "https://prts.wiki/w/银灰",
+        "source_note": "数值 ArknightsGameData · 技能文本 PRTS Wiki",
         "version": VERSION,
     },
     "ark_wiki_operator.html": {
@@ -326,24 +380,41 @@ MOCK_CONTEXTS = {
         "attack_type": "近战",
         "move_type": "地面",
         "kind": "感染者",
+        "event": "主线第七章",
+        "enemy_id": "P7",
         "has_stats": True,
         "max_hp": "45000",
         "atk": "1200",
         "defense": "1500",
         "res": "60",
-        "has_level2": True,
-        "lv2_hp": "60000",
-        "lv2_atk": "1600",
-        "lv2_defense": "1500",
-        "lv2_res": "60",
-        "weight": "6",
+        "secondary_stats": [
+            {"label": "移动速度", "value": "0.4"},
+            {"label": "攻击间隔", "value": "4.0"},
+            {"label": "攻击范围半径", "value": "1.5"},
+            {"label": "重量", "value": "6"},
+            {"label": "生命恢复", "value": "200"},
+        ],
+        "resistances": [
+            {"label": "沉默", "value": "有"},
+            {"label": "眩晕", "value": "有"},
+        ],
+        "has_resistances": True,
+        "variants": [
+            {
+                "label": "等级2",
+                "hp": "60000",
+                "atk": "1600",
+                "defense": "1500",
+                "res": "60",
+                "abilities": [
+                    "狂怒姿态：攻击速度与移动速度大幅提升，防御力降低",
+                ],
+            }
+        ],
         "abilities": [
             "行军姿态：防御力大幅提升，阻挡数+1，法术抗性提升",
             "毁灭姿态：攻击力大幅提升，攻击造成范围伤害",
             "被击败时释放冲击波，对全场造成真实伤害",
-        ],
-        "lv2_abilities": [
-            "狂怒姿态：攻击速度与移动速度大幅提升，防御力降低",
         ],
         "source_url": "https://prts.wiki/w/爱国者",
         "version": VERSION,
@@ -386,16 +457,70 @@ MOCK_CONTEXTS = {
         "name": "歌利亚",
         "enemy_key": "enemy_2074_skzgly",
         "tags": ["领袖", "近战"],
+        "resistances": ["沉默"],
         "icon": "",
         "forms": [
-            {"title": "形态1", "hp": 80000, "atk": 2350, "def": 1000, "res": 25, "weight": 5, "attack": "近战/物理"},
+            {
+                "title": "形态1", "hp": 80000, "atk": 2350, "def": 1000,
+                "res": 25, "weight": 5, "attack": "近战/物理",
+                "extras": ["移速 0.5", "间隔 6s", "进点-5"],
+                "mechanics": [
+                    "只在阻挡数不低于5时才会被我方单位阻挡",
+                    "进入目标点后停留一段时间，持续造成大量法术伤害",
+                ],
+            },
         ],
         "theme_name": "萨卡兹的无终奇语",
-        "panels": [
-            {"grade": 0, "label": "难度0·新手（HP×0.8）", "stats": {"hp": 64000, "atk": 2350, "def": 1000, "res": 25}, "notes": []},
-            {"grade": 4, "label": "难度4", "stats": {"hp": 96000, "atk": 2350, "def": 1000, "res": 25}, "notes": []},
-            {"grade": 7, "label": "难度7~15 起（更高档数值不变）", "stats": {"hp": 96000, "atk": 2585, "def": 1000, "res": 25}, "notes": ["dmg_res 0.1"]},
+        "panels": [],
+        "stage_groups": [
+            {
+                "theme": "sarkaz",
+                "theme_name": "萨卡兹的无终奇语",
+                "stages": [
+                    "不容拒绝·ISW-DF·6-7层",
+                    "共谋的夜幕·ISW-NO·3层·形态2",
+                    "大君之赐·ISW-DF·3层·紧急+",
+                    "拆东补西·ISW-NO·1-2层",
+                    "守望的河水·ISW-NO·1层",
+                    "枯朽的引擎·ISW-DF·4层",
+                ],
+                "total": 9,
+            }
         ],
+        "focus": {
+            "grade": 12,
+            "label": "难度12",
+            "stats": {"hp": 122880, "atk": 2866, "def": 1150, "res": 25},
+            "buffs": ["生命×1.2", "攻击×1.15", "防御×1.15", "受到伤害×0.1", "每层增益+7%（未计入，按层复合）"],
+        },
+        "source_note": "数据 tomimi.dev（游戏解包）",
+        "version": VERSION,
+    },
+    "ark_rogue_stage.html": {
+        "name": "拆东补西",
+        "code": "ISW-NO",
+        "level_id": "level_rogue4_2-2",
+        "theme_name": "萨卡兹的无终奇语",
+        "difficulty": 15,
+        "difficulty_label": "难度15",
+        "elite": True,
+        "floors": "1-2层",
+        "elite_descs": ["所有敌方单位的攻击力，防御力，生命值+20%", "额外出现1个年代之刺"],
+        "elite_chips": ["攻击×1.2", "防御×1.2", "生命×1.2"],
+        "rows": [
+            {"key": "enemy_2063_skzlch", "name": "萨卡兹领主", "icon": "", "count": "4",
+             "stats": {"hp": 27840, "atk": 1128, "def": 1440, "res": 30}, "level": 0,
+             "elite_note": "", "has_diff": True},
+            {"key": "enemy_2065_skzjs", "name": "萨卡兹剑士", "icon": "", "count": "波次",
+             "stats": {"hp": 5184, "atk": 648, "def": 345, "res": 0}, "level": 0,
+             "elite_note": "", "has_diff": True},
+            {"key": "enemy_1071_dftman", "name": "重装防御者", "icon": "", "count": "0-1",
+             "stats": {"hp": 41472, "atk": 900, "def": 2073, "res": 0}, "level": 0,
+             "elite_note": "紧急+1", "has_diff": True},
+        ],
+        "row_count": 3,
+        "skipped": 1,
+        "floor_note": "每层增益+10%（未计入，按层复合）",
         "source_note": "数据 tomimi.dev（游戏解包）",
         "version": VERSION,
     },
@@ -678,6 +803,11 @@ async def _enrich_icons(name: str, context: dict) -> None:
 
         if context.get("enemy_key"):
             context["icon"] = await enemy_icon_b64(context["enemy_key"])
+    elif name == "ark_rogue_stage.html":
+        from ArknightsUID.utils.gamedata.rogue_enemy import enemy_icon_b64
+
+        for row in context.get("rows", []):
+            row["icon"] = await enemy_icon_b64(row.get("key") or "")
     elif name == "ark_rogue_relic.html":
         from ArknightsUID.utils.gamedata.rogue_relic import relic_icon_b64
 
@@ -716,6 +846,13 @@ async def _enrich_icons(name: str, context: dict) -> None:
                 "",
             )
             row["avatar"] = await char_avatar_b64(hit) if hit else ""
+
+    # 头像增强（面板模拟卡用 char_id 换头像）
+    if name == "ark_op_panel.html":
+        from ArknightsUID.utils.player.context import char_avatar_b64
+
+        if context.get("char_id"):
+            context["avatar"] = await char_avatar_b64(context["char_id"])
 
     # 立绘是独立增强位（与材料图标 elif 链不冲突，可同时命中）
     if name in ("ark_char_card.html", "ark_cultivate.html", "ark_wiki_mastery.html", "ark_wiki_operator.html"):
@@ -779,10 +916,10 @@ async def _enrich_icons(name: str, context: dict) -> None:
         context["six_rows"] = six_rows
 
     if name == "ark_help.html":
-        # 装饰浮空立绘（阿米娅，透明 PNG）
-        from ArknightsUID.utils.player.context import char_portrait_b64
+        # 逐命令 Q 版干员图标（与生产同一分配函数）
+        from ArknightsUID.arknightsuid_help import assign_group_icons
 
-        context["figure"] = await char_portrait_b64("char_002_amiya", 5)
+        context["groups"] = assign_group_icons(context["groups"])
 
     if name == "ark_building.html":
         # 房间成员头像：名称反查 charId → 初始头像
