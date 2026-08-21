@@ -165,3 +165,124 @@ async def show_bind(bot: Bot, ev: Event) -> None:
         status = "可用" if usable else "凭据失效/缺失"
         lines.append(f"{index}. {nick} | UID {hide_uid(row.uid)} | {status}")
     await _send_text(bot, ev, "\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# 用户自定义干员别名（ark别名）：查询命令（ark干员/面板/养成/练度卡/模组）
+# 的干员名参数支持用户级精确别名，优先级高于内建别名。
+# ---------------------------------------------------------------------------
+alias_sv = SV("ArknightsUID别名", priority=5)
+
+
+def _parse_alias_text(text: str) -> tuple[str, str] | None:
+    """「别名 目标」「别名=目标」「别名 → 目标」→ (alias, target)。"""
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    for sep in ("=", "＝", "→", "->"):
+        if sep in raw:
+            left, _, right = raw.partition(sep)
+            alias, target = left.strip(), right.strip()
+            if alias and target:
+                return alias, target
+    parts = raw.split()
+    if len(parts) == 2:
+        return parts[0].strip(), parts[1].strip()
+    return None
+
+
+@alias_sv.on_command(("别名", "干员别名"), block=True)
+async def set_user_alias(bot: Bot, ev: Event) -> None:
+    parsed = _parse_alias_text(ev.text)
+    if not parsed:
+        return await _send_text(
+            bot, ev,
+            "用法：ark别名 银羽毛=银灰（或「ark别名 银羽毛 银灰」）；"
+            "ark别名列表 查看；ark别名删除 银羽毛 删除。",
+        )
+    alias, target = parsed
+
+    try:
+        from ArknightsUID.utils.database.models import ArkAlias
+    except ModuleNotFoundError:
+        from ArknightsUID.ArknightsUID.utils.database.models import ArkAlias
+
+    try:
+        from ArknightsUID.utils.gamedata.charinfo import (
+            load_char_index,
+            match_character,
+        )
+    except ModuleNotFoundError:
+        from ArknightsUID.ArknightsUID.utils.gamedata.charinfo import (
+            load_char_index,
+            match_character,
+        )
+
+    index = await load_char_index()
+    if not index:
+        return await _send_text(
+            bot, ev, "干员索引不可用（首次使用需下载游戏数据），请稍后再试。"
+        )
+    candidates = match_character(target, index)
+    if not candidates:
+        return await _send_text(bot, ev, f"未找到干员：{target}")
+    if len(candidates) > 1:
+        names = "、".join(str(c.get("name") or "") for c in candidates[:6])
+        return await _send_text(
+            bot, ev, f"「{target}」匹配到多位干员：{names}，请写全名。"
+        )
+    canonical = str(candidates[0].get("name") or target)
+
+    # 别名不能是干员真名/呼号（避免查询歧义）
+    lowered = alias.lower()
+    for item in index.values():
+        if (
+            str(item.get("name") or "") == alias
+            or str(item.get("appellation") or "").lower() == lowered
+        ):
+            return await _send_text(
+                bot, ev, f"「{alias}」是干员本身的名称，不能作为别名。"
+            )
+
+    await ArkAlias.set_alias(
+        bot_id=ev.bot_id,
+        user_id=ev.user_id,
+        alias=lowered,
+        target=canonical,
+    )
+    await _send_text(bot, ev, f"已设置别名：{alias} → {canonical}（ark干员/面板/养成/练度卡/模组 均生效）")
+
+
+@alias_sv.on_fullmatch(("别名列表", "我的别名"), block=True)
+async def list_user_alias(bot: Bot, ev: Event) -> None:
+    try:
+        from ArknightsUID.utils.database.models import ArkAlias
+    except ModuleNotFoundError:
+        from ArknightsUID.ArknightsUID.utils.database.models import ArkAlias
+
+    rows = await ArkAlias.list_aliases(bot_id=ev.bot_id, user_id=ev.user_id)
+    if not rows:
+        return await _send_text(
+            bot, ev, "你还没有设置别名。用法：ark别名 银羽毛=银灰"
+        )
+    lines = ["「明日方舟」你的干员别名："]
+    lines.extend(f"- {row.alias} → {row.target}" for row in rows)
+    await _send_text(bot, ev, "\n".join(lines))
+
+
+@alias_sv.on_command(("别名删除", "删除别名"), block=True)
+async def delete_user_alias(bot: Bot, ev: Event) -> None:
+    alias = (ev.text or "").strip().lower()
+    if not alias:
+        return await _send_text(bot, ev, "用法：ark别名删除 银羽毛")
+    try:
+        from ArknightsUID.utils.database.models import ArkAlias
+    except ModuleNotFoundError:
+        from ArknightsUID.ArknightsUID.utils.database.models import ArkAlias
+
+    if await ArkAlias.delete_alias(
+        bot_id=ev.bot_id, user_id=ev.user_id, alias=alias
+    ):
+        await _send_text(bot, ev, f"已删除别名：{alias}")
+    else:
+        await _send_text(bot, ev, f"没有这个别名：{alias}")

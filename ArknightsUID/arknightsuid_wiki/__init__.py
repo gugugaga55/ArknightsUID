@@ -1099,7 +1099,11 @@ async def _build_op_panel_context(query: str, ev: Event) -> dict | str:
     name = config["name"]
     if not name:
         return "用法：ark面板 干员名 [精2] [Lv45/满级] [潜6/满潜] [技能2 专3] [X模/Y模/无模] [模3] [满好]"
-    name = await _resolve_alias(name)
+    try:
+        bot_id, user_id = ev.bot_id, ev.user_id
+    except Exception:
+        bot_id = user_id = ""
+    name = await _resolve_alias(name, bot_id, user_id)
     index = await load_char_index()
     hit = resolve_char(name, index) if index else None
     if not hit:
@@ -1301,11 +1305,21 @@ async def send_wiki_page(bot: Bot, ev: Event) -> None:
     await _send_text(bot, ev, _format_search(query, results))
 
 
-async def _resolve_alias(query: str) -> str:
-    """别名/英文代号/唯一前缀 → 标准干员名（gamedata 索引）。
+async def _resolve_alias(
+    query: str, bot_id: str = "", user_id: str = ""
+) -> str:
+    """用户自定义别名 → 内建别名/英文代号/唯一前缀 → 标准干员名。
 
-    索引不可用或匹配不唯一时原样返回，交由 PRTS 搜索兜底。
+    用户别名（ArkAlias 表，精确匹配）优先级最高；gamedata 索引不可用
+    或匹配不唯一时原样返回，交由 PRTS 搜索兜底。
     """
+    if bot_id and user_id:
+        try:
+            from ..utils.user_alias import apply_user_alias
+
+            query = await apply_user_alias(bot_id, user_id, query)
+        except Exception:
+            logger.debug("[ArknightsUID] 用户别名解析失败，跳过")
     try:
         from ..utils.gamedata.charinfo import load_char_index, resolve_char
 
@@ -1324,7 +1338,7 @@ async def send_operator_page(bot: Bot, ev: Event) -> None:
     query = _clean_query(ev.text)
     if not query:
         return await _send_text(bot, ev, "用法：ark干员 干员名")
-    query = await _resolve_alias(query)
+    query = await _resolve_alias(query, ev.bot_id, ev.user_id)
     op = await query_operator(query)
     if op and (op.skills or op.talents):
         # 已绑定账号时叠加玩家练度（当前技能级 vs 满级对比、在训剩余）
@@ -1348,7 +1362,7 @@ async def send_mastery_materials(bot: Bot, ev: Event) -> None:
     query = _clean_query(ev.text)
     if not query:
         return await _send_text(bot, ev, "用法：ark专精材料 干员名")
-    query = await _resolve_alias(query)
+    query = await _resolve_alias(query, ev.bot_id, ev.user_id)
     op = await query_operator(query)
     if not op or not op.skills or not any(s.mastery_costs for s in op.skills):
         return await _send_text(bot, ev, f"未找到干员专精材料：{query}")
@@ -1625,3 +1639,98 @@ async def send_calendar(bot: Bot, ev: Event) -> None:
         ],
     }
     await _render_or_text(bot, ev, "ark_calendar.html", context, "\n".join(lines))
+
+
+# ---------------------------------------------------------------------------
+# 模组详情 / 危机合约 / 干员语音
+# ---------------------------------------------------------------------------
+
+
+@wiki_sv.on_command(("模组", "module"), block=True)
+async def send_module_info(bot: Bot, ev: Event) -> None:
+    query = _clean_query(ev.text)
+    if not query:
+        return await _send_text(bot, ev, "用法：ark模组 干员名（如 ark模组 银灰）")
+    try:
+        from ArknightsUID.utils.gamedata.modules_info import (
+            build_module_context,
+            format_module_context,
+        )
+    except ModuleNotFoundError:
+        from ArknightsUID.ArknightsUID.utils.gamedata.modules_info import (
+            build_module_context,
+            format_module_context,
+        )
+
+    context = await build_module_context(query)
+    if isinstance(context, str):
+        return await _send_text(bot, ev, context)
+    await _send_text(bot, ev, format_module_context(context))
+
+
+@wiki_sv.on_command(("危机合约", "合约"), block=True)
+async def send_crisis_info(bot: Bot, ev: Event) -> None:
+    # 词条文本数据源暂不可达（PRTS SMW 词条分类仅图标文件，
+    # GameData crisis 表不含词条文本），当前仅提供赛季时间线
+    # 无参数：赛季时间线（旧+新，最近 8 个）
+        try:
+            from ArknightsUID.utils.gamedata.crisis import load_crisis_seasons
+        except ModuleNotFoundError:
+            from ArknightsUID.ArknightsUID.utils.gamedata.crisis import (
+                load_crisis_seasons,
+            )
+
+        seasons = await load_crisis_seasons()
+        if not seasons:
+            return await _send_text(
+                bot, ev, "危机合约赛季数据不可用（gamedata 拉取失败），请稍后再试。"
+            )
+        lines = ["「明日方舟」危机合约赛季（近 8 期）："]
+        for season in seasons[:8]:
+            mark = "（新制式）" if season["version"] == "危机合约V2" else ""
+            lines.append(
+                f"- {season['name']}{mark}｜{season['start']} ~ {season['end']}"
+            )
+        lines.append("词条检索：ark危机合约 <关键词>（如 ark危机合约 攻击速度）")
+        return await _send_text(bot, ev, "\n".join(lines))
+
+@wiki_sv.on_command(("语音", "台词"), block=True)
+async def send_voice_lines(bot: Bot, ev: Event) -> None:
+    """ark语音 干员名 [关键词] → 中文台词（PRTS 语音记录子页）。"""
+    query = _clean_query(ev.text)
+    parts = query.split()
+    if not parts:
+        return await _send_text(
+            bot, ev, "用法：ark语音 干员名 [关键词]（如 ark语音 银灰 / ark语音 银灰 合约）"
+        )
+    name = parts[0]
+    keyword = parts[1] if len(parts) > 1 else ""
+    name = await _resolve_alias(name, ev.bot_id, ev.user_id)
+
+    from ..utils.prts.client import query_voice_lines
+
+    try:
+        lines = await query_voice_lines(name)
+    except Exception:
+        logger.warning("[ArknightsUID] 语音页查询失败", exc_info=True)
+        lines = None
+    if not lines:
+        return await _send_text(
+            bot, ev, f"未收录「{name}」的语音记录（PRTS 语音记录子页缺失）。"
+        )
+
+    if keyword:
+        hits = [
+            l for l in lines if keyword in l["title"] or keyword in l["text"]
+        ]
+        if not hits:
+            return await _send_text(bot, ev, f"「{name}」的台词里没有提到「{keyword}」。")
+        shown = hits[:8]
+        header = f"「{name}」台词 · 「{keyword}」（{len(hits)} 条，显示前 {len(shown)} 条）"
+    else:
+        shown = lines[:10]
+        header = f"「{name}」语音记录（共 {len(lines)} 条，显示前 {len(shown)} 条）"
+    body = [header]
+    body.extend(f"[{l['title']}] {l['text']}" for l in shown)
+    body.append("数据：PRTS（语音记录）")
+    await _send_text(bot, ev, "\n".join(body))

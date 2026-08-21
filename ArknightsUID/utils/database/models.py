@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from sqlmodel import Field, select, col
+from sqlmodel import Field, SQLModel, select, col
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import Index, or_
 
@@ -170,6 +170,98 @@ class ArkBind(Bind, table=True):
         )
         data = result.scalars().all()
         return data[0].uid if data and data[0].uid else None
+
+
+class ArkAlias(SQLModel, table=True):
+    """用户自定义干员别名表（ark别名 银羽毛=银灰）。
+
+    键为 (bot_id, user_id, alias)，别名统一小写存储（查询侧也小写化），
+    target 存干员中文名（设置时校验过唯一可解析）。
+    """
+
+    __tablename__ = "ArkAlias"
+    __table_args__ = (
+        Index("idx_ark_alias_user", "bot_id", "user_id"),
+        {"extend_existing": True},
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    bot_id: str = Field(default="", title="Bot ID")
+    user_id: str = Field(default="", title="用户 ID")
+    alias: str = Field(default="", title="自定义别名（小写）", index=True)
+    target: str = Field(default="", title="指向干员中文名")
+
+    @classmethod
+    @with_session
+    async def set_alias(
+        cls,
+        session: AsyncSession,
+        bot_id: str,
+        user_id: str,
+        alias: str,
+        target: str,
+    ) -> None:
+        """设置别名（同键覆盖）。"""
+        result = await session.execute(
+            select(cls).where(
+                cls.bot_id == bot_id,
+                cls.user_id == user_id,
+                cls.alias == alias,
+            )
+        )
+        existing = result.scalars().first()
+        if existing is not None:
+            existing.target = target
+        else:
+            session.add(cls(bot_id=bot_id, user_id=user_id, alias=alias, target=target))
+        await session.commit()
+
+    @classmethod
+    @with_session
+    async def delete_alias(
+        cls, session: AsyncSession, bot_id: str, user_id: str, alias: str
+    ) -> bool:
+        """删除别名；不存在返回 False。"""
+        result = await session.execute(
+            select(cls).where(
+                cls.bot_id == bot_id,
+                cls.user_id == user_id,
+                cls.alias == alias,
+            )
+        )
+        existing = result.scalars().first()
+        if existing is None:
+            return False
+        await session.delete(existing)
+        await session.commit()
+        return True
+
+    @classmethod
+    @with_session
+    async def list_aliases(
+        cls, session: AsyncSession, bot_id: str, user_id: str
+    ) -> List["ArkAlias"]:
+        """该用户的全部别名。"""
+        result = await session.execute(
+            select(cls).where(cls.bot_id == bot_id, cls.user_id == user_id)
+        )
+        return list(result.scalars().all())
+
+    @classmethod
+    @with_session
+    async def resolve_alias(
+        cls, session: AsyncSession, bot_id: str, user_id: str, alias: str
+    ) -> Optional[str]:
+        """别名 → 干员中文名；无匹配返回 None（精确匹配，小写化）。"""
+        result = await session.execute(
+            select(cls).where(
+                cls.bot_id == bot_id,
+                cls.user_id == user_id,
+                cls.alias == (alias or "").strip().lower(),
+            )
+        )
+        existing = result.scalars().first()
+        return existing.target if existing else None
 
 
 @on_core_start

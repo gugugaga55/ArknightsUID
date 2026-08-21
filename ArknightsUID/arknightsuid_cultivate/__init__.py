@@ -116,6 +116,14 @@ async def show_cultivation(bot: Bot, ev: Event) -> None:
             bot, ev, "用法：ark养成 <干员名>（如 ark养成 银灰 / ark养成 42）"
         )
 
+    # 用户自定义别名优先（精确整词替换；char_xxx 直查不受影响）
+    try:
+        from ..utils.user_alias import apply_user_alias
+
+        query = await apply_user_alias(ev.bot_id, ev.user_id, query)
+    except Exception:
+        pass
+
     credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
     if isinstance(credential, str):
         return await _send_text(bot, ev, credential)

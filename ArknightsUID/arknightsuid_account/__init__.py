@@ -822,6 +822,12 @@ def _parse_char_query(text: str) -> tuple[str, str, int]:
 )
 async def show_ark_char_card(bot: Bot, ev: Event) -> None:
     name, uid, index = _parse_char_query(ev.text)
+    try:
+        from ..utils.user_alias import apply_user_alias
+
+        name = await apply_user_alias(ev.bot_id, ev.user_id, name)
+    except Exception:
+        pass
     credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
     if isinstance(credential, str):
         return await _send_text(bot, ev, credential)
