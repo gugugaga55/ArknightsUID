@@ -55,12 +55,12 @@ async def bind_credential(bot: Bot, ev: Event) -> None:
     hg_token = ""
     skland_user_id = ""
     if kind == "token":
-        cred_info = await ark_auth.get_cred_by_token(value)
-        if cred_info == "405":
+        cred_info, err = await ark_auth.get_cred_by_token(value)
+        if err == ark_auth.CRED_ERR_UNAVAILABLE:
             return await _send_text(
                 bot, ev, "当前服务暂时无法使用 token 登录，请改用 cred 或 ark扫码登录。"
             )
-        if not isinstance(cred_info, dict) or not cred_info.get("cred"):
+        if not cred_info or not cred_info.get("cred"):
             return await _send_text(bot, ev, "token 兑换 cred 失败，请检查 token 是否正确。")
         cred = cred_info["cred"]
         skland_user_id = cred_info.get("skland_user_id", "")
@@ -110,8 +110,13 @@ async def scan_login(bot: Bot, ev: Event) -> None:
     if not token_info or not token_info.get("token"):
         return await _send_text(bot, ev, "扫码换取 token 失败，请重试。")
 
-    cred_info = await ark_auth.get_cred_by_token(token_info["token"])
-    if not isinstance(cred_info, dict) or not cred_info.get("cred"):
+    cred_info, err = await ark_auth.get_cred_by_token(token_info["token"])
+    if err == ark_auth.CRED_ERR_UNAVAILABLE:
+        # 扫码链路最终同样要过 OAuth token 兑换，405 受限时重扫也无用
+        return await _send_text(
+            bot, ev, "当前服务暂时无法完成扫码登录，请稍后再试或改用 ark绑定 <cred>。"
+        )
+    if not cred_info or not cred_info.get("cred"):
         return await _send_text(bot, ev, "换取 cred 失败，请重试。")
 
     roles, err = await ark_store.persist_ark_login(

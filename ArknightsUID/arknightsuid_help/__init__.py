@@ -39,8 +39,10 @@ HELP_GROUPS = [
             {"cmd": "ark练度统计", "desc": "全干员练度统计卡", "eg": "ark练度统计"},
             {"cmd": "arkBOX", "desc": "BOX 稀有度/精英化分析卡", "eg": "arkBOX"},
             {"cmd": "ark练度卡 <干员>", "desc": "单干员练度卡（技能效果/别名）", "eg": "ark练度卡 银灰"},
+            {"cmd": "ark面板 <干员> [精2 Lv45 潜6 满好 X模 技能2 专3]", "desc": "干员面板模拟（默认你的练度；任意等级/潜能/模组/技能档数值）", "eg": "ark面板 银灰 精2 满级 潜6 X模"},
             {"cmd": "ark肉鸽", "desc": "集成战略进度卡", "eg": "ark肉鸽"},
-            {"cmd": "ark肉鸽敌人 <名字>", "desc": "肉鸽敌人难度面板", "eg": "ark肉鸽敌人 歌利亚"},
+            {"cmd": "ark肉鸽敌人 <名字> [期名] [N难度] [关名] [紧急]", "desc": "肉鸽敌人面板：机制/免疫/难度 buff（可按关卡与紧急作战精确折算）", "eg": "ark肉鸽敌人 歌利亚 不容拒绝 N15"},
+            {"cmd": "ark肉鸽关卡 <关名> [N难度] [紧急]", "desc": "肉鸽关卡出怪面板：该难度下全体敌人折算数值 + 紧急作战", "eg": "ark肉鸽关卡 拆东补西 N15 紧急"},
             {"cmd": "ark签到", "desc": "森空岛每日签到", "eg": "ark签到 2"},
         ],
     },
@@ -51,6 +53,7 @@ HELP_GROUPS = [
             {"cmd": "ark抽卡记录", "desc": "抽卡记录统计卡", "eg": "ark抽卡记录"},
             {"cmd": "ark兑换码 <code>", "desc": "礼包码兑换", "eg": "ark兑换码 TFBUIT"},
             {"cmd": "ark养成 <干员>", "desc": "养成材料缺口计算", "eg": "ark养成 银灰"},
+            {"cmd": "ark攒抽 [参数]", "desc": "攒抽规划（自动垫刀/卡池）", "eg": "ark攒抽 玉:60000 石:30 垫刀:20"},
         ],
     },
     {
@@ -100,13 +103,41 @@ def _help_text() -> str:
 
 HELP_TEXT = _help_text()
 
+# 帮助卡每条命令的 Q 版干员图标（EndUID 帮助图式：每条命令一个对应角色）。
+# 资产为 templates/assets/chibi/ 下的烘焙 b64（PRTS 官方表情套组，零运行时依赖）。
+# 按分组分角色、组内轮换姿势；组名未收录时用全量轮换兜底。
+_GROUP_CHIBI_POOLS: dict[str, list[str]] = {
+    "账号": ["bss_1", "bss_5", "bss_8", "bss_2", "bss_4", "bss_6"],
+    "查询": ["mmz_2", "mmz_1", "mmz_5", "mmz_3", "mmz_4", "mmz_6"],
+    "抽卡": ["vvm_6", "vvm_1", "vvm_5", "vvm_2", "vvm_3", "vvm_4"],
+    "Wiki": ["mmz_3", "vvm_4", "bss_8", "mmz_5", "bss_2", "mmz_2"],
+    "活动": ["vvm_1", "bss_2", "vvm_6", "mmz_1", "bss_5", "vvm_3"],
+    "养成": ["mmz_6", "bss_4", "vvm_5", "mmz_2", "bss_6", "vvm_4"],
+}
+_CHIBI_ALL = [f"{g}_{i}" for g, ids in
+              (("mmz", (1, 2, 3, 4, 5, 6)), ("bss", (1, 2, 4, 5, 6, 8)),
+               ("vvm", (1, 2, 3, 4, 5, 6))) for i in ids]
+
+
+def assign_group_icons(groups: list[dict]) -> list[dict]:
+    """为每个命令格分配 Q 版干员图标（不改动 HELP_GROUPS 原数据）。"""
+    result = []
+    for g in groups:
+        pool = _GROUP_CHIBI_POOLS.get(str(g.get("name", "")), _CHIBI_ALL)
+        cmds = []
+        for i, c in enumerate(g.get("cmds", [])):
+            cmd = dict(c)
+            cmd["icon"] = f"assets/chibi/{pool[i % len(pool)]}.b64"
+            cmds.append(cmd)
+        result.append({**g, "cmds": cmds})
+    return result
+
 
 @help_sv.on_fullmatch(("帮助", "help", "方舟帮助"), block=True)
 async def send_ark_help(bot: Bot, ev: Event) -> None:
-    # 装饰 Q 版表情包为模板烘焙资产（templates/assets/sticker_help.b64），
-    # 无需运行时下载
+    # 标题贴纸与命令格 Q 版图标均为模板烘焙资产，无需运行时下载
     context = {
         "version": ArknightsUID_version,
-        "groups": HELP_GROUPS,
+        "groups": assign_group_icons(HELP_GROUPS),
     }
     await send_card_or_text(bot, ev, "ark_help.html", context, HELP_TEXT)
