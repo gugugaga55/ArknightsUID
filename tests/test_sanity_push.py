@@ -110,6 +110,9 @@ class CheckSanityPushTest(unittest.IsolatedAsyncioTestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self._orig_state_path = notify_mod._STATE_PATH
         notify_mod._STATE_PATH = Path(self._tmp.name) / "sanity_push_state.json"
+        # 凭据预警状态也隔离到临时目录（v31：凭据不可用会主动提醒一次）
+        self._orig_cred_path = notify_mod.CRED_WARN_STATE_PATH
+        notify_mod.CRED_WARN_STATE_PATH = Path(self._tmp.name) / "cred_warn.json"
 
         # 打桩 notify 模块命名空间内的依赖（import 时绑定的引用）
         self._orig_resolve = notify_mod.resolve_credential
@@ -123,6 +126,7 @@ class CheckSanityPushTest(unittest.IsolatedAsyncioTestCase):
         notify_mod.gs_subscribe.get_subscribe = self._orig_get_subscribe
         notify_mod.random = self._orig_random
         notify_mod._STATE_PATH = self._orig_state_path
+        notify_mod.CRED_WARN_STATE_PATH = self._orig_cred_path
         self._tmp.cleanup()
 
     def _install(
@@ -198,7 +202,9 @@ class CheckSanityPushTest(unittest.IsolatedAsyncioTestCase):
         self._install([subscribe], {"444": _envelope(135, 135)})
         notify_mod.resolve_credential = fake_resolve
         await check_sanity_push()
-        self.assertEqual(subscribe.sent, [])
+        # 理智推送不发生；凭据不可用改为主动提醒一次（v31 凭据预警）
+        self.assertEqual(len(subscribe.sent), 1)
+        self.assertIn("登录状态不可用", subscribe.sent[0])
         self.assertEqual(load_push_state(), {})
 
     async def test_no_subscriptions_noop(self) -> None:

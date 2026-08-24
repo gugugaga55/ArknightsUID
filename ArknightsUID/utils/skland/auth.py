@@ -20,6 +20,8 @@ from . import client as skland_client
 
 # === 登录链 URL ===
 # 森空岛平台 appCode，产生的 cred 覆盖全游戏（含明日方舟 gameId=1），无需方舟专用码。
+# 注意：这是逆向自森空岛 Web 端的公开协议常量（所有第三方工具通用），
+# 不是运营方机密，不构成密钥泄漏。
 APP_CODE = "4ca99fa6b56cc2ba"
 OAUTH_API = "https://as.hypergryph.com/user/oauth2/v2/grant"
 CRED_API = "https://zonai.skland.com/api/v1/user/auth/generate_cred_by_code"

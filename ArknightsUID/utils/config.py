@@ -21,7 +21,10 @@ CONFIG_DEFAULT: Dict[str, GSC] = {
     ),
     "RemoteRenderUrl": GsStrConfig(
         "外置渲染服务地址",
-        "RemoteRender 服务的完整 URL，如 http://127.0.0.1:3000/render。",
+        "RemoteRender 服务的完整 URL，如 http://127.0.0.1:3000/render。"
+        "⚠️ 渲染请求会携带完整卡片 HTML（含昵称、UID、游戏数据）发送到该地址："
+        "请仅指向自建或完全受信任的服务，公网部署务必使用 HTTPS，"
+        "否则等于把所有查询内容明文交给第三方。",
         "http://127.0.0.1:3000/render",
         secret=True,
     ),
@@ -33,15 +36,12 @@ CONFIG_DEFAULT: Dict[str, GSC] = {
     ),
 
     # === 查询行为 ===
-    "AtCheck": GsBoolConfig(
-        "允许@查询他人",
-        "开启后查询类指令若@了他人则查询被@用户的数据；关闭则始终查询发送者自己。",
-        True,
-    ),
+    # （AtCheck「允许@查询他人」已于 2026-08 安全审计中移除：从未实现，
+    #   留着会给使用者“该越权查询已获授权”的错误印象。）
     "HideUid": GsBoolConfig(
         "隐藏 UID",
         "开启后渲染卡片中的 UID 脱敏显示（前 2 位 + **** + 后 2 位）。",
-        False,
+        True,
     ),
 
     # === 网络 ===

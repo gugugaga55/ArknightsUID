@@ -31,7 +31,8 @@ from ..skland.auth import list_ark_roles_by_cred
 if TYPE_CHECKING:
     from ..enduid.adapter import ArkCredential
 
-# 明日方舟 appCode（森空岛平台是 4ca99fa6b56cc2ba，两者不能混用）
+# 明日方舟 appCode（森空岛平台是 4ca99fa6b56cc2ba，两者不能混用）。
+# 公开协议常量（逆向自官网 Web 端，所有第三方工具通用），非运营方机密。
 ARK_APP_CODE = "be36d44aa36bfb5b"
 
 GRANT_API = "https://as.hypergryph.com/user/oauth2/v2/grant"

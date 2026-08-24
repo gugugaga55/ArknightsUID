@@ -1,0 +1,109 @@
+<!--
+  ark_skin.html —— 皮肤收集卡（#24）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（utils/player/context.build_skin_context）：
+    name: str, uid: str
+    total: int                 目录总数（skin_table @ 皮肤 × 可获得干员）
+    owned: int                 已收集数
+    pct: float                 收集率（0-100，一位小数）
+    missing_count: int         未收集数
+    missing: [{char, group, name, skin_id}]   未收集清单（按系列排序，前 12）
+    extra_owned: int           持有但不在目录的皮肤数（仅计数）
+    recent: [{name, group, char, ts, avatar}] 最近获得（ts 倒序前 8，avatar 可空）
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="SKINS">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 皮肤收集 OUTFIT</em></span>
+            <span class="mast-meta"><span class="idx">24</span>UID {{ uid }}</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">{{ name }} · 时装图鉴</div>
+                <h1 class="title">皮肤<em>收集</em></h1>
+                <div class="title-rule"><span class="en">OUTFIT COLLECTION</span></div>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_recruit.b64" %}" alt="">
+        </div>
+
+        <div class="sect">
+            <span class="sect-label bk">收集读数</span>
+            <span class="sect-en">READOUTS</span>
+        </div>
+        <div class="grid grid-3">
+            <div class="cell">
+                <div class="cell-label">已收集 OWNED</div>
+                <div class="cell-value">{{ owned }}<span style="font-size: 12px; color: var(--tx-3);">/{{ total }}</span></div>
+                <div class="cell-sub">目录为全部时装皮肤</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">收集率 RATIO</div>
+                <div class="cell-value">{{ pct }}<span style="font-size: 12px; color: var(--tx-3);">%</span></div>
+                <div class="bar" style="margin-top: 4px;"><i style="width: {{ pct }}%;"></i></div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">未收集 MISSING</div>
+                <div class="cell-value {% if missing_count %}u-red{% endif %}">{{ missing_count }}</div>
+                <div class="cell-sub">{% if extra_owned %}另有 {{ extra_owned }} 件不在目录{% else %}含限定/活动系列{% endif %}</div>
+            </div>
+        </div>
+        <div class="bar bar--lg" style="margin-top: var(--space-3);">
+            <i style="width: {{ pct if pct <= 100 else 100 }}%;"></i>
+            <span class="bar-txt">{{ pct }}%</span>
+        </div>
+
+        {% if recent %}
+        <div class="sect">
+            <span class="sect-label bk">最近获得</span>
+            <span class="sect-en">RECENT // {{ recent | length }}</span>
+        </div>
+        <div class="rows">
+            {% for r in recent %}
+            <div class="row {% if loop.first %}row--active{% endif %}">
+                <span class="row-value" style="display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px;">
+                    {% if r.avatar %}<span class="aicon"><img src="{{ r.avatar }}" alt=""></span>{% endif %}
+                    {{ r.char }} · {{ r.name }}
+                </span>
+                <span class="bar-num">{{ r.group }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if missing %}
+        <div class="sect">
+            <span class="sect-label bk">未收集清单</span>
+            <span class="sect-en">MISSING // {{ missing_count }}</span>
+        </div>
+        <div class="rows">
+            {% for m in missing %}
+            <div class="row">
+                <span class="row-label">{{ m.char }}</span>
+                <span class="row-value">{{ m.name }}</span>
+                <span class="bar-num">{{ m.group }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% if missing_count > missing | length %}
+        <div style="margin-top: 4px; font-size: 10px; color: var(--tx-3);">… 其余 {{ missing_count - (missing | length) }} 件未列出</div>
+        {% endif %}
+        {% else %}
+        <div class="prose">全皮肤收集完成——博士的衣柜深不见底。</div>
+        {% endif %}
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 皮肤</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// OUTFIT COLLECTION // SKIN_TABLE</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

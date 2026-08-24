@@ -134,6 +134,50 @@ class CharEntry:
 
 
 @dataclass(slots=True)
+class RecruitSlot:
+    """公招标位（data.recruit，dump 一手证据：{startTs, finishTs, state}）。
+
+    finishTs > 0 表示招募中/已完成（startTs/finishTs 均为 -1 是空槽）；
+    state 原始码语义未验证（空槽样本为 1），不参与判定——完成判定只用
+    finishTs 与当前时间比较。
+    """
+
+    start_ts: int = -1
+    finish_ts: int = -1
+    state: int = 0
+
+    @property
+    def recruiting(self) -> bool:
+        return self.finish_ts > 0
+
+    def remaining_secs(self, now: float | None = None) -> int:
+        """剩余秒：-1 = 空槽/未知，0 = 已到点可领取，>0 = 招募中剩余。"""
+        if not self.recruiting:
+            return -1
+        now = time.time() if now is None else now
+        return max(0, int(self.finish_ts - now))
+
+
+def recruit_done_count(slots: list[RecruitSlot], now: float | None = None) -> int:
+    """已到点可领取的公招槽数。"""
+    return sum(
+        1 for slot in slots if slot.recruiting and slot.remaining_secs(now) == 0
+    )
+
+
+def recruit_next_remaining(
+    slots: list[RecruitSlot], now: float | None = None
+) -> int | None:
+    """最早一个未完成槽位的剩余秒（全部空闲/已完成返回 None）。"""
+    pendings = [
+        slot.remaining_secs(now)
+        for slot in slots
+        if slot.recruiting and slot.remaining_secs(now) > 0
+    ]
+    return min(pendings) if pendings else None
+
+
+@dataclass(slots=True)
 class PlayerData:
     name: str = ""
     uid: str = ""
@@ -153,6 +197,8 @@ class PlayerData:
     campaign_total: int = 0
     campaign_records: dict[str, int] = field(default_factory=dict)
     chars: list[CharEntry] = field(default_factory=list)
+    recruit_slots: list[RecruitSlot] = field(default_factory=list)
+    owned_skin_ids: list[str] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -266,6 +312,22 @@ def parse_player_info(response: Any) -> PlayerData | None:
     if not isinstance(records, dict):
         records = {}
 
+    recruit_slots: list[RecruitSlot] = []
+    for slot in data.get("recruit") or []:
+        if isinstance(slot, dict):
+            recruit_slots.append(
+                RecruitSlot(
+                    start_ts=_as_int(slot.get("startTs"), -1),
+                    finish_ts=_as_int(slot.get("finishTs"), -1),
+                    state=_as_int(slot.get("state")),
+                )
+            )
+
+    owned_skin_ids: list[str] = []
+    for skin in data.get("skins") or []:
+        if isinstance(skin, dict) and skin.get("id"):
+            owned_skin_ids.append(str(skin["id"]))
+
     return PlayerData(
         name=str(first_path(status, (("name",), ("nickName",))) or ""),
         uid=str(status.get("uid") or ""),
@@ -289,6 +351,8 @@ def parse_player_info(response: Any) -> PlayerData | None:
             str(k): _as_int(v) for k, v in records.items() if v is not None
         },
         chars=chars,
+        recruit_slots=recruit_slots,
+        owned_skin_ids=owned_skin_ids,
         raw=data,
     )
 

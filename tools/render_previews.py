@@ -716,6 +716,98 @@ MOCK_CONTEXTS = {
         "orphan_uids": [],
         "version": VERSION,
     },
+    "ark_skin.html": {
+        "name": "刀客塔不吃香菜",
+        "uid": "12****89",
+        "total": 513,
+        "owned": 96,
+        "pct": 18.7,
+        "missing_count": 417,
+        "extra_owned": 0,
+        "recent": [
+            {"name": "报童", "group": "忒斯特收藏/I", "char": "阿米娅", "ts": 1755000000, "avatar": ""},
+            {"name": "探索者", "group": "时代系列", "char": "银灰", "ts": 1754000000, "avatar": ""},
+            {"name": "慢性焦躁", "group": "纠察队先锋", "char": "陈", "ts": 1753000000, "avatar": ""},
+            {"name": "文化滋养", "group": "裂岸狂欢", "char": "史尔特尔", "ts": 1752000000, "avatar": ""},
+        ],
+        "missing": [
+            {"char": "凯尔希", "group": "_foldArts_", "name": "叙述者", "skin_id": "char_003_kalts@FoldArts#1"},
+            {"char": "伊芙利特", "group": "忒斯特收藏/I", "name": "炎客", "skin_id": "char_134_ifrit@winter#1"},
+            {"char": "临光", "group": "时代系列", "name": "璀璨新姿", "skin_id": "char_199_yak@epoch#1"},
+            {"char": "缪尔赛思", "group": "生态园纪念", "name": "乡野游踪", "skin_id": "char_4045_molly@forest#1"},
+        ],
+        "version": VERSION,
+    },
+    "ark_gacha_sim.html": {
+        "count": 10,
+        "results": [
+            {"rarity": 3, "name": "芬", "profession": "先锋", "avatar": "", "guarantee": False},
+            {"rarity": 4, "name": "流星", "profession": "狙击", "avatar": "", "guarantee": False},
+            {"rarity": 3, "name": "空爆", "profession": "术师", "avatar": "", "guarantee": False},
+            {"rarity": 5, "name": "德克萨斯", "profession": "近卫", "avatar": "", "guarantee": False},
+            {"rarity": 3, "name": "克洛丝", "profession": "狙击", "avatar": "", "guarantee": False},
+            {"rarity": 4, "name": "白雪", "profession": "狙击", "avatar": "", "guarantee": False},
+            {"rarity": 3, "name": "翎羽", "profession": "先锋", "avatar": "", "guarantee": False},
+            {"rarity": 3, "name": "夜烟", "profession": "术师", "avatar": "", "guarantee": False},
+            {"rarity": 3, "name": "斑点", "profession": "重装", "avatar": "", "guarantee": False},
+            {"rarity": 4, "name": "梅", "profession": "狙击", "avatar": "", "guarantee": True},
+        ],
+        "summary": {3: 5, 4: 4, 5: 1, 6: 0},
+        "version": VERSION,
+    },
+    "ark_cultivate_plan.html": {
+        "uid": "12****89",
+        "merged": {
+            "chars": [
+                {"name": "银灰", "rarity": 6, "current": {"evolve_phase": 2, "main_skill_lvl": 7, "masteries": [3, 0, 0]}, "gap_count": 6},
+                {"name": "史尔特尔", "rarity": 6, "current": {"evolve_phase": 2, "main_skill_lvl": 7, "masteries": [1, 0, 0]}, "gap_count": 8},
+                {"name": "42", "rarity": 6, "current": {"evolve_phase": 2, "main_skill_lvl": 6, "masteries": [0, 0, 0]}, "gap_count": 9},
+            ],
+            "materials": [
+                {"id": "2004", "name": "D32钢", "rarity": "5★", "need": 8, "owned": 2, "lack": 6, "icon": ""},
+                {"id": "30062", "name": "聚合剂", "rarity": "5★", "need": 6, "owned": 1, "lack": 5, "icon": ""},
+                {"id": "2003", "name": "改量装置", "rarity": "4★", "need": 12, "owned": 5, "lack": 7, "icon": ""},
+                {"id": "3003", "name": "聚酸酯组", "rarity": "3★", "need": 20, "owned": 8, "lack": 12, "icon": ""},
+            ],
+            "materials_total": 4,
+            "exp_books": [
+                {"name": "高级作战记录", "lack": 74, "icon": ""},
+            ],
+            "gold_lack": 386000,
+            "gold_icon": "",
+            "warnings": ["42 的技能顺序对位不全，专精按已持有技能数计算"],
+        },
+        "farm_rows": [
+            {"name": "D32钢", "lack": 6, "advice": "直刷 13-4（约 18 把，2394 理智）；合成（叶子约 2210 理智）→ 合成更省"},
+            {"name": "聚合剂", "lack": 5, "advice": "不可直刷，合成（叶子直刷约 1980 理智）"},
+            {"name": "改量装置", "lack": 7, "advice": "直刷 10-4（约 9 把，720 理智）"},
+            {"name": "聚酸酯组", "lack": 12, "advice": "直刷 S4-6（约 15 把，600 理智）；合成（叶子约 640 理智）→ 直刷更省"},
+        ],
+        "version": VERSION,
+    },
+    "ark_recruit_plan.html": {
+        "input_tags": "高级资深干员 / 术师 / 输出 / 远程位 / 生存",
+        "unknown_tags": "",
+        "best": "高级资深干员 + 远程位 + 生存",
+        "rows": [
+            {"tags": "高级资深干员 + 远程位 + 生存", "tier": 1, "tier_name": "6★ 机会",
+             "min_rarity": 5, "max_rarity": 5, "pool_count": 3,
+             "names": ["夏栎", "子月", "月禾"], "more": 0, "avatars": ["", "", ""]},
+            {"tags": "高级资深干员 + 术师 + 输出", "tier": 1, "tier_name": "6★ 机会",
+             "min_rarity": 5, "max_rarity": 5, "pool_count": 6,
+             "names": ["和弦", "复奏", "夜魔", "惊蛰", "卡达"], "more": 1, "avatars": ["", "", "", ""]},
+            {"tags": "高级资深干员 + 输出 + 生存", "tier": 1, "tier_name": "6★ 机会",
+             "min_rarity": 5, "max_rarity": 5, "pool_count": 7,
+             "names": ["因陀罗", "子月", "火神", "狮蝎", "布洛卡"], "more": 2, "avatars": ["", "", "", ""]},
+            {"tags": "高级资深干员 + 术师", "tier": 1, "tier_name": "6★ 机会",
+             "min_rarity": 5, "max_rarity": 5, "pool_count": 14,
+             "names": ["和弦", "复奏", "夜魔", "天火", "莱恩哈特"], "more": 9, "avatars": ["", "", "", ""]},
+            {"tags": "资深干员 + 生存", "tier": 3, "tier_name": "4★ 保底",
+             "min_rarity": 4, "max_rarity": 5, "pool_count": 16,
+             "names": ["古米", "斑点", "泡泡", "褐果", "休谟斯"], "more": 11, "avatars": ["", "", "", ""]},
+        ],
+        "version": VERSION,
+    },
     "ark_building.html": {
         "name": "刀客塔不吃香菜",
         "uid": "12****89",
@@ -723,6 +815,10 @@ MOCK_CONTEXTS = {
         "labor_value": 130,
         "labor_max": 200,
         "labor_pct": 65,
+        "recruit_total": 4,
+        "recruit_done": 1,
+        "recruit_next": "约2小时15分",
+        "training_pct": 62,
         "manufactures": [
             {"label": "制造站", "level": 3, "formula": "赤金×1", "speed_pct": 163,
              "members": [{"name": "温蒂", "char_id": ""}, {"name": "森蚺", "char_id": ""}, {"name": "澄闪", "char_id": ""}]},
@@ -921,6 +1017,50 @@ async def _enrich_icons(name: str, context: dict) -> None:
         from ArknightsUID.arknightsuid_help import HELP_GROUPS, assign_group_icons
 
         context["groups"] = assign_group_icons(HELP_GROUPS)
+
+    if name == "ark_recruit_plan.html":
+        # 每个组合的池内前 4 干员头像（名称反查 charId）
+        from ArknightsUID.utils.gamedata.charinfo import load_char_index
+        from ArknightsUID.utils.player.context import char_avatar_b64
+
+        char_index = await load_char_index()
+
+        def _cid_of(char_name: str) -> str:
+            return next(
+                (cid for cid, info in char_index.items()
+                 if info.get("name") == char_name),
+                "",
+            )
+
+        for row in context.get("rows", []):
+            avatars = []
+            for char_name in row.get("names", [])[:4]:
+                hit = _cid_of(str(char_name))
+                avatars.append(await char_avatar_b64(hit) if hit else "")
+            row["avatars"] = avatars
+
+    if name in ("ark_gacha_sim.html", "ark_skin.html"):
+        # 头像：干员名反查 charId → 初始头像（皮肤卡的 recent 用干员头像代）
+        from ArknightsUID.utils.gamedata.charinfo import load_char_index
+        from ArknightsUID.utils.player.context import char_avatar_b64
+
+        char_index = await load_char_index()
+
+        def _cid_of(char_name: str) -> str:
+            return next(
+                (cid for cid, info in char_index.items()
+                 if info.get("name") == char_name),
+                "",
+            )
+
+        if name == "ark_gacha_sim.html":
+            for row in context.get("results", []):
+                hit = _cid_of(str(row.get("name", "")))
+                row["avatar"] = await char_avatar_b64(hit) if hit else ""
+        else:
+            for row in context.get("recent", []):
+                hit = _cid_of(str(row.get("char", "")))
+                row["avatar"] = await char_avatar_b64(hit) if hit else ""
 
     if name == "ark_building.html":
         # 房间成员头像：名称反查 charId → 初始头像

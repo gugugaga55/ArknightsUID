@@ -1,0 +1,85 @@
+<!--
+  ark_gacha_sim.html —— 寻访模拟卡（#25）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（arknightsuid_gacha.send_gacha_simulation 组装）：
+    count: int                       抽数（1-10）
+    results: [{rarity, name, profession, avatar, guarantee}]
+        逐抽结果（rarity 1-6 人读值；avatar 为 hycdn 头像 b64，可空；
+        guarantee=True 标记十连保底那一抽）
+    summary: {3: int, 4: int, 5: int, 6: int}   按稀有度计数
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    {% set rcolor = {6: '#ff8c00', 5: '#d9a34a', 4: '#8a73c4', 3: '#4a90d9', 2: '#7a818c', 1: '#a6abb5'} %}
+    <div class="container" data-ghost="SIM">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 寻访模拟 SIMULATOR</em></span>
+            <span class="mast-meta"><span class="idx">25</span>LOCAL ONLY</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">概率同官方 · 与真实卡池无关</div>
+                <h1 class="title">{{ count }}连<em>模拟</em></h1>
+                <div class="title-rule"><span class="en">HEADHUNT SIMULATION</span></div>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_recruit.b64" %}" alt="">
+        </div>
+
+        <div class="sect">
+            <span class="sect-label">寻访结果</span>
+            <span class="sect-en">RESULTS // {{ count }} PULLS</span>
+        </div>
+        <div class="rows">
+            {% for r in results %}
+            <div class="row {% if r.rarity >= 5 %}row--active{% endif %}">
+                <span class="row-value" style="display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px;">
+                    {% if r.avatar %}<span class="aicon"><img src="{{ r.avatar }}" alt=""></span>{% endif %}
+                    <span class="mono" style="color: {{ rcolor.get(r.rarity, '#a6abb5') }}; font-weight: 700;">{{ r.rarity }}★</span>
+                    {{ r.name }}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 4px;">{{ r.profession }}</span>
+                    {% if r.guarantee %}<span class="chip chip--yellow" style="margin-left: 4px;">保底</span>{% endif %}
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="sect">
+            <span class="sect-label bk">稀有度统计</span>
+            <span class="sect-en">SUMMARY</span>
+        </div>
+        <div class="grid grid-4">
+            <div class="cell">
+                <div class="cell-label">六星 6★</div>
+                <div class="cell-value {% if summary[6] %}u-red{% endif %}">{{ summary[6] }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">五星 5★</div>
+                <div class="cell-value">{{ summary[5] }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">四星 4★</div>
+                <div class="cell-value">{{ summary[4] }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">三星 3★</div>
+                <div class="cell-value">{{ summary[3] }}</div>
+            </div>
+        </div>
+
+        <div class="prose">模拟仅供娱乐：概率同官方（6★2% / 5★8% / 4★50% / 3★40%，十连必得 4★+），
+        但不区分常驻/限定卡池，也不累计真实垫刀。真实记录看 ark抽卡记录。</div>
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 寻访模拟</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// HEADHUNT SIMULATION // FOR FUN</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

@@ -26,6 +26,7 @@ from gsuid_core.utils.database.base_models import Bind, User, with_session
 from gsuid_core.server import on_core_start
 
 from ..api.request_util import RespCode  # noqa: F401  # 保留 RespCode 引用便于迁移
+from ..crypto import cred_equals, encrypt_secret
 from .auto_migrate import auto_add_missing_columns
 
 # 明日方舟官服 channelMasterId（与 skland/client.py 的 ARKNIGHTS_CHANNEL_OFFICIAL 一致）
@@ -89,13 +90,20 @@ class ArkUser(User, table=True):
         cred: str,
         game_id: Optional[int] = ARKNIGHTS_CHANNEL_OFFICIAL,
     ) -> Optional["ArkUser"]:
-        """通过 cred 查询用户（用于 token 缓存索引）。"""
-        filters = [cls.cookie == cred]
+        """通过 cred 查询用户（用于 token 缓存索引）。
+
+        cookie 落库为密文（enc:v1:，见 utils/crypto），无法 SQL 等值匹配；
+        按 game_id 缩小范围后在 Python 侧解密比对（行数为账号数，量级小）。
+        """
+        filters = []
         if game_id is not None:
             filters.append(cls.game_id == game_id)
         result = await session.execute(select(cls).where(*filters))
         data = result.scalars().all()
-        return data[0] if data else None
+        for row in data:
+            if cred_equals(row.cookie, cred):
+                return row
+        return None
 
     @classmethod
     @with_session
@@ -110,15 +118,20 @@ class ArkUser(User, table=True):
 
         token 是短期凭据：请求链路 refresh 成功后回写，避免后续每条命令
         都重复「旧 token 请求 → 220 → refresh → 重试」三个往返。
+        cookie 密文落库 → 同 select_data_by_cred，Python 侧解密比对。
         """
-        filters = [cls.cookie == cred]
+        filters = []
         if game_id is not None:
             filters.append(cls.game_id == game_id)
         result = await session.execute(select(cls).where(*filters))
         rows = result.scalars().all()
+        matched = 0
         for row in rows:
-            row.token = token
-        return len(rows)
+            if not cred_equals(row.cookie, cred):
+                continue
+            row.token = encrypt_secret(token)
+            matched += 1
+        return matched
 
     @classmethod
     @with_session

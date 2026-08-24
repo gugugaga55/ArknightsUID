@@ -18,6 +18,8 @@ from gsuid_core.logger import logger
 from .building import (
     TRADING_STRATEGY_NAMES,
     BuildingData,
+    format_training_remaining,
+    training_progress_pct,
     training_remaining_secs,
     training_status_text,
 )
@@ -27,6 +29,8 @@ from .parse import (
     CharEntry,
     PlayerData,
     effective_ap,
+    recruit_done_count,
+    recruit_next_remaining,
 )
 
 # BOX 分析稀有度分档（label, 最低星级, 颜色）——游戏客观稀有度配色，
@@ -402,6 +406,8 @@ async def build_building_context(
         {"name": c.name, "room": c.room, "morale": c.morale}
         for c in building.tired_chars[:8]
     ]
+    recruit_done = recruit_done_count(data.recruit_slots)
+    recruit_next = recruit_next_remaining(data.recruit_slots)
     return {
         "name": data.name or "博士",
         "uid": uid_masked or data.uid,
@@ -424,6 +430,13 @@ async def build_building_context(
         "training_trainee": building.training_trainee,
         "training_remain": training_status_text(
             training_remaining_secs(building)
+        ),
+        "training_pct": training_progress_pct(building),
+        "recruit_total": len(data.recruit_slots),
+        "recruit_done": recruit_done,
+        # 最早一个未完成槽位的剩余文案（全部空闲/已完成为空串）
+        "recruit_next": (
+            format_training_remaining(recruit_next) if recruit_next else ""
         ),
         "tired_chars": tired,
         "tired_more": max(0, len(building.tired_chars) - 8),
@@ -528,3 +541,83 @@ async def build_char_card_context(
         "equips": equips,
         "version": version,
     }
+
+
+async def build_skin_context(
+    data: PlayerData, version: str, uid_masked: str = "", max_rows: int = 12
+) -> dict[str, Any] | None:
+    """ark_skin.html（皮肤收集卡）。目录不可用返回 None（调用方回退文本）。
+
+    - 目录：gamedata/skins.load_skin_index（skin_table × 干员索引）
+    - 持有：player_info 的 owned_skin_ids
+    - 最近获得：raw skins 条目按 ts 倒序前 8，皮肤头像走 hycdn
+    """
+    from ..gamedata.charinfo import load_char_index
+    from ..gamedata.skins import load_skin_index, summarize_collection
+
+    catalog = await load_skin_index()
+    if not catalog:
+        return None
+    char_index = await load_char_index() or {}
+    char_names = {
+        cid: str(info.get("name") or cid) for cid, info in char_index.items()
+    }
+    summary = summarize_collection(
+        catalog, data.owned_skin_ids, char_names, max_rows=max_rows
+    )
+
+    # 最近获得（ts 倒序前 8）：raw skins 的 {id, ts}
+    recent: list[dict[str, Any]] = []
+    raw_skins = data.raw.get("skins")
+    if isinstance(raw_skins, list):
+        entries = sorted(
+            (
+                {"id": str(s.get("id") or ""), "ts": int(s.get("ts") or 0)}
+                for s in raw_skins
+                if isinstance(s, dict) and s.get("id")
+            ),
+            key=lambda item: -item["ts"],
+        )
+        for entry in entries[:8]:
+            info = catalog.get(entry["id"])
+            recent.append(
+                {
+                    "skin_id": entry["id"],
+                    "name": info["name"] if info else entry["id"],
+                    "group": info["group"] if info else "",
+                    "char": (
+                        char_names.get(info["char_id"], info["char_id"])
+                        if info
+                        else ""
+                    ),
+                    "ts": entry["ts"],
+                    "avatar": await _skin_avatar_b64(entry["id"]),
+                }
+            )
+
+    return {
+        "name": data.name or "博士",
+        "uid": uid_masked or data.uid,
+        "total": summary["total"],
+        "owned": summary["owned"],
+        "pct": summary["pct"],
+        "missing_count": summary["missing_count"],
+        "missing": summary["missing"],
+        "extra_owned": summary["extra_owned"],
+        "recent": recent,
+        "version": version,
+    }
+
+
+async def _skin_avatar_b64(skin_id: str) -> str:
+    """皮肤头像（hycdn char_skin/avatar，@→%40/#→%23）；失败空串。"""
+    if not skin_id:
+        return ""
+    try:
+        from ..render.render_utils import get_image_b64_with_cache
+        from ..path import BAKE_PATH
+
+        url = skin_avatar_url(skin_id)
+        return await get_image_b64_with_cache(url, BAKE_PATH / "skin_avatars")
+    except Exception:
+        return ""

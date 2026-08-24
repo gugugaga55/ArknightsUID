@@ -240,7 +240,7 @@ def summarize_gap(
 
 
 async def calculate_cultivation(
-    credential: "ArkCredential", char_id: str
+    credential: "ArkCredential", char_id: str, max_rows: int = 12
 ) -> dict[str, Any] | str:
     """完整计算链：进度（player_info 缓存）+ 需求（cal_character）+ 持有（cal_player）。
 
@@ -279,7 +279,7 @@ async def calculate_cultivation(
 
     need, warnings = build_remaining_need(cost, char)
     item_index = await load_item_index()
-    gap = summarize_gap(need, owned, item_index)
+    gap = summarize_gap(need, owned, item_index, max_rows=max_rows)
 
     return {
         "char": char,
@@ -292,4 +292,68 @@ async def calculate_cultivation(
             "masteries": [s.specialize_level for s in char.skills],
             "equip_levels": [e.level for e in char.equips],
         },
+    }
+
+
+def merge_cultivation_results(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """多干员养成缺口合并（ark养成计划）：同账号仓库持有只扣一次。
+
+    - 材料/经验书按 itemId 汇总 need，lack = max(0, 合计 need - owned)
+      （owned 各结果一致——同一账号的 cal_player 快照）
+    - 龙门币缺口直接累加（summarize_gap 已按持有折算）
+    - 排序沿用 summarize_gap 口径：稀有度降序 → sort → id
+    """
+    materials: dict[str, dict[str, Any]] = {}
+    exp_books: dict[str, dict[str, Any]] = {}
+    gold_lack = 0
+    warnings: list[str] = []
+    chars: list[dict[str, Any]] = []
+
+    def _absorb(bucket: dict[str, dict[str, Any]], row: dict[str, Any]) -> None:
+        entry = bucket.get(row["id"])
+        if entry is None:
+            entry = dict(row)
+            entry["need"] = 0
+            bucket[row["id"]] = entry
+        entry["need"] += int(row.get("need", 0))
+
+    for result in results:
+        gap = result["gap"]
+        char = result["char"]
+        gold_lack += int(gap.get("gold_lack") or 0)
+        warnings.extend(result.get("warnings") or [])
+        char_material_total = len(gap.get("materials") or [])
+        for row in gap.get("materials") or []:
+            _absorb(materials, row)
+        for row in gap.get("exp_books") or []:
+            _absorb(exp_books, row)
+        chars.append(
+            {
+                "name": char.display_name,
+                "rarity": char.rarity_display,
+                "current": result.get("current") or {},
+                "gap_count": char_material_total,
+            }
+        )
+
+    def _finalize(bucket: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+        for entry in bucket.values():
+            entry["lack"] = max(0, entry["need"] - int(entry.get("owned") or 0))
+        return sorted(
+            bucket.values(),
+            key=lambda row: (
+                -int(str(row.get("rarity") or "0").replace("★", "") or 0),
+                str(row.get("name") or ""),
+            ),
+        )
+
+    material_rows = _finalize(materials)
+    exp_rows = [row for row in _finalize(exp_books) if row["lack"] > 0]
+    return {
+        "chars": chars,
+        "materials": [row for row in material_rows if row["lack"] > 0],
+        "materials_total": sum(1 for row in material_rows if row["lack"] > 0),
+        "exp_books": exp_rows,
+        "gold_lack": gold_lack,
+        "warnings": warnings,
     }

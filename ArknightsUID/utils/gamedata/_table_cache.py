@@ -52,6 +52,8 @@ ROGUE_TOPIC_TABLE_URL = f"{GAMEDATA_BASE}/roguelike_topic_table.json"
 BUILDING_TABLE_URL = f"{GAMEDATA_BASE}/building_data.json"
 CRISIS_TABLE_URL = f"{GAMEDATA_BASE}/crisis_table.json"
 CRISIS_V2_TABLE_URL = f"{GAMEDATA_BASE}/crisis_v2_table.json"
+# 皮肤目录（~4MB：charSkins 含全部时装 displaySkin 元数据）
+SKIN_TABLE_URL = f"{GAMEDATA_BASE}/skin_table.json"
 
 GAMEDATA_CACHE_DIR = CACHE_PATH / "gamedata"
 GAMEDATA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -64,6 +66,7 @@ ROGUE_TOPIC_TABLE_PATH = GAMEDATA_CACHE_DIR / "roguelike_topic_table.json"
 BUILDING_TABLE_PATH = GAMEDATA_CACHE_DIR / "building_data.json"
 CRISIS_TABLE_PATH = GAMEDATA_CACHE_DIR / "crisis_table.json"
 CRISIS_V2_TABLE_PATH = GAMEDATA_CACHE_DIR / "crisis_v2_table.json"
+SKIN_TABLE_PATH = GAMEDATA_CACHE_DIR / "skin_table.json"
 
 # 全量缓存 TTL（game data 随版本更新，7 天足够）
 CHAR_TABLE_TTL = 7 * 86400
@@ -202,6 +205,13 @@ async def ensure_building_table(force: bool = False) -> dict[str, Any] | None:
     """确保 building_data 可用（加工站配方 workshopFormulas，~5MB）。"""
     return await _ensure_table(
         BUILDING_TABLE_URL, BUILDING_TABLE_PATH, ttl=CHAR_TABLE_TTL, force=force
+    )
+
+
+async def ensure_skin_table(force: bool = False) -> dict[str, Any] | None:
+    """确保 skin_table 可用（charSkins 全皮肤目录，~4MB）。"""
+    return await _ensure_table(
+        SKIN_TABLE_URL, SKIN_TABLE_PATH, ttl=CHAR_TABLE_TTL, force=force
     )
 
 

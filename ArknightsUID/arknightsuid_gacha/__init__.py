@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+from typing import Any
+
 from gsuid_core.bot import Bot
 from gsuid_core.logger import logger
 from gsuid_core.models import Event
@@ -354,3 +356,191 @@ async def send_annual_report(bot: Bot, ev: Event) -> None:
             bot, ev, f"{year} 年没有本地记录（可用年份见 ark抽卡分析）。"
         )
     await _send_text(bot, ev, report)
+
+
+# ---------------------------------------------------------------------------
+# 寻访模拟（ark十连 / ark单抽）：官方概率 + 十连保底的纯本地娱乐模拟
+# ---------------------------------------------------------------------------
+
+
+def _simulate_context(
+    results: list[dict], summary: dict, count: int
+) -> dict[str, Any]:
+    """模拟结果 → 卡片上下文（profession 代码转中文名）。"""
+    from ..utils.player.parse import PROFESSION_NAMES
+
+    rows = []
+    for row in results:
+        rows.append(
+            {
+                "rarity": row["rarity"],
+                "name": row["name"],
+                "char_id": row.get("char_id") or "",
+                "profession": PROFESSION_NAMES.get(
+                    row.get("profession") or "", ""
+                ),
+                "avatar": "",
+                "guarantee": bool(row.get("guarantee")),
+            }
+        )
+    return {
+        "count": count,
+        "results": rows,
+        "summary": summary,
+        "version": ArknightsUID_version,
+    }
+
+
+def _format_sim_text(summary: dict, results: list[dict]) -> str:
+    from ..utils.gamedata.gacha_sim import format_pulls_text
+
+    lines = ["「明日方舟」寻访模拟（概率同官方，仅供娱乐）"]
+    lines.append(
+        f"六星 {summary.get(6, 0)} | 五星 {summary.get(5, 0)} | "
+        f"四星 {summary.get(4, 0)} | 三星 {summary.get(3, 0)}"
+    )
+    lines.append(format_pulls_text(results))
+    lines.append("不区分常驻/限定卡池，不累计真实垫刀；真实记录看 ark抽卡记录。")
+    return "\n".join(lines)
+
+
+async def _run_gacha_simulation(
+    bot: Bot, ev: Event, count: int
+) -> None:
+    import random as _random
+
+    try:
+        from ArknightsUID.utils.gamedata.gacha_sim import (
+            build_draw_pools,
+            simulate_pulls,
+            summarize_pulls,
+        )
+    except ModuleNotFoundError:
+        from ArknightsUID.ArknightsUID.utils.gamedata.gacha_sim import (
+            build_draw_pools,
+            simulate_pulls,
+            summarize_pulls,
+        )
+
+    char_index = await load_char_index()
+    if not char_index:
+        return await _send_text(
+            bot, ev, "干员索引尚未就绪（首次使用需下载游戏数据），请稍后重试。"
+        )
+    pools = build_draw_pools(char_index)
+    if not any(pools.values()):
+        return await _send_text(bot, ev, "干员池构建失败，请稍后重试。")
+
+    results = simulate_pulls(pools, count, _random.Random())
+    summary = summarize_pulls(results)
+    context = _simulate_context(results, summary, count)
+
+    # 逐抽头像（hycdn 初始头像，失败空串降级）
+    try:
+        for row in context["results"]:
+            row["avatar"] = await char_avatar_b64(str(row.get("char_id") or ""))
+    except Exception:
+        pass
+    await send_card_or_text(
+        bot, ev, "ark_gacha_sim.html", context, _format_sim_text(summary, results)
+    )
+
+
+@gacha_sv.on_command(("十连", "模拟十连", "方舟十连"), block=True)
+async def simulate_ten_pulls(bot: Bot, ev: Event) -> None:
+    await _run_gacha_simulation(bot, ev, 10)
+
+
+@gacha_sv.on_command(("单抽", "模拟单抽", "方舟单抽"), block=True)
+async def simulate_single_pull(bot: Bot, ev: Event) -> None:
+    await _run_gacha_simulation(bot, ev, 1)
+
+
+# ---------------------------------------------------------------------------
+# 抽卡记录导出（ark导出抽卡）：本地全量记录 → 通用 JSON 存档文件
+# ---------------------------------------------------------------------------
+
+
+def build_export_payload(
+    uid: str, records: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """本地记录 → 自描述 JSON 存档（时间旧→新，字段名明确，含原始量纲）。"""
+    from datetime import datetime, timezone
+
+    ordered = sorted(
+        records, key=lambda r: (int(r.get("gacha_ts", 0)), int(r.get("pos", 0)))
+    )
+    export_records = []
+    for record in ordered:
+        ts = int(record.get("gacha_ts", 0))
+        export_records.append(
+            {
+                "time": datetime.fromtimestamp(
+                    ts, tz=timezone.utc
+                ).isoformat(timespec="seconds") if ts else "",
+                "ts": ts,
+                "name": str(record.get("name") or ""),
+                "char_id": str(record.get("char_id") or ""),
+                "rarity": int(record.get("rarity", 0)),
+                "is_new": bool(record.get("is_new")),
+                "pool": str(record.get("pool_name") or ""),
+                "category": str(record.get("category") or ""),
+                "pos": int(record.get("pos", 0)),
+            }
+        )
+    return {
+        "info": {
+            "app": "ArknightsUID",
+            "game": "arknights",
+            "uid": uid,
+            "exported_at": datetime.now(tz=timezone.utc).isoformat(
+                timespec="seconds"
+            ),
+            "count": len(export_records),
+            # rarity 为官方 inquiry 接口原始量纲（0 基或 1 基并存，
+            # 见 utils/hypergryph/gacha._six_threshold 的说明）
+            "rarity_basis": "official-inquiry-raw",
+        },
+        "records": export_records,
+    }
+
+
+@gacha_sv.on_command(("导出抽卡", "抽卡导出", "导出寻访记录"), block=True)
+async def export_gacha_records(bot: Bot, ev: Event) -> None:
+    uid = extract_uid(ev.text)
+    index = extract_index(ev.text)
+    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
+    if isinstance(credential, str):
+        return await _send_text(bot, ev, credential)
+
+    records = await load_local_logs(credential.uid)
+    if not records:
+        return await _send_text(
+            bot, ev,
+            "本地没有抽卡记录可导出。先 ark抽卡记录 同步官方寻访记录。",
+        )
+
+    payload = build_export_payload(credential.uid, records)
+    import json as _json
+
+    content = _json.dumps(payload, ensure_ascii=False, indent=2).encode("utf-8")
+    file_name = f"ark_gacha_{hide_uid(credential.uid).replace('*', '_')}.json"
+    summary = (
+        f"已导出 {len(records)} 条寻访记录（{file_name}）。\n"
+        "通用 JSON 存档：含 info（uid/时间/量纲说明）与逐条记录\n"
+        "（时间/池名/干员/稀有度/是否新获）。如需最新数据先 ark抽卡记录 同步。"
+    )
+    try:
+        from gsuid_core.segment import MessageSegment
+
+        await bot.send(MessageSegment.file(content, file_name))
+        await _send_text(bot, ev, summary)
+    except Exception as exc:
+        logger.warning(
+            f"[ArknightsUID·抽卡导出] 文件发送失败: {exc.__class__.__name__}"
+        )
+        await _send_text(
+            bot, ev,
+            f"文件发送失败（{exc.__class__.__name__}），改发存档路径：\n"
+            f"{summary}",
+        )

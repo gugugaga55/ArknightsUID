@@ -38,11 +38,15 @@ try:
         build_char_card_context,
         build_char_stat_context,
         build_daily_context,
+        build_skin_context,
         build_status_context,
         effective_ap,
         fetch_cached_player_info,
+        format_training_remaining,
         parse_building,
         parse_player_info,
+        recruit_done_count,
+        recruit_next_remaining,
         training_remaining_secs,
         training_status_text,
     )
@@ -78,11 +82,15 @@ except ModuleNotFoundError:
         build_char_card_context,
         build_char_stat_context,
         build_daily_context,
+        build_skin_context,
         build_status_context,
         effective_ap,
         fetch_cached_player_info,
+        format_training_remaining,
         parse_building,
         parse_player_info,
+        recruit_done_count,
+        recruit_next_remaining,
         training_remaining_secs,
         training_status_text,
     )
@@ -904,6 +912,17 @@ def _format_building(
         status = training_status_text(training_remaining_secs(building))
         suffix = f"（{status}）" if status else ""
         lines.append(f"训练室：{building.training_trainee} 专精训练中{suffix}")
+    if data.recruit_slots:
+        done = recruit_done_count(data.recruit_slots)
+        nxt = recruit_next_remaining(data.recruit_slots)
+        if done:
+            lines.append(f"公开招募：{done} 个槽位已可领取")
+        elif nxt is not None:
+            lines.append(
+                f"公开招募：招募中，最早剩{format_training_remaining(nxt)}可领取"
+            )
+        else:
+            lines.append("公开招募：全部槽位空闲")
     if building.tired_chars:
         names = "、".join(
             f"{c.name}({c.room} {c.morale})" for c in building.tired_chars[:6]
@@ -956,4 +975,62 @@ async def show_ark_building(bot: Bot, ev: Event) -> None:
     await send_card_or_text(
         bot, ev, "ark_building.html", context or {},
         _format_building(credential, data, building),
+    )
+
+
+def _format_skin_collection(credential: ArkCredential, summary: dict) -> str:
+    lines = [
+        "「明日方舟」皮肤收集",
+        f"UID：{hide_uid(credential.uid)}",
+        (
+            f"已收集 {summary['owned']}/{summary['total']}"
+            f"（{summary['pct']}%），缺 {summary['missing_count']} 件"
+        ),
+    ]
+    if summary["missing"]:
+        lines.append("未收集（按系列排序，前 12 件）：")
+        for row in summary["missing"]:
+            group = f"〔{row['group']}〕" if row["group"] else ""
+            lines.append(f"  {row['char']} · {group}{row['name']}")
+    else:
+        lines.append("全皮肤收集完成，博士氪度惊人！")
+    lines.append("目录口径：ArknightsGameData 时装（@ 皮肤）× 可获得干员")
+    return "\n".join(lines)
+
+
+@account_sv.on_command(
+    (
+        "皮肤",
+        "皮肤收集",
+        "时装",
+        "方舟皮肤",
+    ),
+    block=True,
+)
+async def show_ark_skins(bot: Bot, ev: Event) -> None:
+    """ark皮肤 → 皮肤收集进度卡（player_info.skins × skin_table 目录）。"""
+    uid = _extract_uid(ev.text)
+    index = _extract_index(ev.text)
+    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
+    if isinstance(credential, str):
+        return await _send_text(bot, ev, credential)
+
+    loaded = await _load_player_data(credential)
+    if isinstance(loaded, str):
+        return await _send_text(bot, ev, loaded)
+    data = loaded
+
+    context = await build_skin_context(
+        data, ArknightsUID_version, hide_uid(credential.uid)
+    )
+    if context is None:
+        # 目录不可用（skin_table 拉取失败）时仍可给出持有计数的降级文案
+        return await _send_text(
+            bot, ev,
+            f"皮肤目录不可用（游戏数据拉取失败），请稍后再试。\n"
+            f"当前记录持有时装 {len(data.owned_skin_ids)} 件。",
+        )
+    await send_card_or_text(
+        bot, ev, "ark_skin.html", context,
+        _format_skin_collection(credential, context),
     )

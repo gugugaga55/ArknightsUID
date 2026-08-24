@@ -1,0 +1,124 @@
+<!--
+  ark_cultivate_plan.html —— 多干员合并养成规划卡（#26）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（arknightsuid_cultivate.show_cultivation_plan 组装）：
+    name/uid: str
+    merged: {
+      chars: [{name, rarity, current{evolve_phase,main_skill_lvl,masteries[]}, gap_count}]
+      materials: [{id, name, rarity, need, owned, lack, icon}]   合并缺口（lack>0）
+      materials_total: int
+      exp_books: [{name, lack, icon}]
+      gold_lack: int, gold_icon: str
+      warnings: [str]
+    }
+    farm_rows: [{name, lack, advice}]   刷图建议（前 5 缺口，可为空）
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="PLAN">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 养成规划 PLAN</em></span>
+            <span class="mast-meta"><span class="idx">26</span>UID {{ uid }}</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">{{ merged.chars | length }} 名干员 · 到毕业的合并缺口</div>
+                <h1 class="title">养成<em>规划</em></h1>
+                <div class="title-rule"><span class="en">CULTIVATION PLAN</span></div>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_recruit.b64" %}" alt="">
+        </div>
+
+        <div class="sect">
+            <span class="sect-label">干员清单</span>
+            <span class="sect-en">TARGETS // {{ merged.chars | length }}</span>
+        </div>
+        <div class="rows">
+            {% for c in merged.chars %}
+            <div class="row {% if loop.first %}row--active{% endif %}">
+                <span class="row-label">{{ c.name }}</span>
+                <span class="row-value u-mute">精{{ c.current.evolve_phase }} · 技能{{ c.current.main_skill_lvl }} · 专精{{ c.current.masteries | join('/') or '-' }}</span>
+                <span class="bar-num">缺 {{ c.gap_count }} 种</span>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="sect">
+            <span class="sect-label bk">合并缺口</span>
+            <span class="sect-en">MATERIALS // {{ merged.materials_total }} 种</span>
+        </div>
+        {% if merged.materials %}
+        <div class="rows">
+            {% for m in merged.materials %}
+            <div class="row">
+                <span class="row-value" style="display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px;">
+                    {% if m.icon %}<span class="aicon"><img src="{{ m.icon }}" alt=""></span>{% endif %}
+                    {{ m.rarity + ' ' if m.rarity }}{{ m.name }}
+                </span>
+                <span class="bar-num">缺 {{ m.lack }}（需 {{ m.need }} / 有 {{ m.owned }}）</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="prose">材料缺口：无——目标干员均已毕业或仓库充足。</div>
+        {% endif %}
+
+        {% if merged.exp_books or merged.gold_lack %}
+        <div class="rows" style="margin-top: 0; border-top: 0;">
+            {% for b in merged.exp_books %}
+            <div class="row">
+                <span class="row-value" style="display: inline-flex; align-items: center; gap: 8px; font-size: 13px;">
+                    {% if b.icon %}<span class="aicon"><img src="{{ b.icon }}" alt=""></span>{% endif %}
+                    {{ b.name }}
+                </span>
+                <span class="bar-num">缺 {{ b.lack }}</span>
+            </div>
+            {% endfor %}
+            {% if merged.gold_lack %}
+            <div class="row">
+                <span class="row-value" style="display: inline-flex; align-items: center; gap: 8px; font-size: 13px;">
+                    {% if merged.gold_icon %}<span class="aicon"><img src="{{ merged.gold_icon }}" alt=""></span>{% endif %}
+                    龙门币
+                </span>
+                <span class="bar-num">缺 {{ merged.gold_lack | default(0) }}</span>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        {% if farm_rows %}
+        <div class="sect">
+            <span class="sect-label bk">刷图建议</span>
+            <span class="sect-en">FARMING</span>
+        </div>
+        <div class="rows">
+            {% for f in farm_rows %}
+            <div class="row" style="display: block;">
+                <div class="bar-row" style="margin-bottom: 4px;">
+                    <span class="row-label">{{ f.name }} <span class="mono u-mute">缺{{ f.lack }}</span></span>
+                </div>
+                <div class="row-value" style="font-size: 12px;">{{ f.advice }}</div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if merged.warnings %}
+        <div class="prose">{% for w in merged.warnings[:4] %}⚠️ {{ w }}<br>{% endfor %}</div>
+        {% endif %}
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 养成规划</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// CULTIVATION PLAN // SKLAND + YITULIU</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

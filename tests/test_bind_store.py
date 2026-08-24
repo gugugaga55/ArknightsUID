@@ -83,9 +83,13 @@ class StorePersistTest(unittest.IsolatedAsyncioTestCase):
             await ark_store.persist_ark_login(
                 "u", "b", None, "CRED", hg_token="HG", skland_user_id="SUID"
             )
-        # insert_data 的关键字参数应含 hg_token / skland_user_id
+        # insert_data 的关键字参数应含 hg_token（密文）/ skland_user_id
         _args, kwargs = m_user.await_args
-        self.assertEqual(kwargs["hg_token"], "HG")
+        # hg_token 2026-08 起密文落库（utils/crypto）：断言非明文且可解密还原
+        from ArknightsUID.utils.crypto import decrypt_secret
+
+        self.assertNotEqual(kwargs["hg_token"], "HG")
+        self.assertEqual(decrypt_secret(kwargs["hg_token"]), "HG")
         self.assertEqual(kwargs["skland_user_id"], "SUID")
 
 

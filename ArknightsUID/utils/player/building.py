@@ -132,9 +132,27 @@ def training_status_text(remaining: int) -> str:
     return f"剩{format_training_remaining(remaining)}"
 
 
-# 训练进度百分比已移除：接口没有「专精目标等级/总时长」字段（dump 训练中
-# 样本缺失，training.level 是训练室房间等级而非目标专精档），任何总时长
-# 都只能臆测，违反本模块「宁缺毋滥」口径。待真实训练中样本校准后再加。
+# 训练进度百分比：接口没有「专精目标等级/总时长」字段（dump 训练中样本
+# 缺失，training.level 是训练室房间等级而非目标专精档），任何总时长都只能
+# 估算——按专精档基准时长（0→1: 8h / 1→2: 16h / 2→3: 24h，接口不区分档位，
+# 默认按 24h 口径）除以 speed 加成得总时长，剩余秒由接口给出。
+# 展示口径统一带「约」，误差以真实样本校准为准。
+TRAINING_BASE_HOURS = 24.0
+
+
+def training_progress_pct(
+    building: BuildingData, now: int | None = None
+) -> int | None:
+    """训练进度估算（0-100，约值）；未在训/未知返回 None。"""
+    remaining = training_remaining_secs(building, now)
+    if remaining < 0 or not building.training_trainee_id:
+        return None
+    speed = building.training_speed if building.training_speed > 0 else 1.0
+    total_secs = TRAINING_BASE_HOURS * 3600 / speed
+    if total_secs <= 0:
+        return None
+    pct = (1 - remaining / total_secs) * 100
+    return max(0, min(100, round(pct)))
 
 
 @dataclass(slots=True)

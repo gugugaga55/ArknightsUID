@@ -5,6 +5,12 @@ ep     = base64(RSA-PKCS1v15(uid, publicKey))
 字段   = base64(DES-ECB-ZeroPad(value, key)) 按 ConfusionInfo 混淆
 data   = hex(AES-128-CBC-ZeroPad(base64(gzip(json(fp))), priId, iv))
 dId    = "D" + base64(json({appId, organization, ep, data, os, encode:5, compress:2}))
+
+安全说明：本模块复刻森空岛 Web 端的数美(SMSDK)设备指纹协议。下方
+ORGANIZATION / PUBLIC_KEY / AES_IV / CONFUSION 中的 DES key 均为逆向出的
+公开协议常量（所有森空岛第三方工具通用），不是运营方机密。其中的弱密码学
+（DES-ECB、静态 IV）是上游协议本身的要求——本模块不保护任何本地秘密，
+本地凭据的静态加密见 utils/crypto.py。
 """
 import base64
 import hashlib

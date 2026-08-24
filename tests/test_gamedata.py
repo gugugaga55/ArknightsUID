@@ -38,8 +38,9 @@ class RecruitLogicTest(unittest.TestCase):
         self.assertEqual(entry["rarity"], 5)
         self.assertEqual(entry["profession"], "术师")
         self.assertEqual(entry["position"], "远程位")
-        # 5 星自动获得"高级资深干员"标签
+        # 5 星自动获得"高级资深干员"标签（阈值语义：4★+ 资深 / 5★+ 高级资深）
         self.assertIn("高级资深干员", entry["all_tags"])
+        self.assertIn("资深干员", entry["all_tags"])
         self.assertIn("输出", entry["all_tags"])
         self.assertIn("术师", entry["all_tags"])
 
@@ -53,6 +54,7 @@ class RecruitLogicTest(unittest.TestCase):
         }
         data = {e["name"]: e for e in recruit.build_recruit_data(char_table)}
         self.assertIn("资深干员", data["四星"]["all_tags"])
+        self.assertNotIn("高级资深干员", data["四星"]["all_tags"])
         self.assertNotIn("资深干员", data["三星"]["all_tags"])
         self.assertNotIn("高级资深干员", data["三星"]["all_tags"])
 

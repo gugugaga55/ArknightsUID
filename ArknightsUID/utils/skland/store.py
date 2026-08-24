@@ -10,9 +10,11 @@ from typing import Any
 from gsuid_core.logger import logger
 
 try:
+    from ArknightsUID.ArknightsUID.utils.crypto import encrypt_secret
     from ArknightsUID.ArknightsUID.utils.database.models import ArkBind, ArkUser
     from ArknightsUID.ArknightsUID.utils.skland.auth import list_ark_roles_by_cred
 except ModuleNotFoundError:
+    from ArknightsUID.utils.crypto import encrypt_secret
     from ArknightsUID.utils.database.models import ArkBind, ArkUser
     from ArknightsUID.utils.skland.auth import list_ark_roles_by_cred
 
@@ -57,13 +59,14 @@ async def persist_ark_login(
 
     for role in valid_roles:
         # insert_data 内部 upsert：存在（按 uid）则 update，否则 insert。重复登录幂等。
+        # cred / hg_token 是长期凭据，落库前加密（见 utils/crypto）。
         await ArkUser.insert_data(
             user_id=user_id,
             bot_id=bot_id,
             uid=role["role_id"],
             nickname=role["nickname"],
-            cookie=cred,
-            hg_token=hg_token,
+            cookie=encrypt_secret(cred),
+            hg_token=encrypt_secret(hg_token),
             skland_user_id=skland_user_id,
             record_id=role["record_uid"],
             server_id=role["server_id"],

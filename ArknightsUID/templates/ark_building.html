@@ -12,6 +12,10 @@
     clue_own: int, clue_board: [str], clue_daily_reward: bool
     training_trainee: str（空 = 未在训练）
     training_remain: str（"剩约H小时M分"/"已完成"，空 = 未在训练/未知）
+    training_pct: int|null（训练进度估算 0-100，null = 未在训/未知）
+    recruit_total: int              公招标位总数（0 = 数据缺失）
+    recruit_done: int               已到点可领取槽数
+    recruit_next: str               最早未完成槽位剩余文案（空 = 无进行中）
     tired_chars: [{name, room, morale}]  低心情干员（心情 < 12，升序前 8）
     tired_more: int
     version: str
@@ -144,9 +148,18 @@
                     <span class="bar-num">{{ training_trainee }} 专精训练中{% if training_remain %} · {{ training_remain }}{% endif %}</span>
                 </div>
                 <div class="bar bar--lg">
-                    <i style="width: {{ training_pct }}%;"></i>
-                    <span class="bar-txt">{{ training_pct }}%</span>
+                    <i style="width: {{ training_pct if training_pct is not none else 0 }}%;"></i>
+                    <span class="bar-txt">{% if training_pct is not none %}{{ training_pct }}%{% else %}--{% endif %}</span>
                 </div>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if recruit_total %}
+        <div class="rows" style="margin-top: 0; border-top: 0;">
+            <div class="row">
+                <span class="row-label">公开招募 RECRUIT</span>
+                <span class="row-value">{% if recruit_done %}<span class="chip chip--yellow">{{ recruit_done }} 槽位可领取</span>{% elif recruit_next %}招募中 · 最早{{ recruit_next }}后可领取{% else %}全部空闲{% endif %}</span>
             </div>
         </div>
         {% endif %}

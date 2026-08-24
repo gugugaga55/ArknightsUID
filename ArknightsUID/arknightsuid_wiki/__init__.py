@@ -1567,6 +1567,92 @@ async def send_recruit_query(bot: Bot, ev: Event) -> None:
     await _render_or_text(bot, ev, "ark_recruit.html", context, "\n".join(lines))
 
 
+@wiki_sv.on_command(("公招推荐", "标签推荐", "公招最优"), block=True)
+async def send_recruit_recommend(bot: Bot, ev: Event) -> None:
+    """ark公招推荐 标签…（把界面看到的标签全输入）→ 1-3 标签最优组合排行。
+
+    机制口径（PRTS 公开招募页实证）：资深干员=4★+、高级资深干员=5★+
+    （9 小时招募标签不划、必得 5★/6★ 档）；6★ 仅经高资标签追加，
+    具体名单为服务端数据，本工具不列 6★ 名单。
+    """
+    raw = _clean_query(ev.text)
+    if not raw:
+        return await _send_text(
+            bot, ev,
+            "用法：ark公招推荐 标签1 标签2 …（把公招界面看到的标签全部输入，"
+            "如 ark公招推荐 高级资深干员 术师 输出 远程位 生存）",
+        )
+    tags = [t.strip() for t in re.split(r"[\s,，、+]+", raw) if t.strip()]
+    data = await load_recruit_data()
+    if not data:
+        return await _send_text(
+            bot, ev, "公招数据加载失败（首次需下载约 15MB 游戏数据），请稍后重试"
+        )
+    try:
+        from ..utils.gamedata.recruit import recommend_combos
+    except ImportError:
+        from ArknightsUID.utils.gamedata.recruit import recommend_combos
+
+    result = recommend_combos(tags, data)
+    combos = result["combos"]
+    if not combos:
+        hint = ""
+        if result["unknown"]:
+            hint = f"（未识别的标签：{'、'.join(result['unknown'])}）"
+        return await _send_text(
+            bot, ev,
+            f"这些标签组不出任何可公招组合{hint}。检查标签写法，"
+            "或用 ark公招 <标签> 查询单个组合。",
+        )
+
+    rows = []
+    for combo in combos:
+        names = combo["match_names"]
+        shown = names[:5]
+        more = len(names) - len(shown)
+        avatars = []
+        for entry in combo["matches"][:4]:
+            avatars.append(await char_avatar_b64(str(entry.get("id", ""))))
+        rows.append(
+            {
+                "tags": " + ".join(combo["tags"]),
+                "tier": combo["tier"],
+                "tier_name": combo["tier_name"],
+                "min_rarity": combo["min_rarity"],
+                "max_rarity": combo["max_rarity"],
+                "pool_count": len(names),
+                "names": shown,
+                "more": more,
+                "avatars": avatars,
+            }
+        )
+
+    context = {
+        "version": ArknightsUID_version,
+        "input_tags": " / ".join(tags),
+        "unknown_tags": "、".join(result["unknown"]),
+        "rows": rows,
+        "best": rows[0]["tags"] if rows else "",
+    }
+    lines = [f"「明日方舟」公招组合推荐（输入：{' / '.join(tags)}）"]
+    if result["unknown"]:
+        lines.append(f"⚠️ 未识别标签：{'、'.join(result['unknown'])}（已忽略）")
+    for row in rows:
+        names = "、".join(row["names"])
+        more = f" 等{row['pool_count']}人" if row["more"] > 0 else ""
+        lines.append(
+            f"[{row['tier_name']}] {row['tags']}（保底{row['min_rarity']}★，"
+            f"池{row['pool_count']}人）：{names}{more}"
+        )
+    lines.append(
+        "勾选高资/资深标签并拉满 9 小时：标签不划、必得 5★/6★ 档；"
+        "6★ 仅经高级资深干员追加（名单以游戏内为准）。"
+    )
+    await _render_or_text(
+        bot, ev, "ark_recruit_plan.html", context, "\n".join(lines)
+    )
+
+
 @wiki_sv.on_command(("日历", "活动日历", "calendar"), block=True)
 async def send_calendar(bot: Bot, ev: Event) -> None:
     """活动日历：当前版本/维护 + 进行中活动/卡池（SMW 与 PRTS 首页同源）。"""

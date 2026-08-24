@@ -8,9 +8,11 @@ from typing import Any
 from gsuid_core.logger import logger
 
 try:
+    from ArknightsUID.ArknightsUID.utils.crypto import decrypt_secret
     from ArknightsUID.ArknightsUID.utils.skland import client as local_skland
     from ArknightsUID.ArknightsUID.utils.skland import store as ark_store
 except ModuleNotFoundError:
+    from ArknightsUID.utils.crypto import decrypt_secret
     from ArknightsUID.utils.skland import client as local_skland
     from ArknightsUID.utils.skland import store as ark_store
 
@@ -131,9 +133,11 @@ async def resolve_accounts(user_id: str, bot_id: str) -> AccountResolveResult:
                     nickname=getattr(row, "nickname", "") or "",
                     server_id=getattr(row, "server_id", "") or "1",
                     cookie_status=getattr(row, "cookie_status", "") or "",
-                    cred=getattr(row, "cookie", "") or "",
-                    token=getattr(row, "token", "") or "",
-                    hg_token=getattr(row, "hg_token", "") or "",
+                    # cookie/token/hg_token 密文落库（enc:v1:），读取时解密；
+                    # EndUID 回退行是明文，decrypt_secret 对无前缀值原样透传
+                    cred=decrypt_secret(getattr(row, "cookie", "") or ""),
+                    token=decrypt_secret(getattr(row, "token", None) or ""),
+                    hg_token=decrypt_secret(getattr(row, "hg_token", "") or ""),
                     skland_user_id=getattr(row, "skland_user_id", "") or "",
                     record_id=str(getattr(row, "record_id", "") or ""),
                 )
@@ -172,9 +176,9 @@ async def resolve_accounts(user_id: str, bot_id: str) -> AccountResolveResult:
                 nickname=_as_text(getattr(user, "nickname", "")),
                 server_id=_as_text(getattr(user, "server_id", "")) or "1",
                 cookie_status=_as_text(getattr(user, "cookie_status", "")),
-                cred=_as_text(getattr(user, "cookie", "")),
-                token=_as_text(getattr(user, "token", "")),
-                hg_token=_as_text(getattr(user, "hg_token", "")),
+                cred=decrypt_secret(_as_text(getattr(user, "cookie", ""))),
+                token=decrypt_secret(_as_text(getattr(user, "token", ""))),
+                hg_token=decrypt_secret(_as_text(getattr(user, "hg_token", ""))),
                 skland_user_id=_as_text(getattr(user, "skland_user_id", "")),
                 record_id=_as_text(getattr(user, "record_id", "")),
             )

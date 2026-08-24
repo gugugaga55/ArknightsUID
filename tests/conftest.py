@@ -7,8 +7,11 @@ rootdir=gsuid_core 下收集时会把 plugins/ 目录顶到 sys.path 前端，�
 这里在收集测试模块之前就以正确路径把内层包导入并缓存，
 后续所有 `import ArknightsUID.xxx` 直接命中缓存，不受路径顺序影响。
 """
+import os
 import sys
 from pathlib import Path
+
+from cryptography.fernet import Fernet
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -19,3 +22,7 @@ import ArknightsUID  # noqa: F401,E402 —— 立即以仓库根路径缓存内�
 assert ArknightsUID.__file__ is not None and str(ROOT) in ArknightsUID.__file__, (
     f"ArknightsUID 解析到了错误的位置: {ArknightsUID.__file__}"
 )
+
+# 固定测试密钥：凭据加密走环境变量，避免测试在真实 gsuid_core 数据目录
+# 自动生成密钥文件（utils/crypto 的回退行为）。
+os.environ.setdefault("ARK_UID_ENC_KEY", Fernet.generate_key().decode())

@@ -1,0 +1,80 @@
+<!--
+  ark_recruit_plan.html —— 公招组合推荐卡（#27）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（arknightsuid_wiki.send_recruit_recommend 组装）：
+    input_tags: str            用户输入的标签串（"/" 分隔）
+    unknown_tags: str          未识别标签（可空）
+    rows: [{tags, tier, tier_name, min_rarity, max_rarity, pool_count,
+            names: [str], more: int, avatars: [str]}]
+        推荐组合排行（tier 1 最优：6★ 机会 / 5★ 保底 / 4★ 保底 / 常规；
+        avatars 为池内前 4 干员头像 b64，可空）
+    best: str                   最优组合标签串
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    {% set rcolor = {6: '#ff8c00', 5: '#d9a34a', 4: '#8a73c4', 3: '#4a90d9', 2: '#7a818c', 1: '#a6abb5'} %}
+    {% set tier_style = {1: 'chip--yellow', 2: 'chip--ink', 3: 'chip', 4: 'chip'} %}
+    <div class="container" data-ghost="PLAN">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 公招推荐 RECOMMEND</em></span>
+            <span class="mast-meta"><span class="idx">27</span>PRTS.WIKI</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">界面标签 · {{ input_tags }}</div>
+                <h1 class="title">公招<em>推荐</em></h1>
+                <div class="title-rule"><span class="en">TAG COMBINATION</span></div>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_recruit.b64" %}" alt="">
+        </div>
+
+        <div class="prose">从输入标签中枚举 1-3 标签组合并按价值排序：勾选<span class="u-bold">高级资深干员</span>并拉满 9 小时——标签不会被划去，必得 5★/6★ 档（公招出 6★ 的唯一途径，名单以游戏内为准）。</div>
+
+        {% if unknown_tags %}
+        <div class="rows" style="margin-top: 0; border-top: 0;">
+            <div class="row">
+                <span class="row-label">未识别标签</span>
+                <span class="row-value u-red">{{ unknown_tags }}（已忽略）</span>
+            </div>
+        </div>
+        {% endif %}
+
+        <div class="sect">
+            <span class="sect-label">推荐组合</span>
+            <span class="sect-en">COMBOS // {{ rows | length }}</span>
+        </div>
+        <div class="rows">
+            {% for r in rows %}
+            <div class="row {% if loop.first %}row--active{% endif %}" style="display: block;">
+                <div class="bar-row" style="margin-bottom: 4px;">
+                    <span class="row-value" style="display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px; font-weight: 700;">
+                        <span class="mono u-mute">{{ '%02d' % loop.index }}</span>
+                        {{ r.tags }}
+                        <span class="chip {{ tier_style.get(r.tier, 'chip') }}" style="margin-left: 4px;">{{ r.tier_name }}</span>
+                    </span>
+                    <span style="flex: 1;"></span>
+                    <span class="bar-num">保底 {{ r.min_rarity }}★ · 池 {{ r.pool_count }} 人</span>
+                </div>
+                <div class="row-value" style="display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; font-size: 12px;">
+                    {% for av in r.avatars %}{% if av %}<span class="aicon"><img src="{{ av }}" alt=""></span>{% endif %}{% endfor %}
+                    <span class="u-mute">{{ r.names | join('、') }}{% if r.more > 0 %} 等{{ r.pool_count }}人{% endif %}</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 公招推荐</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// RECRUITMENT COMBINATION // PRTS.WIKI</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>
