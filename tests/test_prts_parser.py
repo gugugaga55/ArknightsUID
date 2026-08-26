@@ -717,6 +717,160 @@ class InlineValueTemplateTest(unittest.TestCase):
         self.assertIn("攻击力5%↓", lv2_text)
         self.assertNotIn("{{", lv2_text)
 
+    def test_level2_orphan_sp_and_effect_aggregate(self) -> None:
+        """等级2 差异块孤儿字段聚合（实测浮士德/霜星页行为）。
+
+        - 孤儿效果 + 本块 SP → 「技能·名：新效果（初始X·消耗Y）」，SP 不丢
+        - 仅 SP 变化（无名无效果）→ 「技能·名（初始X·消耗Y）」
+        - 不再泄漏「技能N初始：X」裸字段行
+        """
+        wikitext = """
+{{敌人信息/common2|名称=测试敌人}}
+{{敌人信息/levelcontent
+|index=0
+|技能0=致命一击
+|技能0效果=造成攻击力200%的物理伤害
+|技能0初始=17
+|技能0消耗=17
+|技能1=召唤弩炮
+|技能1效果=在预设位置召唤弩炮
+|技能1初始=15
+|技能1消耗=30
+}}
+{{敌人信息/levelcontent
+|index=1
+|技能0初始=30
+|技能0消耗=30
+|技能0效果=造成攻击力250%的物理伤害
+|技能1初始=1
+|技能1消耗=45
+|天赋=不可阻挡、沉睡免疫
+}}
+"""
+        enemy = prts_client.parse_enemy_wikitext(
+            prts_client.PageWikitext(title="测试敌人", wikitext=wikitext)
+        )
+        self.assertIsNotNone(enemy)
+        assert enemy is not None
+        self.assertEqual(
+            enemy.levels[1].abilities,
+            [
+                "技能·致命一击：造成攻击力250%的物理伤害（初始30·消耗30）",
+                "技能·召唤弩炮（初始1·消耗45）",
+                "天赋：不可阻挡、沉睡免疫",
+            ],
+        )
+        # 完全只改 SP 的差异块（霜星）：单条参数条目，无裸字段行
+        wikitext_frost = """
+{{敌人信息/common2|名称=测试敌人}}
+{{敌人信息/levelcontent
+|index=0
+|技能1=冻结
+|技能1效果=随机冻结2格地面
+|技能1初始=30
+|技能1消耗=30
+}}
+{{敌人信息/levelcontent
+|index=1
+|技能1初始=21
+|技能1消耗=21
+}}
+"""
+        enemy = prts_client.parse_enemy_wikitext(
+            prts_client.PageWikitext(title="测试敌人", wikitext=wikitext_frost)
+        )
+        self.assertIsNotNone(enemy)
+        assert enemy is not None
+        self.assertEqual(enemy.levels[1].abilities, ["技能·冻结（初始21·消耗21）"])
+
+    def test_popup_named_param_template_cleaned(self) -> None:
+        """全命名参数模板（{{Popup|内容=…|颜色=…}}）取内容段，不泄漏「颜色=#007DFA」。"""
+        cleaned = prts_client._clean_wiki_value(
+            "防御力下降50%{{Popup|内容=该效果为[[游戏数据基础#公式|直接乘算]]|颜色=#007DFA}}"
+        )
+        self.assertIn("直接乘算", cleaned)
+        self.assertNotIn("颜色=", cleaned)
+        self.assertNotIn("{{", cleaned)
+
+    def test_parse_holo_indicators(self) -> None:
+        """全息矩阵指标：分组/分区/锁定/评分标记 + 嵌套 color 数值保留。"""
+        wikitext = """
+{{普通关卡信息|关卡代号=H5-1|关卡名=炼狱行动-1}}
+==矩阵指标一览==
+{{测试指标/全息/style}}
+!class="group_title"|{{mdi|chess-rook}} 基础：俯冲轰炸
+|-
+|class="group_content"|
+{{测试指标/全息/分组|锁定=yes
+|{{测试指标/全息|选中=yes|类型=锁定|r_fixed_rune|我方防御点可承受的敌方数量变为{{color|#c9001c|1}}}}
+}}
+{{测试指标/全息/分组
+|{{测试指标/全息|类型=指定|r_token_build_a|<干扰装置>可以额外被部署在地面上，且每{{color|#c9001c|3}}秒扣除{{color|#c9001c|3}}点部署费用}}
+{{测试指标/全息|类型=指定|r_token_build_b|<干扰装置>仅可被部署在高台上}}
+}}
+!class="group_title"|{{mdi|bullseye-arrow}} 附加条件
+|-
+|class="group_content"|
+{{测试指标/全息|分数=2|r_emppnt_level_up_2|出现额外的<帝国炮火中枢先兆者>，且生命值{{color|#c9001c|+200%}}}}
+{{测试指标/全息/分组
+|{{测试指标/全息|分数=2|r_a|<豪华赞助无人机>免疫沉睡}}
+{{测试指标/全息|分数=2|r_b|<豪华赞助无人机>的攻击力{{color|#c9001c|+500}}}}
+}}
+"""
+        indicators = prts_client.parse_holo_indicators(wikitext)
+        self.assertEqual(len(indicators), 6)
+        locked = indicators[0]
+        self.assertEqual(locked.section, "基础：俯冲轰炸")
+        self.assertEqual(locked.kind, "锁定")
+        self.assertTrue(locked.grouped)
+        self.assertEqual(locked.token, "r_fixed_rune")
+        self.assertIn("变为1", locked.text)
+        # 嵌套 color 顶层切分不丢段：描述含多个数值
+        build_a = indicators[1]
+        self.assertEqual(build_a.kind, "指定")
+        self.assertTrue(build_a.grouped)
+        self.assertIn("每3秒扣除3点部署费用", build_a.text)
+        self.assertNotIn("{{", build_a.text)
+        # 附加区：裸行（独立）+ 分组行（冲突组）
+        extra = indicators[3]
+        self.assertEqual(extra.section, "附加条件")
+        self.assertEqual(extra.score, "2")
+        self.assertFalse(extra.grouped)
+        self.assertIn("+200%", extra.text)
+        self.assertTrue(indicators[4].grouped)
+
+    def test_stage_env_conditions_extracted(self) -> None:
+        """磨难式关卡描述：「环境条件」段拆出，剩余描述不再包含条件行。"""
+        wikitext = """
+{{普通关卡信息
+|关卡代号=10-10
+|关卡名=旧日之影
+|关卡描述=回忆向你投下阴影。恐惧，仇恨，生死别离，还有你的旧相识。⏎环境条件：⏎渴血的子裔的吸血效果大幅提升，生命值增加
+}}
+{{敌方情报|敌人1=萨卡兹子裔战士}}
+{{合约详情}}
+""".replace("⏎", "\n")
+        info = prts_client.parse_stage_wikitext(
+            prts_client.PageWikitext(title="磨难10-10 旧日之影", wikitext=wikitext)
+        )
+        self.assertIsNotNone(info)
+        assert info is not None
+        self.assertEqual(
+            info.env_conditions, ["渴血的子裔的吸血效果大幅提升，生命值增加"]
+        )
+        self.assertNotIn("环境条件", info.description)
+        self.assertIn("回忆向你投下阴影", info.description)
+        # 同行标签格式
+        info2 = prts_client.parse_stage_wikitext(
+            prts_client.PageWikitext(
+                title="测试", wikitext=wikitext.replace("环境条件：\n", "环境条件：")
+            )
+        )
+        assert info2 is not None
+        self.assertEqual(len(info2.env_conditions), 1)
+        # 危机合约标记
+        self.assertTrue(info.has_contracts)
+
     def test_talent_markup_fully_cleaned(self) -> None:
         """天赋里的 color/链接/粗体/异常效果/注释全部清理，数值保留。"""
         wikitext = """

@@ -46,6 +46,81 @@ def _import_playwright():
 async_playwright = _import_playwright()
 PLAYWRIGHT_AVAILABLE = async_playwright is not None
 
+# ── pytakumi（Takumi 无浏览器渲染引擎）─────────────────────────────
+# 同步 C 库调用，经 asyncio.to_thread 下放到线程池；fonts 参数注册本地
+# CJK 字体作为兜底——模板的 MiSans 远程 CSS 失效（离线/CDN 故障）时
+# 仍能出正常中文而不是豆腐块，注册 19MB ttc 实测仅 ~20ms。
+TAKUMI_RENDER_WIDTH = 560  # 与 ark_base.css 的 .container 同宽
+
+
+def _import_takumi():
+    try:
+        import pytakumi
+        return pytakumi
+    except ImportError:
+        return None
+
+
+pytakumi = _import_takumi()
+TAKUMI_AVAILABLE = pytakumi is not None
+
+_local_font_bytes: Optional[list] = None
+
+
+def _local_cjk_fonts() -> list:
+    """缓存读取系统 Noto Sans CJK（存在才返回），作为远程字体失败的兜底。"""
+    global _local_font_bytes
+    if _local_font_bytes is None:
+        _local_font_bytes = []
+        for candidate in (
+            Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
+            Path("/usr/share/fonts/opentype/noto/NotoSansCJK.ttc"),
+            Path("/System/Library/Fonts/PingFang.ttc"),
+        ):
+            try:
+                if candidate.exists():
+                    _local_font_bytes = [candidate.read_bytes()]
+                    break
+            except OSError:
+                continue
+    return _local_font_bytes
+
+
+def _render_via_takumi(html_content: str, width: int = TAKUMI_RENDER_WIDTH) -> bytes:
+    """Takumi 无浏览器渲染（同步，调用方负责下放线程）。失败抛异常由上层回退。"""
+    if pytakumi is None:
+        raise RuntimeError("pytakumi 不可用")
+    return pytakumi.html_to_pic(
+        html_content,
+        width=width,
+        format="jpeg",
+        quality=90,
+        fonts=_local_cjk_fonts() or None,
+    )
+
+
+async def _render_local_takumi(html_content: str) -> Optional[bytes]:
+    """引擎选择与执行；不可用/失败返回 None（打日志），由调用方回退 playwright。"""
+    if not TAKUMI_AVAILABLE:
+        logger.warning(
+            "[ARK·渲染] RenderEngine=takumi 但未安装 pytakumi，"
+            "回退 playwright（安装：uv pip install pytakumi）"
+        )
+        return None
+    start_time = time.time()
+    try:
+        screenshot = await asyncio.to_thread(_render_via_takumi, html_content)
+        render_time = time.time() - start_time
+        html_kb = len(html_content) / 1024
+        logger.info(
+            f"[ARK·渲染] takumi 渲染成功，耗时: {render_time:.2f}s，"
+            f"HTML: {html_kb:.0f}KB，图片: {len(screenshot)} bytes"
+        )
+        return screenshot
+    except Exception as e:
+        logger.warning(f"[ARK·渲染] takumi 渲染失败，回退 playwright: {e}")
+        return None
+
 _playwright = None
 _browser = None
 _browser_lock = asyncio.Lock()
@@ -310,6 +385,13 @@ async def render_html(ark_templates, template_name: str, context: dict) -> Optio
             raise e
 
         # 本地渲染
+        engine = str(ArkConfig.get_config("RenderEngine").data or "takumi").lower()
+        if engine == "takumi":
+            takumi_result = await _render_local_takumi(html_content)
+            if takumi_result is not None:
+                return takumi_result
+            # 回退到下方 playwright 路径
+
         if not PLAYWRIGHT_AVAILABLE or async_playwright is None:
             logger.warning("[ARK·渲染] Playwright 未安装，无法渲染，将回退到 PIL 渲染（如有）")
             return None

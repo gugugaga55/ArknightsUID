@@ -8,13 +8,84 @@
     max_hp/atk/defense/res: str
     secondary_stats: [{label, value}]（移动/间隔/半径/重量/恢复/元素等，仅非 0 项）
     resistances: [{label, value}]（生效异常抗性；has_resistances 为 False 表示全无）
-    variants: [{label, hp, atk, defense, res, abilities}]（等级 2+ 变体）
+    variants: [{label, hp, atk, defense, res, abilities, blocks}]（等级 2+ 变体）
     abilities: [str]
+    ability_blocks: [{kind: skill|talent|other, badge, name, tag, text, params}]
+                    机制分块（技能=信号黄 / 天赋=情报蓝 / 其他=墨色）
     source_url/version: str
 -->
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head>{% include "ark_head.html" %}</head>
+<head>{% include "ark_head.html" %}
+<style>
+    /* 机制分块：类型配色（黄=技能 / 蓝=天赋 / 墨=能力·其他） */
+    .ab {
+        margin-top: var(--space-2);
+        padding: var(--space-2) var(--space-3);
+        background: var(--panel);
+        border: 1px solid var(--hairline);
+        border-left: 3px solid var(--ink-block);
+    }
+    .ab--skill { border-left-color: var(--yellow); }
+    .ab--talent { border-left-color: var(--blue); }
+    .ab-head {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 6px;
+    }
+    .ab-badge {
+        display: inline-flex;
+        align-items: center;
+        height: 16px;
+        padding: 0 6px;
+        background: var(--ink-block);
+        color: #ffffff;
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        flex-shrink: 0;
+    }
+    .ab--skill .ab-badge { background: var(--yellow); color: var(--tx-0); }
+    .ab--talent .ab-badge {
+        background: rgba(0, 152, 220, 0.1);
+        color: var(--blue);
+        box-shadow: inset 0 0 0 1px rgba(0, 152, 220, 0.45);
+    }
+    .ab-name { font-size: 13px; font-weight: 700; color: var(--tx-0); }
+    .ab--talent .ab-name { color: var(--blue); }
+    .ab-tag {
+        height: 15px;
+        padding: 0 5px;
+        display: inline-flex;
+        align-items: center;
+        border: 1px solid var(--line);
+        background: var(--panel-2);
+        color: var(--tx-2);
+        font-size: 9px;
+        letter-spacing: 0.04em;
+    }
+    .ab-param {
+        display: inline-flex;
+        align-items: center;
+        height: 15px;
+        padding: 0 5px;
+        background: var(--yellow-dim);
+        box-shadow: inset 0 0 0 1px rgba(224, 168, 0, 0.4);
+        color: var(--tx-0);
+        font-family: var(--mono);
+        font-size: 9px;
+        font-weight: 600;
+    }
+    .ab-text {
+        margin-top: 4px;
+        font-size: 11px;
+        line-height: 1.7;
+        color: var(--tx-1);
+        white-space: pre-line;
+    }
+</style>
+</head>
 <body>
     <div class="container" data-ghost="ENEMY">
         <div class="mast">
@@ -96,20 +167,40 @@
         </div>
         {% endif %}
 
-        {% if abilities %}
+        {% if ability_blocks %}
         <div class="sect">
             <span class="sect-label bk">机制</span>
-            <span class="sect-en">ABILITIES // {{ abilities | length }}</span>
+            <span class="sect-en">ABILITIES // {{ ability_blocks | length }}</span>
         </div>
-        <div class="prose" style="white-space: pre-line;">{{ abilities | join("\n") }}</div>
+        {% for b in ability_blocks %}
+        <div class="ab ab--{{ b.kind }}">
+            <div class="ab-head">
+                {% if b.badge %}<span class="ab-badge">{{ b.badge }}</span>{% endif %}
+                {% if b.name %}<span class="ab-name">{{ b.name }}</span>{% endif %}
+                {% if b.tag %}<span class="ab-tag">{{ b.tag }}</span>{% endif %}
+                {% for p in b.params %}<span class="ab-param">{{ p }}</span>{% endfor %}
+            </div>
+            {% if b.text %}<div class="ab-text">{{ b.text }}</div>{% endif %}
+        </div>
+        {% endfor %}
         {% endif %}
         {% for v in variants %}
-            {% if v.abilities %}
+            {% if v.blocks %}
             <div class="sect">
                 <span class="sect-label bk">{{ v.label }}机制</span>
-                <span class="sect-en">LV{{ loop.index + 1 }} ABILITIES // {{ v.abilities | length }}</span>
+                <span class="sect-en">LV{{ loop.index + 1 }} ABILITIES // {{ v.blocks | length }}</span>
             </div>
-            <div class="prose" style="white-space: pre-line;">{{ v.abilities | join("\n") }}</div>
+            {% for b in v.blocks %}
+            <div class="ab ab--{{ b.kind }}">
+                <div class="ab-head">
+                    {% if b.badge %}<span class="ab-badge">{{ b.badge }}</span>{% endif %}
+                    {% if b.name %}<span class="ab-name">{{ b.name }}</span>{% endif %}
+                    {% if b.tag %}<span class="ab-tag">{{ b.tag }}</span>{% endif %}
+                    {% for p in b.params %}<span class="ab-param">{{ p }}</span>{% endfor %}
+                </div>
+                {% if b.text %}<div class="ab-text">{{ b.text }}</div>{% endif %}
+            </div>
+            {% endfor %}
             {% endif %}
         {% endfor %}
 

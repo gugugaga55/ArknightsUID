@@ -635,6 +635,138 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("等级3变体", html_render)
         self.assertIn("异常抗性 · 无", html_render)
 
+    async def test_ability_blocks_parse_and_context(self) -> None:
+        """机制分块：技能（含姿态标签/SP 参数）/ 天赋 / 能力 三类配色结构。"""
+        from ArknightsUID.arknightsuid_wiki import _ability_blocks
+
+        blocks = _ability_blocks(
+            [
+                "技能·投枪\n[毁灭姿态]：锁定目标造成伤害\n※不可对空（初始15·消耗20）",
+                "技能·生命献祭：60秒内无法移动（初始9999·消耗9999）",
+                "天赋：免疫脉冲波\n在场时令全场敌方单位攻击力+20%",
+                "能力：能够自然回复生命",
+                "无法识别的整行",
+            ]
+        )
+        self.assertEqual([b["kind"] for b in blocks], [
+            "skill", "skill", "talent", "other", "other",
+        ])
+        skill = blocks[0]
+        self.assertEqual(skill["name"], "投枪")
+        self.assertEqual(skill["tag"], "[毁灭姿态]")
+        self.assertEqual(skill["params"], ["初始15", "消耗20"])
+        # SP 参数从正文剥离，正文保留 ※ 注记行
+        self.assertNotIn("初始", skill["text"])
+        self.assertIn("※不可对空", skill["text"])
+        talent = blocks[2]
+        self.assertEqual(talent["name"], "免疫脉冲波")
+        self.assertEqual(talent["text"], "在场时令全场敌方单位攻击力+20%")
+        self.assertEqual(blocks[3]["badge"], "能力")
+        self.assertEqual(blocks[4]["text"], "无法识别的整行")
+
+        enemy = EnemyInfo(
+            title="爱国者",
+            name="爱国者",
+            levels=[
+                EnemyLevel(
+                    max_hp="45000", atk="1600", defense="500", res="45",
+                    abilities=["技能·投枪：造成伤害（初始15·消耗20）"],
+                ),
+                EnemyLevel(abilities=["技能·强化投枪：造成更多伤害"]),
+            ],
+        )
+        with mock.patch(
+            "ArknightsUID.arknightsuid_wiki.enemy_icon_b64",
+            new=mock.AsyncMock(return_value=""),
+        ):
+            context = await _build_enemy_context(enemy)
+        self.assertEqual(len(context["ability_blocks"]), 1)
+        self.assertEqual(context["ability_blocks"][0]["params"], ["初始15", "消耗20"])
+        self.assertEqual(context["variants"][0]["blocks"][0]["name"], "强化投枪")
+        html_render = ark_templates.get_template("ark_wiki_enemy.html").render(
+            font_css_url="about:blank", **context
+        )
+        # 分块配色类与 SP 参数标签进入渲染产物
+        self.assertIn("ab--skill", html_render)
+        self.assertIn("ab-param", html_render)
+
+    async def test_stage_condition_blocks_assembly(self) -> None:
+        """作战条件统一区块：突袭 / 环境条件 / 全息指标（基础+附加）/ CC 预留。"""
+        from ArknightsUID.utils.prts.client import HoloIndicator
+
+        stage = StageInfo(
+            title="全息H5-1 ＃炼狱行动-1",
+            code="H5-1",
+            name="炼狱行动-1",
+            assault_info="敌方单位的生命值、攻击力、防御力都提升至120%",
+            assault_diffs=["部署上限：8→6（-2）"],
+            env_conditions=["渴血的子裔的吸血效果大幅提升"],
+            holo_indicators=[
+                HoloIndicator(
+                    section="基础：俯冲轰炸", token="r_fixed_rune",
+                    text="我方防御点可承受的敌方数量变为1", kind="锁定", grouped=True,
+                ),
+                HoloIndicator(
+                    section="基础：俯冲轰炸", token="r_enemy_speed_a",
+                    text="所有敌人移动速度提升60%", kind="指定", grouped=True,
+                ),
+                HoloIndicator(
+                    section="附加条件", token="r_extra_1",
+                    text="出现额外的帝国炮火中枢先兆者", score="2", grouped=False,
+                ),
+                HoloIndicator(
+                    section="附加条件", token="r_conflict_a",
+                    text="豪华赞助无人机免疫沉睡", score="2", grouped=True,
+                ),
+            ],
+            has_contracts=True,
+        )
+
+        async def no_map(code: str, name: str) -> str:
+            return ""
+
+        with mock.patch(
+            "ArknightsUID.arknightsuid_wiki.resolve_map_file_url", new=no_map
+        ):
+            context = await _build_stage_context(stage)
+
+        self.assertTrue(context["has_assault"])
+        blocks = context["condition_blocks"]
+        self.assertEqual(
+            [b["label"] for b in blocks],
+            ["突袭条件", "环境条件", "矩阵指标 · 基础：俯冲轰炸", "矩阵指标 · 附加条件", "合约词条"],
+        )
+        # 突袭块：情报散文 + 数值差异
+        self.assertEqual(blocks[0]["tone"], "red")
+        self.assertEqual(len(blocks[0]["rows"]), 2)
+        # 指标块：基础黄（锁定红标）/ 附加蓝（分数黄标 + 冲突组）
+        basic, extra = blocks[2], blocks[3]
+        self.assertEqual(basic["tone"], "yellow")
+        self.assertEqual(basic["note"], "每组必选其一")
+        self.assertEqual(basic["rows"][0]["tags"], ["锁定"])
+        self.assertEqual(extra["tone"], "blue")
+        self.assertEqual(extra["rows"][0]["tags"], ["分数2"])
+        self.assertEqual(extra["rows"][1]["tags"], ["分数2", "冲突"])
+        # CC 预留：ghost 提示块
+        self.assertEqual(blocks[4]["tone"], "ghost")
+
+        html_render = ark_templates.get_template("ark_wiki_stage.html").render(
+            font_css_url="about:blank", **context
+        )
+        self.assertIn("作战条件", html_render)
+        self.assertIn("cond--red", html_render)
+        self.assertIn("cond--yellow", html_render)
+        self.assertIn("is-lock", html_render)
+        self.assertIn("is-score", html_render)
+        # 文本回退包含条件行
+        from ArknightsUID.arknightsuid_wiki import _format_stage
+
+        text = _format_stage(stage)
+        self.assertIn("突袭情报：", text)
+        self.assertIn("环境条件：", text)
+        self.assertIn("矩阵指标：4 条", text)
+        self.assertIn("危机合约关卡", text)
+
     async def test_build_stage_context_without_map_file(self) -> None:
         """地图文件不存在/解析失败：map_image 留空，其余字段不受影响。"""
         stage = StageInfo(

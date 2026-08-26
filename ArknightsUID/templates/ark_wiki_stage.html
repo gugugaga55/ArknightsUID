@@ -11,14 +11,89 @@
     enemies: [{name, count, level, icon, hp, atk, defense, res}]
           头像按名散列直链（头像_敌人_{名}.png，缺失空串降级）；
           基础数值取敌人页一级数据（详细数值/技能效果走 ark敌人 详情卡）
-    assault_diffs: [str]  突袭差异
+    assault_diffs: [str]  突落数值差异
+    has_assault: bool     突袭存在性（纯散文突袭无数值差异也算有）
+    condition_blocks: [{label, en, tone: red|ink|yellow|blue|ghost, note, rows: [{text, tags}]}]
+          作战条件统一区块（突袭/环境条件/全息矩阵指标/合约词条预留），
+          配色语义与敌人卡机制块同源
     map_image: str        地图 base64（PRTS 文件 {代号}_{关卡名}_地图.png，可为空）
     map_url: str          PRTS.Map 交互地图链接（可为空）
     map_url/source_url/version: str
 -->
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head>{% include "ark_head.html" %}</head>
+<head>{% include "ark_head.html" %}
+<style>
+    /* 作战条件分块：模式配色（红=突袭 / 墨=环境 / 黄=指标·基础 / 蓝=指标·附加） */
+    .cond {
+        margin-top: var(--space-2);
+        padding: var(--space-2) var(--space-3);
+        background: var(--panel);
+        border: 1px solid var(--hairline);
+        border-left: 3px solid var(--ink-block);
+    }
+    .cond--red { border-left-color: var(--alert); }
+    .cond--yellow { border-left-color: var(--yellow); }
+    .cond--blue { border-left-color: var(--blue); }
+    .cond--ghost { border-left-color: var(--line); }
+    .cond-head {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+    }
+    .cond-badge {
+        display: inline-flex;
+        align-items: center;
+        height: 16px;
+        padding: 0 6px;
+        background: var(--ink-block);
+        color: #ffffff;
+        font-size: 9px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        flex-shrink: 0;
+    }
+    .cond--red .cond-badge { background: var(--alert); }
+    .cond--yellow .cond-badge { background: var(--yellow); color: var(--tx-0); }
+    .cond--blue .cond-badge {
+        background: rgba(0, 152, 220, 0.1);
+        color: var(--blue);
+        box-shadow: inset 0 0 0 1px rgba(0, 152, 220, 0.45);
+    }
+    .cond--ghost .cond-badge { background: var(--panel-2); color: var(--tx-2); }
+    .cond-note { font-size: 9px; color: var(--tx-2); letter-spacing: 0.04em; }
+    .cond-item {
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+        margin-top: 5px;
+    }
+    .cond-item + .cond-item { border-top: 1px dashed var(--hairline); padding-top: 5px; }
+    .cond-item .tags { display: inline-flex; gap: 4px; flex-shrink: 0; }
+    .cond-tag {
+        display: inline-flex;
+        align-items: center;
+        height: 14px;
+        padding: 0 4px;
+        background: var(--panel-2);
+        color: var(--tx-2);
+        font-size: 9px;
+        font-weight: 600;
+        white-space: nowrap;
+    }
+    .cond-tag.is-lock { background: var(--alert); color: #ffffff; }
+    .cond-tag.is-score { background: var(--yellow-dim); color: var(--tx-0); }
+    .cond-text {
+        flex: 1;
+        font-size: 11px;
+        line-height: 1.65;
+        color: var(--tx-1);
+        min-width: 0;
+        word-break: break-word;
+    }
+</style>
+</head>
 <body>
     <div class="container" data-ghost="STAGE">
         <div class="mast">
@@ -50,7 +125,7 @@
             </div>
             <div class="cell">
                 <div class="cell-label">突袭 ASSAULT</div>
-                <div class="cell-value" style="font-size: 15px;">{{ "有" if assault_diffs else "-" }}</div>
+                <div class="cell-value" style="font-size: 15px;">{{ "有" if has_assault else "-" }}</div>
             </div>
         </div>
 
@@ -106,12 +181,29 @@
         </div>
         {% endif %}
 
-        {% if assault_diffs %}
+        {% if condition_blocks %}
         <div class="sect">
-            <span class="sect-label bk">突袭差异</span>
-            <span class="sect-en">ASSAULT</span>
+            <span class="sect-label bk">作战条件</span>
+            <span class="sect-en">CONDITIONS // {{ condition_blocks | length }}</span>
         </div>
-        <div class="prose">{{ assault_diffs | join("；") }}</div>
+        {% for cb in condition_blocks %}
+        <div class="cond cond--{{ cb.tone }}">
+            <div class="cond-head">
+                <span class="cond-badge">{{ cb.label }}</span>
+                {% if cb.note %}<span class="cond-note">{{ cb.note }}</span>{% endif %}
+            </div>
+            {% for it in cb.rows %}
+            <div class="cond-item">
+                {% if it.tags %}
+                <span class="tags">
+                    {% for t in it.tags %}<span class="cond-tag {% if t == '锁定' %}is-lock{% elif t.startswith('分数') %}is-score{% endif %}">{{ t }}</span>{% endfor %}
+                </span>
+                {% endif %}
+                <span class="cond-text">{{ it.text }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endfor %}
         {% endif %}
 
         {% if map_image %}

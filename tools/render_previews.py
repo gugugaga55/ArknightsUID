@@ -407,14 +407,15 @@ MOCK_CONTEXTS = {
                 "defense": "1500",
                 "res": "60",
                 "abilities": [
-                    "狂怒姿态：攻击速度与移动速度大幅提升，防御力降低",
+                    "技能·毁灭击：对目标造成相当于攻击力200%的物理伤害\n※不可对空（初始10·消耗25）",
                 ],
             }
         ],
         "abilities": [
-            "行军姿态：防御力大幅提升，阻挡数+1，法术抗性提升",
-            "毁灭姿态：攻击力大幅提升，攻击造成范围伤害",
-            "被击败时释放冲击波，对全场造成真实伤害",
+            "技能·投枪\n[毁灭姿态]：锁定半径20范围内距离自身最远的位于高地的1名我方单位，蓄力约3s后对其造成相当于攻击力135%的物理普通伤害\n※不可对空（初始15·消耗20）",
+            "技能·生命献祭：60秒内无法移动，每间隔0.8s触发一次【献祭】（初始9999·消耗9999）",
+            "天赋：免疫脉冲波\n在场时令全场敌方单位攻击力+20%、防御力+200（多个爱国者给予的属性增益不叠加）",
+            "能力：大幅强化敌军攻击与防御力",
         ],
         "source_url": "https://prts.wiki/w/爱国者",
         "version": VERSION,
@@ -447,7 +448,49 @@ MOCK_CONTEXTS = {
             {"name": "机动盾兵", "count": 6, "level": "", "icon": "", "hp": "4000", "atk": "200", "defense": "1000", "res": "0",
              "mechanics": "天赋：受到攻击时获得护盾，可抵挡一次伤害"},
         ],
-        "assault_diffs": ["敌人的生命值与攻击力提升 20%"],
+        "assault_diffs": ["部署上限：8→6（-2）"],
+        "has_assault": True,
+        "condition_blocks": [
+            {
+                "label": "突袭条件",
+                "en": "ASSAULT",
+                "tone": "red",
+                "note": "",
+                "rows": [
+                    {"text": "敌方单位的生命值、攻击力、防御力都提升至120%", "tags": []},
+                    {"text": "部署上限：8→6（-2）", "tags": []},
+                ],
+            },
+            {
+                "label": "矩阵指标 · 基础：俯冲轰炸",
+                "en": "INDICATORS",
+                "tone": "yellow",
+                "note": "每组必选其一",
+                "rows": [
+                    {
+                        "text": "不再持有<干扰装置>，但额外出现可掉落<干扰装置>的<豪华赞助无人机>，场上初始额外出现一个<寒霜>且<寒霜>的防御力+100%",
+                        "tags": ["锁定"],
+                    },
+                    {"text": "所有敌人移动速度提升60%，且生命值+70%", "tags": []},
+                ],
+            },
+            {
+                "label": "矩阵指标 · 附加条件",
+                "en": "INDICATORS",
+                "tone": "blue",
+                "note": "自愿叠加，仅附加指标提供评分",
+                "rows": [
+                    {
+                        "text": "出现额外的<帝国炮火中枢先兆者>，且其防御力+100%，攻击力+100%，生命值+200%",
+                        "tags": ["分数2"],
+                    },
+                    {
+                        "text": "<豪华赞助无人机>免疫沉睡，冻结和晕眩，且生命值+350%",
+                        "tags": ["分数2", "冲突"],
+                    },
+                ],
+            },
+        ],
         "map_image": "",
         "map_url": "",
         "source_url": "https://prts.wiki/w/1-7",
@@ -894,6 +937,12 @@ async def _enrich_icons(name: str, context: dict) -> None:
         from ArknightsUID.utils.gamedata.itemicon import enemy_icon_b64
 
         context["icon"] = await enemy_icon_b64(context["name"])
+        # 机制分块与正式链路同源（_build_enemy_context 的拆分逻辑）
+        from ArknightsUID.arknightsuid_wiki import _ability_blocks
+
+        context["ability_blocks"] = _ability_blocks(context.get("abilities") or [])
+        for variant in context.get("variants", []):
+            variant["blocks"] = _ability_blocks(variant.get("abilities") or [])
     elif name == "ark_rogue_enemy.html":
         from ArknightsUID.utils.gamedata.rogue_enemy import enemy_icon_b64
 

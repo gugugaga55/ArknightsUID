@@ -391,8 +391,24 @@ def _format_stage(stage: StageInfo, enemies_ctx: list[dict] | None = None) -> st
                 entry += f"｜机制：{_clip(row['mechanics'], 50)}"
             enemies.append(entry)
         lines.append("敌人：" + "、".join(enemies))
+    if stage.assault_info:
+        lines.append("突袭情报：" + _clip(stage.assault_info, 120))
     if stage.assault_diffs:
         lines.append("突袭差异：" + "；".join(stage.assault_diffs))
+    if stage.env_conditions:
+        lines.append(
+            "环境条件：" + "；".join(_clip(c, 80) for c in stage.env_conditions[:4])
+        )
+    if stage.holo_indicators:
+        sections = {
+            i.section for i in stage.holo_indicators if i.section.startswith("基础")
+        }
+        lines.append(
+            f"矩阵指标：{len(stage.holo_indicators)} 条"
+            f"（基础{'/'.join(sections) or '分组'}每组必选1，附加自愿叠加提供评分，详见图片）"
+        )
+    if stage.has_contracts:
+        lines.append("危机合约关卡：词条随赛季轮换，以当期赛季合约详情页为准")
     if stage.map_url:
         lines.append(f"地图：{stage.map_url}")
     _append_source(lines, stage.source_url)
@@ -756,6 +772,88 @@ async def _build_operator_context(op: OperatorInfo, owner: dict | None = None) -
     }
 
 
+# 机制条目尾部的 SP 参数括号（解析层合并格式：初始X·消耗Y·持续Z）
+_RE_ABILITY_PARAMS = re.compile(r"（([^（）]*(?:初始|消耗|持续)[^（）]*)）\s*$")
+
+
+def _ability_blocks(entries: list[str]) -> list[dict]:
+    """机制字符串 → 分块结构 [{kind, badge, name, tag, text, params}]。
+
+    输入是解析层 _merge_level_abilities 的合并产物，这里只做展示拆分，
+    供模板按类型分色（技能=信号黄 / 天赋=情报蓝 / 其他=墨色）：
+    · 技能·名字[↵[姿态标签]]：效果（初始X·消耗Y） → 名字/标签/正文/SP 参数
+    · 天赋：名字↵详情 → 首行为名，余下为正文
+    · 其余「键：值」条目 badge=键名，无法识别的整行原样进 text
+    """
+    blocks: list[dict] = []
+    for entry in entries:
+        text = (entry or "").strip()
+        if not text:
+            continue
+        params: list[str] = []
+        match = _RE_ABILITY_PARAMS.search(text)
+        if match:
+            params = [p.strip() for p in match.group(1).split("·") if p.strip()]
+            text = text[: match.start()].rstrip()
+        if text.startswith("技能·"):
+            name_part, _, body = text[3:].partition("：")
+            name_lines = name_part.split("\n", 1)
+            tag = ""
+            if len(name_lines) == 2 and name_lines[1].strip().startswith("["):
+                name, tag = name_lines[0].strip(), name_lines[1].strip()
+            else:
+                name = " ".join(part.strip() for part in name_lines).strip()
+            blocks.append(
+                {
+                    "kind": "skill",
+                    "badge": "技能",
+                    "name": name,
+                    "tag": tag,
+                    "text": body.strip(),
+                    "params": params,
+                }
+            )
+            continue
+        if text.startswith("天赋"):
+            label, _, body = text.partition("：")
+            first_line, _, rest = body.partition("\n")
+            blocks.append(
+                {
+                    "kind": "talent",
+                    "badge": label.strip() or "天赋",
+                    "name": first_line.strip(),
+                    "tag": "",
+                    "text": rest.strip(),
+                    "params": params,
+                }
+            )
+            continue
+        label, sep, body = text.partition("：")
+        if sep and len(label) <= 12 and "\n" not in label:
+            blocks.append(
+                {
+                    "kind": "other",
+                    "badge": label.strip(),
+                    "name": "",
+                    "tag": "",
+                    "text": body.strip(),
+                    "params": params,
+                }
+            )
+        else:
+            blocks.append(
+                {
+                    "kind": "other",
+                    "badge": "",
+                    "name": "",
+                    "tag": "",
+                    "text": text,
+                    "params": params,
+                }
+            )
+    return blocks
+
+
 def _enemy_secondary_stats(level: EnemyLevel | None) -> list[dict]:
     """次级属性行 [{label, value}]：非空且非 "0" 才有展示价值（PRTS 默认 0）。"""
     rows = []
@@ -788,6 +886,7 @@ async def _build_enemy_context(enemy: EnemyInfo) -> dict:
             "res": lv.res,
             # 差异块未写则与等级1一致，不重复展示
             "abilities": list(lv.abilities) if lv.abilities else [],
+            "blocks": _ability_blocks(lv.abilities) if lv.abilities else [],
         }
         for i, lv in enumerate(enemy.levels[1:], start=1)
     ]
@@ -818,6 +917,7 @@ async def _build_enemy_context(enemy: EnemyInfo) -> dict:
         "has_resistances": bool(resistances),
         "variants": variants,
         "abilities": list(level.abilities) if level else [],
+        "ability_blocks": _ability_blocks(level.abilities) if level else [],
         "icon": await enemy_icon_b64(enemy.name or enemy.title),
         "source_url": enemy.source_url,
         "version": ArknightsUID_version,
@@ -888,6 +988,77 @@ async def _enrich_stage_enemies(stage: StageInfo, limit: int = 10) -> list[dict]
     return rows
 
 
+def _stage_condition_blocks(stage: StageInfo) -> list[dict]:
+    """作战条件统一区块：突袭 / 环境条件（磨难等）/ 全息矩阵指标 / 合约词条（预留）。
+
+    块结构 {label, en, tone, note, items: [{text, tags}]}：
+    tone 语义色与敌人卡机制块同源——突袭=alert红 / 环境=墨 / 指标·基础=信号黄 /
+    指标·附加=情报蓝 / 合约=ghost。CC 词条本身在赛季子页（关卡页 {{合约详情}}
+    为动态模板无法静态解析），先以提示条占位。
+    """
+    blocks: list[dict] = []
+    if stage.assault_info or stage.assault_diffs:
+        items = []
+        if stage.assault_info:
+            items.append({"text": _clip(stage.assault_info, 160), "tags": []})
+        items.extend({"text": _clip(d, 100), "tags": []} for d in stage.assault_diffs)
+        blocks.append(
+            {"label": "突袭条件", "en": "ASSAULT", "tone": "red", "note": "", "rows": items}
+        )
+    if stage.env_conditions:
+        blocks.append(
+            {
+                "label": "环境条件",
+                "en": "ENVIRONMENT",
+                "tone": "ink",
+                "note": "",
+                "rows": [
+                    {"text": _clip(c, 160), "tags": []} for c in stage.env_conditions
+                ],
+            }
+        )
+    if stage.holo_indicators:
+        sections: list[str] = []
+        for indicator in stage.holo_indicators:
+            if indicator.section and indicator.section not in sections:
+                sections.append(indicator.section)
+        for section in sections:
+            rows = [i for i in stage.holo_indicators if i.section == section]
+            basic = section.startswith("基础")
+            items = []
+            for indicator in rows:
+                tags = []
+                if indicator.kind == "锁定":
+                    tags.append("锁定")
+                if indicator.score:
+                    tags.append(f"分数{indicator.score}")
+                if indicator.grouped and not basic:
+                    tags.append("冲突")
+                items.append({"text": _clip(indicator.text, 220), "tags": tags})
+            blocks.append(
+                {
+                    "label": f"矩阵指标 · {section}",
+                    "en": "INDICATORS",
+                    "tone": "yellow" if basic else "blue",
+                    "note": "每组必选其一" if basic else "自愿叠加，仅附加指标提供评分",
+                    "rows": items,
+                }
+            )
+    if stage.has_contracts:
+        blocks.append(
+            {
+                "label": "合约词条",
+                "en": "CONTRACTS",
+                "tone": "ghost",
+                "note": "随赛季轮换",
+                "rows": [
+                    {"text": "危机合约关卡：词条以当期赛季合约详情页为准", "tags": []}
+                ],
+            }
+        )
+    return blocks
+
+
 async def _build_stage_context(stage: StageInfo) -> dict:
     title = stage.code or stage.title
     # 地图：PRTS 文件命名规律 {代号}_{关卡名}_地图.png（imageinfo 解析直链，
@@ -928,6 +1099,8 @@ async def _build_stage_context(stage: StageInfo) -> dict:
         "extra_drops": await _drop_rows(list(stage.extra_drops)),
         "enemies": await _enrich_stage_enemies(stage),
         "assault_diffs": list(stage.assault_diffs),
+        "has_assault": bool(stage.assault_info or stage.assault_diffs),
+        "condition_blocks": _stage_condition_blocks(stage),
         "map_image": map_b64,
         "map_url": stage.map_url,
         "source_url": stage.source_url,

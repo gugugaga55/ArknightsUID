@@ -94,6 +94,24 @@ class StageEnemy:
 
 
 @dataclass(slots=True)
+class HoloIndicator:
+    """全息作战矩阵指标（关卡页「矩阵指标一览」的 {{测试指标/全息}} 模板）。
+
+    section: 所属分区标题（基础：<主题> / 附加条件，来自表格 group_title 行）
+    token:   指标键（r_fixed_rune / r_enemy_speed_a 等）
+    kind:    类型=锁定（FXD 唯一锁定指标）/ 指定 / 空
+    score:   分数=N（仅附加指标提供评分）
+    grouped: 在 {{测试指标/全息/分组}} 内（基础=每组必选1 / 附加=冲突组）
+    """
+    section: str = ""
+    token: str = ""
+    text: str = ""
+    kind: str = ""
+    score: str = ""
+    grouped: bool = False
+
+
+@dataclass(slots=True)
 class StageInfo:
     title: str
     code: str = ""
@@ -122,6 +140,12 @@ class StageInfo:
     # 突袭 vs 普通：突袭模板全字段 + 人读差异点（数字字段给差值，文本字段直接列）
     assault_fields: dict[str, str] = field(default_factory=dict)
     assault_diffs: list[str] = field(default_factory=list)
+    # 关卡描述拆出的「环境条件」段（磨难难度/部分活动关的敌方机制修改描述）
+    env_conditions: list[str] = field(default_factory=list)
+    # 全息作战矩阵指标（非该模式关卡为空）
+    holo_indicators: list[HoloIndicator] = field(default_factory=list)
+    # 危机合约关卡标记（页内 {{合约详情}} 动态模板，词条本身在赛季子页）
+    has_contracts: bool = False
     source_url: str = ""
     map_url: str = ""
 
@@ -600,6 +624,15 @@ def _collapse_inline_template(match: re.Match[str]) -> str:
         return f"{mark}{value}"
     if name in ("异常效果", "异常状态"):
         return "".join(a for a in args if a and "=" not in a)
+    # 通用兜底：取最后一个非命名段（color 等模板显示段在末尾）；全是命名段
+    # （{{Popup|内容=…|颜色=…}} 等）时取 内容/文本 显示参数，避免泄漏「颜色=#007DFA」
+    unnamed = [a for a in args if a and "=" not in a]
+    if unnamed:
+        return unnamed[-1]
+    for arg in args:
+        match = re.fullmatch(r"(?:内容|文本|text|display)=(.+)", arg)
+        if match:
+            return match.group(1).strip()
     return (parts[-1] or "").strip()
 
 
@@ -711,6 +744,119 @@ def _derive_stage_id(code: str) -> str:
     return ""
 
 
+def _split_template_args(text: str) -> list[str]:
+    """模板实参按顶层 | 切分（嵌套 {{color|…}} 内的管道不切断）。"""
+    parts: list[str] = []
+    depth = 0
+    current: list[str] = []
+    for ch in text:
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth = max(0, depth - 1)
+        if ch == "|" and depth == 0:
+            parts.append("".join(current))
+            current = []
+        else:
+            current.append(ch)
+    parts.append("".join(current))
+    return parts
+
+
+def _parse_holo_indicator(
+    line: str, section: str, grouped: bool
+) -> HoloIndicator | None:
+    """单行 {{测试指标/全息|…}} → HoloIndicator；非该模板行返回 None。
+
+    实参形如 |选中=yes|类型=锁定|r_fixed_rune|描述…（命名参数在前，
+    键/描述为位置实参；描述内嵌 {{color}} 等，须顶层切分后再清洗）。
+    """
+    stripped = line.strip()
+    head = "{{测试指标/全息|"
+    if not (stripped.startswith(head) and stripped.endswith("}}")):
+        return None
+    args = [a for a in _split_template_args(stripped[len("{{测试指标/全息"):-2]) if a]
+    indicator = HoloIndicator(section=section, grouped=grouped)
+    positional: list[str] = []
+    for arg in args:
+        match = re.fullmatch(r"(选中|类型|分数)=(.+)", arg)
+        if match:
+            key, value = match.groups()
+            if key == "类型":
+                indicator.kind = value.strip()
+            elif key == "分数":
+                indicator.score = value.strip()
+            continue
+        positional.append(arg)
+    for arg in positional:
+        if re.fullmatch(r"[A-Za-z0-9_]+", arg.strip()):
+            indicator.token = arg.strip()
+        else:
+            indicator.text = _clean_wiki_value(arg).strip()
+    if not indicator.text:
+        return None
+    return indicator
+
+
+def parse_holo_indicators(wikitext: str) -> list[HoloIndicator]:
+    """关卡页 → 全息矩阵指标列表（实测 全息H5-1 页结构）。
+
+    布局：wikitable 的 group_title 行给出分区（{{mdi|…}} 基础：<主题> /
+    附加条件）；分区内 {{测试指标/全息/分组}}（到单独 }} 行为止）包着
+    分组指标，裸行模板为独立指标。锁定=分组标记不另存（指标自身带
+    类型=锁定）。非全息关卡返回 []。
+    """
+    match = re.search(
+        r"={2,4}\s*矩阵指标一览\s*={2,4}(.*?)(?=\n={2,4}|\Z)", wikitext, re.S
+    )
+    section_text = match.group(1) if match else ""
+    if not section_text:
+        return []
+    indicators: list[HoloIndicator] = []
+    current_section = ""
+    in_group = False
+    for line in section_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith('!class="group_title"|'):
+            raw_title = stripped.split("|", 1)[1] if "|" in stripped else ""
+            title = _clean_wiki_value(
+                re.sub(r"^\s*\{\{mdi[^{}]*\}\}", "", raw_title)
+            ).strip(" ：:")
+            if title:
+                current_section = title
+            in_group = False
+            continue
+        if stripped.startswith("{{测试指标/全息/分组"):
+            in_group = True
+            continue
+        if stripped == "}}":
+            in_group = False
+            continue
+        # 分组内首条指标带前导 |（作为分组模板首参分隔符），剥掉再识别
+        content = stripped.lstrip("|").strip()
+        if content.startswith("{{测试指标/全息|"):
+            indicator = _parse_holo_indicator(content, current_section, in_group)
+            if indicator:
+                indicators.append(indicator)
+    return indicators
+
+
+def _extract_env_conditions(description: str) -> tuple[str, list[str]]:
+    """关卡描述中的「环境条件：」段拆出（磨难难度/部分活动关）。
+
+    实测格式：描述行…⏎环境条件：⏎条件行…（标签可独占一行或与首条同行）。
+    返回 (剩余描述, 条件行)；无标签时原样返回 (description, [])。
+    """
+    text = description or ""
+    match = re.search(r"环境条件：", text)
+    if not match:
+        return text, []
+    head = text[: match.start()].rstrip()
+    tail = text[match.end():].strip()
+    conditions = [c.strip() for c in tail.split("\n") if c.strip()]
+    return head, conditions
+
+
 def _build_assault_diffs(
     normal: dict[str, str], assault: dict[str, str]
 ) -> list[str]:
@@ -781,6 +927,7 @@ def parse_stage_wikitext(page: PageWikitext) -> StageInfo | None:
     stage_id = normal.get("关卡id", "") or _derive_stage_id(code)
     assault_info = assault.get("情报") or assault.get("关卡描述") or ""
     assault_diffs = _build_assault_diffs(normal, assault)
+    description, env_conditions = _extract_env_conditions(normal.get("关卡描述", ""))
 
     return StageInfo(
         title=page.title,
@@ -801,7 +948,7 @@ def parse_stage_wikitext(page: PageWikitext) -> StageInfo | None:
         enemy_count=normal.get("敌人数量", ""),
         map_size=normal.get("地图大小", ""),
         min_time=normal.get("最短用时", ""),
-        description=normal.get("关卡描述", ""),
+        description=description,
         first_drops=_split_list(normal.get("首次掉落", "")),
         drops=_split_list(normal.get("常规掉落", "")),
         extra_drops=_split_list(normal.get("额外物资", "")),
@@ -809,6 +956,9 @@ def parse_stage_wikitext(page: PageWikitext) -> StageInfo | None:
         assault_info=assault_info,
         assault_fields=assault,
         assault_diffs=assault_diffs,
+        env_conditions=env_conditions,
+        holo_indicators=parse_holo_indicators(page.wikitext),
+        has_contracts=bool(re.search(r"\{\{合约详情\s*\}\}", page.wikitext)),
         source_url=page_url(page.title),
         map_url=map_url(stage_id),
     )
@@ -878,8 +1028,12 @@ def _merge_level_abilities(
     """等级块机制字段重组：技能N/效果/初始/消耗 → 单条可读机制。
 
     PRTS 逐字段存（技能0：投枪 / 技能0效果：… / 技能0初始：15 / 技能0消耗：20），
-    平铺会碎成 SP 参数各占一行；合并为「技能·投枪：效果（初始15/消耗20）」。
-    等级 2+ 差异块常只有 技能N效果 没有技能名，从上一级字段回查（prev_fields）。
+    平铺会碎成 SP 参数各占一行；合并为「技能·投枪：效果（初始15·消耗20）」。
+    等级 2+ 差异块常只有部分字段：技能名缺失从上一级回查（prev_fields），
+    只展示本块声明的效果/SP 部分（差异语义，浮士德等级2 实证：技能0 只写
+    效果+SP、技能1 只写 SP；霜星等级2 只有 SP——聚合后分别为
+    「技能·名：新效果（初始X·消耗Y）」「技能·名（初始X·消耗Y）」，
+    不再泄漏 技能N初始：X 裸字段行）。
     其余 能力/天赋/特殊 字段原样保留（键名：值），顺序与 wikitext 一致。
     """
     abilities: list[str] = []
@@ -888,6 +1042,16 @@ def _merge_level_abilities(
     def _skill_param(sid: str, suffix: str) -> str:
         return fields.get(f"技能{sid}{suffix}", "")
 
+    def _sp_text(sp: dict[str, str]) -> str:
+        parts = [
+            f"{label}{sp[flag]}"
+            for label, flag in (
+                ("初始", "初始"), ("消耗", "消耗"), ("持续", "持续"),
+            )
+            if flag in sp
+        ]
+        return f"（{'·'.join(parts)}）" if parts else ""
+
     for key, value in fields.items():
         match = re.fullmatch(r"技能(\d+)", key)
         if not match:
@@ -895,12 +1059,12 @@ def _merge_level_abilities(
         sid = match.group(1)
         name = value or (prev_fields or {}).get(key, "")
         effect = _skill_param(sid, "效果")
-        parts = []
-        for label, suffix in (("初始", "初始"), ("消耗", "消耗"), ("持续", "持续")):
-            param = _skill_param(sid, suffix)
-            if param:
-                parts.append(f"{label}{param}")
-        suffix_text = f"（{'·'.join(parts)}）" if parts else ""
+        sp = {
+            suffix: _skill_param(sid, suffix)
+            for suffix in ("初始", "消耗", "持续")
+            if _skill_param(sid, suffix)
+        }
+        suffix_text = _sp_text(sp)
         if name and effect:
             abilities.append(f"技能·{name}：{effect}{suffix_text}")
         elif name or effect:
@@ -916,19 +1080,33 @@ def _merge_level_abilities(
             }
         )
 
+    # 差异块孤儿字段（本块无 技能N 名字段）：按 sid 聚合 效果/初始/消耗/持续，
+    # 技能名从上一级回查；条目顺序按各 sid 首个孤儿字段在块内的出现序
+    orphans: dict[str, dict[str, str]] = {}
     for key, value in fields.items():
-        if key in consumed:
+        if key in consumed or not value:
             continue
-        # 差异块的孤儿效果字段（上一级有技能名）：补名成完整条目
-        orphan = re.fullmatch(r"技能(\d+)效果", key)
-        if orphan and value:
-            sid = orphan.group(1)
-            name = (prev_fields or {}).get(f"技能{sid}", "")
-            abilities.append(
-                f"技能·{name}：{value}" if name else f"{key}：{value}"
-            )
+        match = re.fullmatch(r"技能(\d+)(效果|初始|消耗|持续)", key)
+        if match:
+            sid, suffix = match.groups()
+            orphans.setdefault(sid, {})[suffix] = value
+    for sid, parts in orphans.items():
+        name = (prev_fields or {}).get(f"技能{sid}", "")
+        effect = parts.get("效果", "")
+        sp = {s: parts[s] for s in ("初始", "消耗", "持续") if s in parts}
+        suffix_text = _sp_text(sp)
+        if name and effect:
+            abilities.append(f"技能·{name}：{effect}{suffix_text}")
+        elif effect:
+            abilities.append(f"技能·{effect}{suffix_text}")
+        elif name and suffix_text:
+            abilities.append(f"技能·{name}{suffix_text}")
+        consumed.update(f"技能{sid}{suffix}" for suffix in parts)
+
+    for key, value in fields.items():
+        if key in consumed or not value:
             continue
-        if any(mark in key for mark in ("能力", "技能", "天赋", "特殊")) and value:
+        if any(mark in key for mark in ("能力", "技能", "天赋", "特殊")):
             abilities.append(f"{key}：{value}")
     return abilities
 

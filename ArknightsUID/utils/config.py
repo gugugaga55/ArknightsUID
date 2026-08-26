@@ -14,6 +14,13 @@ from .path import CONFIG_PATH
 
 CONFIG_DEFAULT: Dict[str, GSC] = {
     # === 渲染层（P0 必需）===
+    "RenderEngine": GsStrConfig(
+        "本地渲染引擎",
+        "takumi = pytakumi 无浏览器渲染（推荐，速度快/内存低，需 pip install pytakumi）；"
+        "playwright = Chromium 截图（默认兜底）。"
+        "takumi 未安装或渲染失败时自动回退 playwright，外置渲染（RemoteRenderEnable）不受此项影响。",
+        "takumi",
+    ),
     "RemoteRenderEnable": GsBoolConfig(
         "启用外置渲染",
         "开启后 HTML→图片渲染走外置 RemoteRender 服务，本地无需安装 playwright/chromium。",
