@@ -20,6 +20,7 @@ try:
         ark_attendance,
         fetch_player_info,
         hide_uid,
+        hide_uid_for,
         resolve_accounts,
         resolve_credential,
     )
@@ -64,6 +65,7 @@ except ModuleNotFoundError:
         ark_attendance,
         fetch_player_info,
         hide_uid,
+        hide_uid_for,
         resolve_accounts,
         resolve_credential,
     )
@@ -170,7 +172,15 @@ def _format_accounts(
     uids: list[str],
     accounts: list[ArkCredential],
     default_uid: str = "",
+    shown_uids: dict[str, str] | None = None,
 ) -> str:
+    """账号列表文本。shown_uids: handler 侧按用户偏好预脱敏的 uid 映射。"""
+
+    def _shown(uid: str) -> str:
+        if shown_uids and uid in shown_uids:
+            return shown_uids[uid]
+        return hide_uid(uid)
+
     lines = ["「明日方舟」绑定账号列表"]
     if accounts:
         for index, account in enumerate(accounts, start=1):
@@ -178,13 +188,13 @@ def _format_accounts(
             status = "可用" if account.usable else "凭据失效/缺失"
             mark = " ★默认" if account.uid == default_uid else ""
             lines.append(
-                f"{index}. {nickname} | UID {hide_uid(account.uid)} | {status}{mark}"
+                f"{index}. {nickname} | UID {_shown(account.uid)} | {status}{mark}"
             )
         lines.append("多账号查询：ark理智 序号 / ark理智 UID；ark切换 序号 设默认。")
     elif uids:
         lines.append("已找到 UID，但缺少对应凭据记录：")
         for index, uid in enumerate(uids, start=1):
-            lines.append(f"{index}. UID {hide_uid(uid)}")
+            lines.append(f"{index}. UID {_shown(uid)}")
         lines.append("请重新使用 ark绑定 或 EndUID 登录森空岛。")
     else:
         lines.append("未找到明日方舟账号。")
@@ -217,6 +227,7 @@ def _format_timestamp(value: Any) -> str:
 def _format_player_info(
     credential: ArkCredential,
     response: dict[str, Any],
+    uid_display: str | None = None,
 ) -> str:
     api_error = _format_api_error("查询森空岛玩家信息", response)
     if api_error is not None:
@@ -282,7 +293,8 @@ def _format_player_info(
     )
 
     shown_name = str(nickname or credential.nickname or "未记录昵称")
-    lines = [f"「明日方舟」{shown_name}", f"UID：{hide_uid(credential.uid)}"]
+    shown_uid = uid_display if uid_display is not None else hide_uid(credential.uid)
+    lines = [f"「明日方舟」{shown_name}", f"UID：{shown_uid}"]
     if level is not None:
         lines.append(f"等级：{level}")
     if progress is not None:
@@ -317,15 +329,17 @@ def _format_player_info(
 def _format_attendance(
     credential: ArkCredential,
     response: dict[str, Any],
+    uid_display: str | None = None,
 ) -> str:
     code = _value(response, "code")
     message = _value(response, "message")
     if message is None:
         message = _value(response, "msg")
     message = _safe_external_message(message)
+    shown_uid = uid_display if uid_display is not None else hide_uid(credential.uid)
     if code == 0:
-        return f"「明日方舟」签到请求成功\nUID：{hide_uid(credential.uid)}\n{message or 'OK'}"
-    return f"「明日方舟」签到失败\nUID：{hide_uid(credential.uid)}\ncode={code}，message={message or '无'}"
+        return f"「明日方舟」签到请求成功\nUID：{shown_uid}\n{message or 'OK'}"
+    return f"「明日方舟」签到失败\nUID：{shown_uid}\ncode={code}，message={message or '无'}"
 
 
 @account_sv.on_command(
@@ -343,25 +357,35 @@ async def show_ark_accounts(bot: Bot, ev: Event) -> None:
     if not result.installed:
         return await _send_text(bot, ev, result.reason)
     default_uid = get_default_uid(ev.bot_id, ev.user_id)
+    all_uids = [a.uid for a in result.accounts] + [
+        u for u in result.uids if u not in {a.uid for a in result.accounts}
+    ]
+    shown_uids = {
+        uid: await hide_uid_for(uid, ev.user_id, ev.bot_id) for uid in all_uids
+    }
     context = {
         "version": ArknightsUID_version,
         "accounts": [
             {
                 "index": index,
                 "nickname": account.nickname if account.nickname else "未记录昵称",
-                "uid": hide_uid(account.uid),
+                "uid": shown_uids.get(account.uid, hide_uid(account.uid)),
                 "usable": bool(account.usable),
                 "is_default": account.uid == default_uid,
             }
             for index, account in enumerate(result.accounts, start=1)
         ],
         "orphan_uids": (
-            [] if result.accounts else [hide_uid(uid) for uid in result.uids]
+            []
+            if result.accounts
+            else [shown_uids.get(uid, hide_uid(uid)) for uid in result.uids]
         ),
     }
     await send_card_or_text(
         bot, ev, "ark_accounts.html", context,
-        _format_accounts(result.uids, result.accounts, default_uid),
+        _format_accounts(
+            result.uids, result.accounts, default_uid, shown_uids=shown_uids
+        ),
     )
 
 
@@ -386,7 +410,10 @@ async def switch_ark_account(bot: Bot, ev: Event) -> None:
         current = "未设置（默认用第一个可用账号）"
         for index, account in enumerate(result.accounts, start=1):
             if account.uid == default_uid:
-                current = f"{index}. {account.nickname or '未记录昵称'}（UID {hide_uid(account.uid)}）"
+                current = (
+                    f"{index}. {account.nickname or '未记录昵称'}"
+                    f"（UID {await hide_uid_for(account.uid, ev.user_id, ev.bot_id)}）"
+                )
         return await _send_text(
             bot, ev,
             f"当前默认账号：{current}\n"
@@ -401,8 +428,9 @@ async def switch_ark_account(bot: Bot, ev: Event) -> None:
                 target = account
                 break
         if target is None:
+            shown = await hide_uid_for(uid, ev.user_id, ev.bot_id)
             return await _send_text(
-                bot, ev, f"未找到 UID {hide_uid(uid)} 对应的账号，可用账号见 ark账号。"
+                bot, ev, f"未找到 UID {shown} 对应的账号，可用账号见 ark账号。"
             )
     else:
         match = re.fullmatch(r"第?(\d{1,2})号?", query)
@@ -418,9 +446,10 @@ async def switch_ark_account(bot: Bot, ev: Event) -> None:
         target = result.accounts[index - 1]
 
     if set_default_uid(ev.bot_id, ev.user_id, target.uid):
+        shown = await hide_uid_for(target.uid, ev.user_id, ev.bot_id)
         await _send_text(
             bot, ev,
-            f"已切换默认账号：{target.nickname or '未记录昵称'}（UID {hide_uid(target.uid)}）\n"
+            f"已切换默认账号：{target.nickname or '未记录昵称'}（UID {shown}）\n"
             f"之后 ark理智 / ark基建 等查询默认走该账号；ark切换 序号 可再改。",
         )
     else:
@@ -438,8 +467,11 @@ async def _load_player_data(credential: ArkCredential) -> PlayerData | str:
     return data
 
 
-def _format_campaign(credential: ArkCredential, data: PlayerData) -> str:
-    lines = [f"「明日方舟」剿灭作战", f"UID：{hide_uid(credential.uid)}"]
+def _format_campaign(
+    credential: ArkCredential, data: PlayerData, uid_display: str | None = None
+) -> str:
+    shown_uid = uid_display if uid_display is not None else hide_uid(credential.uid)
+    lines = [f"「明日方舟」剿灭作战", f"UID：{shown_uid}"]
     if data.campaign_total > 0:
         lines.append(f"本周合成玉：{data.campaign_current}/{data.campaign_total}")
     for zone, kills in sorted(
@@ -451,13 +483,16 @@ def _format_campaign(credential: ArkCredential, data: PlayerData) -> str:
     return "\n".join(lines)
 
 
-def _format_char_stat(credential: ArkCredential, data: PlayerData) -> str:
+def _format_char_stat(
+    credential: ArkCredential, data: PlayerData, uid_display: str | None = None
+) -> str:
     if not data.chars:
         return "未识别到干员练度数据。"
     e2 = sum(1 for c in data.chars if c.evolve_phase >= 2)
+    shown_uid = uid_display if uid_display is not None else hide_uid(credential.uid)
     lines = [
         "「明日方舟」练度统计",
-        f"UID：{hide_uid(credential.uid)}",
+        f"UID：{shown_uid}",
         f"持有 {len(data.chars)} | 精二 {e2}",
     ]
     by_profession: dict[str, list[CharEntry]] = {}
@@ -471,13 +506,16 @@ def _format_char_stat(credential: ArkCredential, data: PlayerData) -> str:
     return "\n".join(lines)
 
 
-def _format_box(credential: ArkCredential, data: PlayerData) -> str:
+def _format_box(
+    credential: ArkCredential, data: PlayerData, uid_display: str | None = None
+) -> str:
     if not data.chars:
         return "未识别到干员数据。"
     total = len(data.chars)
+    shown_uid = uid_display if uid_display is not None else hide_uid(credential.uid)
     lines = [
         "「明日方舟」BOX 分析",
-        f"UID：{hide_uid(credential.uid)}",
+        f"UID：{shown_uid}",
         f"持有干员：{total}",
     ]
     for star in (6, 5, 4):
@@ -637,17 +675,18 @@ async def show_ark_status(bot: Bot, ev: Event) -> None:
     if isinstance(loaded, str):
         return await _send_text(bot, ev, loaded)
     data = loaded
+    shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
 
-    context = build_status_context(
-        data, ArknightsUID_version, hide_uid(credential.uid)
-    )
+    context = build_status_context(data, ArknightsUID_version, shown)
     if context is not None:
         return await send_card_or_text(bot, ev, "ark_status.html", context, "")
     # 数据不足（缺昵称/理智）回退旧文本格式：用原始响应走既有格式化
     response = await fetch_player_info(credential)
     if isinstance(response, str):
         return await _send_text(bot, ev, response)
-    await _send_text(bot, ev, _format_player_info(credential, response))
+    await _send_text(
+        bot, ev, _format_player_info(credential, response, uid_display=shown)
+    )
 
 
 @account_sv.on_command(
@@ -670,13 +709,12 @@ async def show_ark_daily(bot: Bot, ev: Event) -> None:
     if isinstance(loaded, str):
         return await _send_text(bot, ev, loaded)
     data = loaded
+    shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
 
-    context = build_daily_context(
-        data, ArknightsUID_version, hide_uid(credential.uid)
-    )
+    context = build_daily_context(data, ArknightsUID_version, shown)
     text = (
         f"「明日方舟」日常进度\n"
-        f"UID：{hide_uid(credential.uid)}\n"
+        f"UID：{shown}\n"
         f"每日：{data.daily_done}/{data.daily_total}\n"
         f"周常：{data.weekly_done}/{data.weekly_total}\n"
         f"剿灭合成玉：{data.campaign_current}/{data.campaign_total}"
@@ -704,15 +742,15 @@ async def show_ark_campaign(bot: Bot, ev: Event) -> None:
     if isinstance(loaded, str):
         return await _send_text(bot, ev, loaded)
     data = loaded
+    shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
 
-    context = build_campaign_context(
-        data, ArknightsUID_version, hide_uid(credential.uid)
-    )
+    context = build_campaign_context(data, ArknightsUID_version, shown)
     if context is not None:
         return await send_card_or_text(
-            bot, ev, "ark_campaign.html", context, _format_campaign(credential, data)
+            bot, ev, "ark_campaign.html", context,
+            _format_campaign(credential, data, uid_display=shown),
         )
-    await _send_text(bot, ev, _format_campaign(credential, data))
+    await _send_text(bot, ev, _format_campaign(credential, data, uid_display=shown))
 
 
 @account_sv.on_command(
@@ -733,10 +771,9 @@ async def show_ark_char_stat(bot: Bot, ev: Event) -> None:
     if isinstance(loaded, str):
         return await _send_text(bot, ev, loaded)
     data = loaded
+    shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
 
-    context = build_char_stat_context(
-        data, ArknightsUID_version, hide_uid(credential.uid)
-    )
+    context = build_char_stat_context(data, ArknightsUID_version, shown)
     if context is not None:
         # 职业行挂 PRTS 职业图标（失败空串降级）
         try:
@@ -747,9 +784,12 @@ async def show_ark_char_stat(bot: Bot, ev: Event) -> None:
         except Exception:
             pass
         return await send_card_or_text(
-            bot, ev, "ark_char_stat.html", context, _format_char_stat(credential, data)
+            bot, ev, "ark_char_stat.html", context,
+            _format_char_stat(credential, data, uid_display=shown),
         )
-    await _send_text(bot, ev, _format_char_stat(credential, data))
+    await _send_text(
+        bot, ev, _format_char_stat(credential, data, uid_display=shown)
+    )
 
 
 @account_sv.on_command(
@@ -773,10 +813,9 @@ async def show_ark_box(bot: Bot, ev: Event) -> None:
     if isinstance(loaded, str):
         return await _send_text(bot, ev, loaded)
     data = loaded
+    shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
 
-    context = build_box_context(
-        data, ArknightsUID_version, hide_uid(credential.uid)
-    )
+    context = build_box_context(data, ArknightsUID_version, shown)
     if context is not None:
         # 六星头像墙：等级前 10 的六星（当前穿戴皮肤头像），失败降级为空不显示
         try:
@@ -798,9 +837,10 @@ async def show_ark_box(bot: Bot, ev: Event) -> None:
         except Exception:
             context["six_rows"] = []
         return await send_card_or_text(
-            bot, ev, "ark_box_analysis.html", context, _format_box(credential, data)
+            bot, ev, "ark_box_analysis.html", context,
+            _format_box(credential, data, uid_display=shown),
         )
-    await _send_text(bot, ev, _format_box(credential, data))
+    await _send_text(bot, ev, _format_box(credential, data, uid_display=shown))
 
 
 def _parse_char_query(text: str) -> tuple[str, str, int]:
@@ -880,13 +920,20 @@ async def send_ark_attendance(bot: Bot, ev: Event) -> None:
     response = await ark_attendance(credential)
     if isinstance(response, str):
         return await _send_text(bot, ev, response)
-    await _send_text(bot, ev, _format_attendance(credential, response))
+    shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
+    await _send_text(
+        bot, ev, _format_attendance(credential, response, uid_display=shown)
+    )
 
 
 def _format_building(
-    credential: ArkCredential, data: PlayerData, building: BuildingData
+    credential: ArkCredential,
+    data: PlayerData,
+    building: BuildingData,
+    uid_display: str | None = None,
 ) -> str:
-    lines = ["「明日方舟」基建总览", f"UID：{hide_uid(credential.uid)}"]
+    shown_uid = uid_display if uid_display is not None else hide_uid(credential.uid)
+    lines = ["「明日方舟」基建总览", f"UID：{shown_uid}"]
     lines.append(
         f"控制中枢 Lv{building.control_level} · 无人机 "
         f"{building.labor_value}/{building.labor_max}"
@@ -958,9 +1005,10 @@ async def show_ark_building(bot: Bot, ev: Event) -> None:
         return await _send_text(
             bot, ev, "未识别到基建数据（森空岛返回缺失 building 字段）。"
         )
+    shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
 
     context = await build_building_context(
-        data, building, ArknightsUID_version, hide_uid(credential.uid)
+        data, building, ArknightsUID_version, shown
     )
     if context is not None:
         # 房间成员挂初始头像（EndUID 基建卡同款展示），失败空串降级
@@ -974,14 +1022,17 @@ async def show_ark_building(bot: Bot, ev: Event) -> None:
             pass
     await send_card_or_text(
         bot, ev, "ark_building.html", context or {},
-        _format_building(credential, data, building),
+        _format_building(credential, data, building, uid_display=shown),
     )
 
 
-def _format_skin_collection(credential: ArkCredential, summary: dict) -> str:
+def _format_skin_collection(
+    credential: ArkCredential, summary: dict, uid_display: str | None = None
+) -> str:
+    shown_uid = uid_display if uid_display is not None else hide_uid(credential.uid)
     lines = [
         "「明日方舟」皮肤收集",
-        f"UID：{hide_uid(credential.uid)}",
+        f"UID：{shown_uid}",
         (
             f"已收集 {summary['owned']}/{summary['total']}"
             f"（{summary['pct']}%），缺 {summary['missing_count']} 件"
@@ -1019,10 +1070,9 @@ async def show_ark_skins(bot: Bot, ev: Event) -> None:
     if isinstance(loaded, str):
         return await _send_text(bot, ev, loaded)
     data = loaded
+    shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
 
-    context = await build_skin_context(
-        data, ArknightsUID_version, hide_uid(credential.uid)
-    )
+    context = await build_skin_context(data, ArknightsUID_version, shown)
     if context is None:
         # 目录不可用（skin_table 拉取失败）时仍可给出持有计数的降级文案
         return await _send_text(
@@ -1032,5 +1082,5 @@ async def show_ark_skins(bot: Bot, ev: Event) -> None:
         )
     await send_card_or_text(
         bot, ev, "ark_skin.html", context,
-        _format_skin_collection(credential, context),
+        _format_skin_collection(credential, context, uid_display=shown),
     )
