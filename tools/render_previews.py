@@ -773,6 +773,24 @@ MOCK_CONTEXTS = {
         ],
         "version": VERSION,
     },
+    "ark_announce_detail.html": {
+        "index": 2,
+        "title": "SideStory「挽歌燃烧殆尽」限时活动开启公告",
+        "date": "2026-08-07",
+        "author": "明日方舟",
+        "ip": "上海",
+        "url": "https://www.skland.com/article?id=6240522",
+        "paragraphs": [
+            "博士，SideStory「挽歌燃烧殆尽」现已开启！",
+            "活动时间：08月07日 16:00 - 08月21日 03:59",
+            "新增干员：维什戴尔（六星·狙击）、逻各斯（五星·术师）。",
+            "完成活动关卡与任务可获取合成玉、物资筹备券与限定家具等奖励。",
+        ],
+        "image": "",
+        "imageCount": 3,
+        "videoCount": 0,
+        "version": VERSION,
+    },
     "ark_drop_rate.html": {
         "item_name": "固源岩组",
         "rows": [

@@ -29,7 +29,10 @@ try:
         query_activities,
         query_gacha_pools,
     )
-    from ArknightsUID.ArknightsUID.utils.skland.web import get_ark_ann_list
+    from ArknightsUID.ArknightsUID.utils.skland.web import (
+        get_ann_detail,
+        get_ark_ann_list,
+    )
     from ArknightsUID.ArknightsUID.utils.yituliu import (
         fetch_drop_matrix,
         fetch_stage_info,
@@ -48,7 +51,10 @@ except ModuleNotFoundError:
         query_activities,
         query_gacha_pools,
     )
-    from ArknightsUID.utils.skland.web import get_ark_ann_list
+    from ArknightsUID.utils.skland.web import (
+        get_ann_detail,
+        get_ark_ann_list,
+    )
     from ArknightsUID.utils.yituliu import (
         fetch_drop_matrix,
         fetch_stage_info,
@@ -128,7 +134,103 @@ def _format_ann_list(anns: list[dict[str, str]]) -> str:
         lines.append(f"{index}. {ann['title']}{date}")
         if ann.get("url"):
             lines.append(f"   {ann['url']}")
+    lines.append("发送「ark公告 编号」查看对应公告正文。")
     return "\n".join(lines)
+
+
+# 文本详情：段落/单段长度上限（聊天窗口可读性）
+_DETAIL_MAX_PARAS = 20
+_DETAIL_PARA_CHARS = 200
+
+
+def _format_ann_detail(detail: dict) -> str:
+    lines = ["「明日方舟」公告详情（森空岛）", detail.get("title", "")]
+    meta = [
+        m for m in (
+            detail.get("userName", ""),
+            detail.get("date", ""),
+            detail.get("userIpLocation", ""),
+        ) if m
+    ]
+    if meta:
+        lines.append("  " + " · ".join(meta))
+    paras = detail.get("paragraphs") or []
+    for para in paras[:_DETAIL_MAX_PARAS]:
+        lines.append(para[:_DETAIL_PARA_CHARS] + ("…" if len(para) > _DETAIL_PARA_CHARS else ""))
+    if len(paras) > _DETAIL_MAX_PARAS:
+        lines.append(f"……（共 {len(paras)} 段）")
+    images = detail.get("images") or []
+    videos = detail.get("videos") or []
+    extra = []
+    if images:
+        extra.append(f"{len(images)} 图")
+    if videos:
+        extra.append(f"{len(videos)} 视频")
+    if extra:
+        lines.append("（含 " + "+".join(extra) + "，详见链接）")
+    if detail.get("id"):
+        lines.append(f"https://www.skland.com/article?id={detail['id']}")
+    return "\n".join(lines)
+
+
+async def _announce_image_b64(url: str) -> str:
+    """公告配图直链 → base64（下载缓存 + webp 压缩；失败空串降级）。"""
+    if not url:
+        return ""
+    try:
+        from ..utils.render import get_image_b64_with_cache
+        from ..utils.resource.RESOURCE_PATH import CACHE_PATH
+
+        return await get_image_b64_with_cache(
+            url, CACHE_PATH / "announce", quality=82
+        )
+    except Exception as e:
+        logger.debug(f"[ArknightsUID] 公告配图下载失败: {e}")
+        return ""
+
+
+async def _show_ann_detail(bot: Bot, ev: Event, index: int) -> None:
+    anns = await get_ark_ann_list()
+    if not anns:
+        return await _send_text(bot, ev, "公告列表获取失败，请稍后重试。")
+    if not 1 <= index <= len(anns):
+        return await _send_text(
+            bot, ev, f"编号超出范围（1~{len(anns)}），请先发送「ark公告」查看列表。"
+        )
+    ann = anns[index - 1]
+    detail = await get_ann_detail(ann["id"])
+    if not detail:
+        return await _send_text(
+            bot, ev, f"公告详情获取失败：{ann['title']}\n{ann.get('url', '')}"
+        )
+    # 首张配图作卡片横幅；高长图（维护公告整图）不嵌入，只计数提示
+    banner_b64 = ""
+    for img in detail.get("images") or []:
+        width = int(img.get("width") or 0)
+        height = int(img.get("height") or 0)
+        if width and height and height / width > 3:
+            continue
+        banner_b64 = await _announce_image_b64(img.get("url", ""))
+        if banner_b64:
+            break
+    context = {
+        "version": ArknightsUID_version,
+        "index": index,
+        "title": detail.get("title", ""),
+        "date": detail.get("date", ""),
+        "author": detail.get("userName", ""),
+        "ip": detail.get("userIpLocation", ""),
+        "url": f"https://www.skland.com/article?id={detail.get('id', '')}",
+        "paragraphs": [
+            p[:400] for p in (detail.get("paragraphs") or [])[:30]
+        ],
+        "image": banner_b64,
+        "imageCount": len(detail.get("images") or []),
+        "videoCount": len(detail.get("videos") or []),
+    }
+    await send_card_or_text(
+        bot, ev, "ark_announce_detail.html", context, _format_ann_detail(detail)
+    )
 
 
 async def _activity_banner_b64(url: str) -> str:
@@ -201,6 +303,9 @@ async def show_ark_activities(bot: Bot, ev: Event) -> None:
     block=True,
 )
 async def show_ark_announcements(bot: Bot, ev: Event) -> None:
+    index_text = ev.text.strip()
+    if index_text.isdigit():
+        return await _show_ann_detail(bot, ev, int(index_text))
     anns = await get_ark_ann_list()
     if not anns:
         return await _send_text(bot, ev, _format_ann_list(anns))

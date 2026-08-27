@@ -1,0 +1,102 @@
+<!--
+  ark_announce_detail.html —— 官方公告详情卡（#17b）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_push._show_ann_detail 组装）：
+    index: int              列表编号
+    title / date / author / ip / url: str
+    paragraphs: [str]       正文段落（format 还原阅读顺序，已截断）
+    image: str              首张横幅配图 b64（高长图跳过，可空串）
+    imageCount / videoCount: int
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}
+<style>
+    .ann-meta {
+        display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-4);
+        margin-top: var(--space-4); padding: var(--space-3) var(--space-4);
+        border: 1px solid var(--hairline); background: var(--panel);
+    }
+    .ann-meta .kv { font-size: 12px; color: var(--tx-2); }
+    .ann-meta .kv b { color: var(--tx-0); font-weight: 600; margin-left: 4px; }
+    .ann-banner {
+        display: block; width: 100%;
+        margin-top: var(--space-4); border: 1px solid var(--hairline);
+    }
+    .ann-paras { margin-top: var(--space-4); display: grid; gap: var(--space-3); }
+    .ann-paras p {
+        margin: 0; font-size: 13px; line-height: 1.8; color: var(--tx-1);
+        word-break: break-word; white-space: pre-wrap;
+    }
+    .ann-media {
+        margin-top: var(--space-4); padding: var(--space-2) var(--space-4);
+        border-left: 2px solid var(--yellow-deep);
+        font-size: 12px; color: var(--tx-2);
+    }
+    .ann-url {
+        margin-top: var(--space-3); font-size: 11px; color: var(--tx-3);
+        word-break: break-all;
+    }
+</style>
+</head>
+<body>
+    <div class="container" data-ghost="NOTICE">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 官方公告 NOTICES</em></span>
+            <span class="mast-meta"><span class="idx">#{{ "%02d" | format(index) }}</span>SKLAND</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">森空岛 · 公告详情</div>
+                <h1 class="title title--s">公告<em>详情</em></h1>
+                <div class="title-rule"><span class="en">NOTICE DETAIL</span></div>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_announce.b64" %}" alt="">
+        </div>
+
+        <div class="sect" style="margin-top: var(--space-5);">
+            <span class="sect-label">{{ title }}</span>
+            <span class="sect-en">OFFICIAL POST</span>
+        </div>
+
+        <div class="ann-meta">
+            {% if author %}<span class="kv">发布者<b>{{ author }}</b></span>{% endif %}
+            {% if date %}<span class="kv">日期<b>{{ date }}</b></span>{% endif %}
+            {% if ip %}<span class="kv">IP<b>{{ ip }}</b></span>{% endif %}
+        </div>
+
+        {% if image %}
+        <img class="ann-banner" src="{{ image }}" alt="">
+        {% endif %}
+
+        {% if paragraphs %}
+        <div class="ann-paras">
+            {% for para in paragraphs %}
+            <p>{{ para }}</p>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="prose" style="margin-top: var(--space-4);">该公告无正文文本（纯图/视频帖）。</div>
+        {% endif %}
+
+        {% if imageCount or videoCount %}
+        <div class="ann-media">
+            本帖含 {{ imageCount }} 张图片{% if videoCount %}、{{ videoCount }} 个视频{% endif %}，完整内容见链接
+        </div>
+        {% endif %}
+
+        <div class="ann-url">{{ url }}</div>
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 公告</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// NOTICE DETAIL // SKLAND WEB</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

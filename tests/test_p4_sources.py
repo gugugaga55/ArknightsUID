@@ -80,12 +80,16 @@ class YituliuRankTest(unittest.TestCase):
 class WebAnnTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         sk_web._token_cache.update({"token": "", "ts": 0.0})
+        sk_web._list_cache.update({"data": [], "ts": 0.0})
+        sk_web._detail_cache.clear()
         self._orig_http = sk_web._http_get_json
         self.calls: list[str] = []
 
     def tearDown(self) -> None:
         sk_web._http_get_json = self._orig_http  # type: ignore[assignment]
         sk_web._token_cache.update({"token": "", "ts": 0.0})
+        sk_web._list_cache.update({"data": [], "ts": 0.0})
+        sk_web._detail_cache.clear()
 
     def _patch(self, responses: list[dict[str, Any] | None]) -> None:
         queue = list(responses)
@@ -143,6 +147,180 @@ class WebAnnTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(anns[1]["title"], "活动开启")
         self.assertEqual(sk_web.parse_ann_list(None), [])
         self.assertEqual(sk_web.parse_ann_list({"code": 1}), [])
+
+    def test_parse_ann_list_url_and_date_fallback(self) -> None:
+        # 明日方舟列表项无 url/date 字段：拼文章页链接 + publishedAtTs（毫秒）转日期
+        response = {
+            "code": 0,
+            "data": {"list": [
+                {"item": {"id": "6251002", "title": "手办补款",
+                          "publishedAtTs": 1787847812000}},
+            ]},
+        }
+        anns = sk_web.parse_ann_list(response)
+        self.assertEqual(anns[0]["url"], "https://www.skland.com/article?id=6251002")
+        self.assertRegex(anns[0]["date"], r"^\d{4}-\d{2}-\d{2}$")
+
+    async def test_refresh_public_token_retries_on_invalid_did(self) -> None:
+        # 首次 10001（设备信息无效）→ 换新设备 ID 重试 → 成功
+        self._patch([
+            {"code": 10001, "message": "设备信息无效"},
+            {"code": 0, "data": {"token": "T" * 32}},
+        ])
+        token = await sk_web.refresh_public_web_token()
+        self.assertEqual(token, "T" * 32)
+        self.assertEqual(len(self.calls), 2)
+
+    async def test_web_public_get_retries_on_invalid_did(self) -> None:
+        # 业务请求 10001 → 同一 token 换设备 ID 重试成功
+        self._patch([
+            {"code": 0, "data": {"token": "T" * 32}},
+            {"code": 10001, "message": "设备信息无效"},
+            {"code": 0, "data": {"list": []}},
+        ])
+        result = await sk_web.web_public_get(
+            sk_web.WEB_HOME_PATH, {"gameId": 1, "cateId": 1}
+        )
+        self.assertEqual(result, {"code": 0, "data": {"list": []}})
+        self.assertEqual(len(self.calls), 3)
+
+    async def test_get_ark_ann_list_paginates_with_page_token(self) -> None:
+        # pageSize 服务端上限 10：两页各 8 条（含 1 条跨页重复）累计去重 15 条
+        def page(ids: list[str], token: str) -> dict[str, Any]:
+            return {
+                "code": 0,
+                "data": {
+                    "list": [
+                        {"item": {"id": i, "title": f"公告{i}",
+                                  "publishedAtTs": 1787800000 + int(i)}}
+                        for i in ids
+                    ],
+                    "pageToken": token,
+                },
+            }
+
+        self._patch([
+            {"code": 0, "data": {"token": "T" * 32}},  # token 刷新
+            page([str(i) for i in range(1, 9)], "PT"),
+            page(["8"] + [str(i) for i in range(9, 16)], ""),
+        ])
+        anns = await sk_web.get_ark_ann_list(limit=15)
+        self.assertEqual(len(anns), 15)
+        self.assertEqual([a["id"] for a in anns][:3], ["1", "2", "3"])
+        # 请求参数：pageSize 恒为服务端上限，第二页带 pageToken（跳过 token 刷新请求）
+        for url in self.calls[1:]:
+            self.assertIn("pageSize=10", url)
+        self.assertIn("pageToken=PT", self.calls[2])
+        # 命中缓存后不再请求
+        again = await sk_web.get_ark_ann_list(limit=15)
+        self.assertEqual(len(again), 15)
+        self.assertEqual(len(self.calls), 3)
+
+    async def test_get_ark_ann_list_falls_back_to_stale_cache(self) -> None:
+        # 拉取失败但缓存内有旧数据 → 返回旧缓存
+        sk_web._list_cache.update({
+            "data": [{"id": "1", "title": "旧公告", "url": "u", "date": "d"}],
+            "ts": time.time(),
+        })
+        self._patch([{"code": 10000}])
+        anns = await sk_web.get_ark_ann_list(limit=10)
+        self.assertEqual(len(anns), 1)
+        self.assertEqual(anns[0]["title"], "旧公告")
+
+    async def test_get_ann_detail_caches_by_id(self) -> None:
+        detail_resp = {"code": 0, "data": {
+            "item": {"id": "9", "title": "维护公告", "format": "",
+                     "textSlice": [{"id": "1", "c": "正文"}]},
+            "user": {"nickname": "明日方舟"},
+        }}
+        self._patch([
+            {"code": 0, "data": {"token": "T" * 32}},
+            detail_resp,
+            detail_resp,  # 缓存过期后二次拉取（直接改缓存时间戳模拟）
+        ])
+        detail = await sk_web.get_ann_detail("9")
+        self.assertEqual(detail["title"], "维护公告")  # type: ignore[index]
+        # 命中缓存：不再发请求
+        self.assertEqual(await sk_web.get_ann_detail("9"), detail)
+        self.assertEqual(len(self.calls), 2)
+        # 过期后重新拉取
+        sk_web._detail_cache["9"] = (0.0, sk_web._detail_cache["9"][1])
+        await sk_web.get_ann_detail("9")
+        self.assertEqual(len(self.calls), 3)
+
+
+class AnnDetailParseTest(unittest.TestCase):
+    """公告详情解析：format 段落排序（对齐 EndUID b0a82ae 修复）。"""
+
+    def _response(self, format_json: str) -> dict[str, Any]:
+        # textSlice 故意乱序存储；真实阅读顺序由 format 指定为 3 → 1 → 2
+        return {"code": 0, "data": {
+            "item": {
+                "id": "9",
+                "title": "维护公告",
+                "publishedAtTs": 1787800000,
+                "textSlice": [
+                    {"id": "2", "c": "第二段"},
+                    {"id": "3", "c": "第一段"},
+                    {"id": "1", "c": "中间段"},
+                    {"id": "4", "c": "   "},  # 纯空白段过滤
+                ],
+                "imageListSlice": [{"url": "https://img/1.webp", "width": 10, "height": 20}],
+                "videoListSlice": [],
+                "format": format_json,
+            },
+            "user": {"nickname": "明日方舟", "avatar": "a", "latestIpLocation": "上海"},
+        }}
+
+    def test_paragraphs_ordered_by_format(self) -> None:
+        fmt = json.dumps({"data": [
+            {"type": "paragraph", "contents": [
+                {"type": "text", "contentId": "3"},
+                {"type": "link", "contentId": "1"},
+            ]},
+            {"type": "paragraph", "contents": [{"type": "text", "contentId": "2"}]},
+            {"type": "image", "contents": []},  # 非段落节点跳过
+        ]})
+        detail = sk_web.parse_ann_detail(self._response(fmt))
+        self.assertIsNotNone(detail)
+        self.assertEqual(detail["paragraphs"], ["第一段中间段", "第二段"])
+        self.assertEqual(detail["userName"], "明日方舟")
+        self.assertEqual(detail["userIpLocation"], "上海")
+        self.assertEqual(detail["images"][0]["url"], "https://img/1.webp")
+        self.assertEqual(detail["date"], "2026-08-27")
+
+    def test_fallback_to_storage_order_without_format(self) -> None:
+        detail = sk_web.parse_ann_detail(self._response(""))
+        self.assertEqual(detail["paragraphs"], ["第二段", "第一段", "中间段"])
+
+    def test_bad_format_falls_back(self) -> None:
+        detail = sk_web.parse_ann_detail(self._response("not-json{"))
+        self.assertEqual(detail["paragraphs"], ["第二段", "第一段", "中间段"])
+
+    def test_nonzero_code_returns_none(self) -> None:
+        self.assertIsNone(sk_web.parse_ann_detail({"code": 10000}))
+        self.assertIsNone(sk_web.parse_ann_detail(None))
+
+
+class AnnDetailFormatTest(unittest.TestCase):
+    """push 模块公告详情文本格式化。"""
+
+    def test_format_ann_detail(self) -> None:
+        from ArknightsUID.arknightsuid_push import _format_ann_detail
+
+        text = _format_ann_detail({
+            "id": "9", "title": "维护公告", "userName": "明日方舟",
+            "date": "2026-08-25", "userIpLocation": "上海",
+            "paragraphs": ["第一段", "二" * 300],
+            "images": [{"url": "u", "width": 1, "height": 2}],
+            "videos": [],
+        })
+        self.assertIn("维护公告", text)
+        self.assertIn("明日方舟 · 2026-08-25 · 上海", text)
+        self.assertIn("第一段", text)
+        self.assertIn("…", text)  # 超长段落截断
+        self.assertIn("1 图", text)
+        self.assertIn("https://www.skland.com/article?id=9", text)
 
 
 class YituliuCacheTest(unittest.IsolatedAsyncioTestCase):
