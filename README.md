@@ -2,6 +2,20 @@
 
 GsCore 明日方舟插件，支持自有森空岛登录（凭据/扫码），也可回退复用 EndUID 登录凭据。
 
+## 安装
+
+首先参考核心安装：https://docs.sayu-bot.com/
+
+```bash
+cd gsuid_core/gsuid_core/plugins
+git clone https://github.com/gugugaga55/ArknightsUID.git
+```
+
+渲染引擎二选一（详见下文[渲染引擎](#渲染引擎)）：
+
+- **`takumi`（默认）**：无浏览器渲染，`uv pip install pytakumi`（或 `uv pip install -e ".[takumi]"`），实测单卡 <0.1s。
+- **`playwright`**：Chromium 截图，takumi 未安装/渲染失败时自动回退，无需配置。
+
 ## 功能
 
 ### 账号登录（仅私聊，群聊拒绝）
@@ -135,6 +149,133 @@ GsCore 明日方舟插件，支持自有森空岛登录（凭据/扫码），也
 - [Kengxxiao/ArknightsGameData](https://github.com/Kengxxiao/ArknightsGameData) — 游戏数据表镜像
 - [一图流](https://ark.yituliu.cn/) — 攒抽规划折算与保底口径参考
 - [pytakumi](https://github.com/KimigaiiWuyi/pytakumi) — takumi 渲染引擎
+
+## 卡片预览
+
+所有查询结果均以罗德岛终端风格卡片输出，以下为各类指令的效果样例。
+
+### 账号与状态
+
+![](docs/design/previews/ark_accounts.jpg)
+*`ark账号` · 账号列表*
+
+![](docs/design/previews/ark_status.jpg)
+*`ark理智` · 状态卡*
+
+![](docs/design/previews/ark_daily.jpg)
+*`ark每日` · 日常 / 周常 / 剿灭*
+
+![](docs/design/previews/ark_campaign.jpg)
+*`ark剿灭` · 合成玉进度*
+
+![](docs/design/previews/ark_building.jpg)
+*`ark基建` · 基建总览*
+
+![](docs/design/previews/ark_box_analysis.jpg)
+*`arkBOX分析` · BOX 稀有度分布*
+
+![](docs/design/previews/ark_char_stat.jpg)
+*`ark练度统计` · 全干员练度统计*
+
+![](docs/design/previews/ark_skin.jpg)
+*`ark皮肤` · 皮肤收集进度*
+
+### 抽卡与养成
+
+![](docs/design/previews/ark_gacha_card.jpg)
+*`ark抽卡分析` · 寻访记录统计*
+
+![](docs/design/previews/ark_gacha_plan.jpg)
+*`ark攒抽` · 攒抽规划*
+
+![](docs/design/previews/ark_gacha_sim.jpg)
+*`ark十连` · 寻访模拟*
+
+![](docs/design/previews/ark_char_card.jpg)
+*`ark练度卡` · 单干员练度*
+
+![](docs/design/previews/ark_cultivate.jpg)
+*`ark养成` · 材料缺口计算*
+
+![](docs/design/previews/ark_cultivate_plan.jpg)
+*`ark养成计划` · 多干员合并规划*
+
+### PRTS / Wiki
+
+![](docs/design/previews/ark_wiki_page.jpg)
+*`arkwiki 词条` · 词条摘要*
+
+![](docs/design/previews/ark_wiki_operator.jpg)
+*`ark干员` · 干员资料*
+
+![](docs/design/previews/ark_op_panel.jpg)
+*`ark面板` · 干员面板模拟*
+
+![](docs/design/previews/ark_module.jpg)
+*`ark模组` · 模组详情*
+
+![](docs/design/previews/ark_wiki_mastery.jpg)
+*`ark专精材料` · 专精材料查询*
+
+![](docs/design/previews/ark_wiki_enemy.jpg)
+*`ark敌人` · 敌人资料*
+
+![](docs/design/previews/ark_wiki_stage.jpg)
+*`ark关卡` · 关卡情报与地图*
+
+![](docs/design/previews/ark_recruit.jpg)
+*`ark公招` · 标签组合查询*
+
+![](docs/design/previews/ark_recruit_plan.jpg)
+*`ark公招推荐` · 组合价值排行*
+
+![](docs/design/previews/ark_crisis.jpg)
+*`ark危机合约` · 赛季时间线*
+
+![](docs/design/previews/ark_calendar.jpg)
+*`ark日历` · 活动 / 卡池日历*
+
+### 肉鸽（集成战略）
+
+![](docs/design/previews/ark_rogue.jpg)
+*`ark肉鸽` · 肉鸽进度*
+
+![](docs/design/previews/ark_rogue_relic.jpg)
+*`ark藏品` · 藏品效果查询*
+
+![](docs/design/previews/ark_rogue_enemy.jpg)
+*`ark肉鸽敌人` · 敌人 buff 面板*
+
+![](docs/design/previews/ark_rogue_stage.jpg)
+*`ark肉鸽关卡` · 关卡出怪面板*
+
+### 活动与材料
+
+![](docs/design/previews/ark_activity.jpg)
+*`ark活动` · 限时活动与卡池*
+
+![](docs/design/previews/ark_announce.jpg)
+*`ark公告` · 官方公告列表*
+
+![](docs/design/previews/ark_announce_detail.jpg)
+*`ark公告 <编号>` · 公告正文*
+
+![](docs/design/previews/ark_stage_rank.jpg)
+*`ark刷图推荐` · 关卡效率榜*
+
+![](docs/design/previews/ark_drop_rate.jpg)
+*`ark材料掉率` · 掉落统计*
+
+![](docs/design/previews/ark_craft.jpg)
+*`ark合成` · 加工站合成树*
+
+![](docs/design/previews/ark_farm_plan.jpg)
+*`ark计划` · 刷图规划*
+
+### 帮助
+
+![](docs/design/previews/ark_help.jpg)
+*`ark帮助` · 插件帮助卡*
 
 ## 丨其他
 
