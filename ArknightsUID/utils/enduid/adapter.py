@@ -8,11 +8,15 @@ from typing import Any
 from gsuid_core.logger import logger
 
 try:
+    from ArknightsUID.ArknightsUID.utils.config import ArkConfig
     from ArknightsUID.ArknightsUID.utils.crypto import decrypt_secret
+    from ArknightsUID.ArknightsUID.utils.database.models import ArkUser
     from ArknightsUID.ArknightsUID.utils.skland import client as local_skland
     from ArknightsUID.ArknightsUID.utils.skland import store as ark_store
 except ModuleNotFoundError:
+    from ArknightsUID.utils.config import ArkConfig
     from ArknightsUID.utils.crypto import decrypt_secret
+    from ArknightsUID.utils.database.models import ArkUser
     from ArknightsUID.utils.skland import client as local_skland
     from ArknightsUID.utils.skland import store as ark_store
 
@@ -49,12 +53,40 @@ class AccountResolveResult:
     accounts: list[ArkCredential]
 
 
-def hide_uid(uid: str) -> str:
-    if len(uid) <= 4:
-        return uid
-    if len(uid) <= 8:
-        return f"{uid[:2]}***{uid[-2:]}"
-    return f"{uid[:3]}***{uid[-3:]}"
+def hide_uid(uid: str, user_pref: str = "") -> str:
+    """UID 脱敏。user_pref: "on" 强制隐藏 / "off" 强制不隐藏 / "" 跟随全局 HideUid。"""
+    pref = user_pref or ""
+    uid_str = str(uid) if uid is not None else ""
+    if pref == "off":
+        return uid_str
+    if pref != "on":
+        try:
+            if not ArkConfig.get_config("HideUid").data:
+                return uid_str
+        except Exception:
+            # 配置层异常不阻断消息输出，退回脱敏（隐私优先）
+            pass
+    if len(uid_str) <= 4:
+        return uid_str
+    if len(uid_str) <= 8:
+        return f"{uid_str[:2]}***{uid_str[-2:]}"
+    return f"{uid_str[:3]}***{uid_str[-3:]}"
+
+
+async def get_hide_uid_pref(uid: str, user_id: str, bot_id: str) -> str:
+    """读 ArkUser.hide_uid_self_value；无记录/异常回空（跟随全局）。"""
+    try:
+        user = await ArkUser.base_select_data(
+            uid=uid, user_id=user_id, bot_id=bot_id
+        )
+        return (getattr(user, "hide_uid_self_value", "") or "") if user else ""
+    except Exception:
+        return ""
+
+
+async def hide_uid_for(uid: str, user_id: str, bot_id: str) -> str:
+    """带用户级覆盖的脱敏（「ark设置隐藏UID」写入的 hide_uid_self_value）。"""
+    return hide_uid(uid, await get_hide_uid_pref(uid, user_id, bot_id))
 
 
 def _as_text(value: Any) -> str:

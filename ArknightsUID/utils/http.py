@@ -75,12 +75,25 @@ def describe_error(exc: Exception) -> str:
 
 
 async def get_client() -> httpx.AsyncClient:
-    """获取共享 AsyncClient（懒初始化；被关闭后自动重建，热重载安全）。"""
+    """获取共享 AsyncClient（懒初始化；被关闭后自动重建，热重载安全）。
+
+    LocalProxyUrl 配置非空时统一走代理（森空岛/鹰角/PRTS/一图流全部请求）；
+    代理在 client 创建时读取，修改配置需重启/热重载后生效。
+    """
     global _client
     if _client is None or _client.is_closed:
         async with _client_lock:
             if _client is None or _client.is_closed:
-                _client = httpx.AsyncClient(
+                proxy_url = ""
+                try:
+                    from .config import ArkConfig
+
+                    proxy_url = str(
+                        ArkConfig.get_config("LocalProxyUrl").data or ""
+                    ).strip()
+                except Exception:
+                    proxy_url = ""
+                client_kwargs: dict = dict(
                     timeout=DEFAULT_TIMEOUT,
                     follow_redirects=True,
                     limits=httpx.Limits(
@@ -88,6 +101,12 @@ async def get_client() -> httpx.AsyncClient:
                         max_keepalive_connections=10,
                     ),
                 )
+                if proxy_url:
+                    logger.info(
+                        f"[ArknightsUID·http] 共享客户端启用代理: {proxy_url}"
+                    )
+                    client_kwargs["proxy"] = proxy_url
+                _client = httpx.AsyncClient(**client_kwargs)
     return _client
 
 

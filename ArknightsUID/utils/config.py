@@ -7,7 +7,12 @@ from __future__ import annotations
 
 from typing import Dict
 
-from gsuid_core.utils.plugins_config.models import GSC, GsBoolConfig, GsStrConfig
+from gsuid_core.utils.plugins_config.models import (
+    GSC,
+    GsBoolConfig,
+    GsIntConfig,
+    GsStrConfig,
+)
 from gsuid_core.utils.plugins_config.gs_config import StringConfig
 
 from .path import CONFIG_PATH
@@ -47,16 +52,34 @@ CONFIG_DEFAULT: Dict[str, GSC] = {
     #   留着会给使用者“该越权查询已获授权”的错误印象。）
     "HideUid": GsBoolConfig(
         "隐藏 UID",
-        "开启后渲染卡片中的 UID 脱敏显示（前 2 位 + **** + 后 2 位）。",
+        "开启后卡片/文本中的 UID 脱敏显示（前 2~3 位 + *** + 后 2~3 位）。"
+        "用户可用「ark设置隐藏UID / ark取消隐藏UID」按人覆盖此全局值。",
         True,
     ),
 
     # === 网络 ===
     "LocalProxyUrl": GsStrConfig(
         "本地代理地址",
-        "访问森空岛/鹰角接口使用的 HTTP 代理，留空则直连。",
+        "共享 HTTP 客户端统一走此代理（森空岛/鹰角/PRTS/一图流等全部请求），"
+        "留空则直连。修改后需重启 core 生效。",
         "",
         secret=True,
+    ),
+
+    # === 推送 ===
+    # （EndUID 的 AnnActiveGroupDays 活跃群过滤不适用：本插件推送基于
+    #   gs_subscribe 显式订阅，订阅即授权，无需按活跃度二次过滤。）
+    "AnnPushEnable": GsBoolConfig(
+        "活动/公告推送开关",
+        "关闭后定时任务不再检查新活动/卡池/公告（已订阅的群保留订阅关系，"
+        "重新开启后继续推送）。修改后需重启 core 生效。",
+        True,
+    ),
+    "AnnCheckMinute": GsIntConfig(
+        "活动/公告检查间隔（分钟）",
+        "每隔多少分钟检查一次新活动/卡池/公告并推送订阅群。修改后需重启 core 生效。",
+        30,
+        max_value=1440,
     ),
 }
 

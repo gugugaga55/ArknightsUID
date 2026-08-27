@@ -3,7 +3,7 @@
 - `ark活动`：进行中的限时活动 + 限定卡池清单（PRTS SMW，与日历同源）
 - `ark公告 [编号]`：明日方舟官方公告列表（森空岛 web 公共接口）
 - `订阅方舟活动` / `取消订阅方舟活动`（pm=3，群聊）：gs_subscribe 订阅
-- 定时轮询（30 分钟）：新活动 / 新卡池 / 新公告 → 推送订阅群
+- 定时轮询（间隔/开关见插件配置 AnnCheckMinute / AnnPushEnable）：新活动 / 新卡池 / 新公告 → 推送订阅群
 
 推送状态（已见条目键）落 MAIN_PATH/push_state.json，条目上限防膨胀。
 """
@@ -22,6 +22,7 @@ from gsuid_core.sv import SV
 
 try:
     from ArknightsUID.ArknightsUID.utils.card import send_card_or_text
+    from ArknightsUID.ArknightsUID.utils.config import ArkConfig
     from ArknightsUID.ArknightsUID.utils.gamedata.charinfo import load_item_index
     from ArknightsUID.ArknightsUID.utils.gamedata.itemicon import item_icon_b64
     from ArknightsUID.ArknightsUID.utils.path import MAIN_PATH
@@ -44,6 +45,7 @@ try:
     from ArknightsUID.ArknightsUID.version import ArknightsUID_version
 except ModuleNotFoundError:
     from ArknightsUID.utils.card import send_card_or_text
+    from ArknightsUID.utils.config import ArkConfig
     from ArknightsUID.utils.gamedata.charinfo import load_item_index
     from ArknightsUID.utils.gamedata.itemicon import item_icon_b64
     from ArknightsUID.utils.path import MAIN_PATH
@@ -531,9 +533,29 @@ def diff_new_entries(
     return [items[0] for key, items in entries.items() if key not in seen_set]
 
 
-@scheduler.scheduled_job("interval", minutes=30, id="ark_push_check")
+def _push_check_minutes() -> int:
+    """AnnCheckMinute 配置 → 轮询间隔（分钟），异常值回落默认 30。"""
+    try:
+        value = int(ArkConfig.get_config("AnnCheckMinute").data or 30)
+    except Exception:
+        value = 30
+    return value if value > 0 else 30
+
+
+def _push_enabled() -> bool:
+    """AnnPushEnable 配置 → 推送总开关（False 时定时任务空转）。"""
+    try:
+        return bool(ArkConfig.get_config("AnnPushEnable").data)
+    except Exception:
+        return True
+
+
+@scheduler.scheduled_job("interval", minutes=_push_check_minutes(), id="ark_push_check")
 async def check_ark_activities() -> None:
     """定时检测新活动/卡池/公告并推送订阅群。"""
+    if not _push_enabled():
+        logger.debug("[ArknightsUID·推送] AnnPushEnable 已关闭，跳过本轮检查")
+        return
     datas = await gs_subscribe.get_subscribe(TASK_NAME)
     if not datas:
         return

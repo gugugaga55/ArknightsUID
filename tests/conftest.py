@@ -26,3 +26,10 @@ assert ArknightsUID.__file__ is not None and str(ROOT) in ArknightsUID.__file__,
 # 固定测试密钥：凭据加密走环境变量，避免测试在真实 gsuid_core 数据目录
 # 自动生成密钥文件（utils/crypto 的回退行为）。
 os.environ.setdefault("ARK_UID_ENC_KEY", Fernet.generate_key().decode())
+
+# hide_uid 现在跟随全局 HideUid 配置（数据目录里可能是 false）。
+# 回复脱敏/安全类测试统一按「开启脱敏」口径断言：内存态固定为 True，
+# 不写回数据文件。
+from ArknightsUID.utils.config import ArkConfig  # noqa: E402
+
+ArkConfig.get_config("HideUid").data = True
