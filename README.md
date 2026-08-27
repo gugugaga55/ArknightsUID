@@ -124,3 +124,19 @@ GsCore 明日方舟插件，支持自有森空岛登录（凭据/扫码），也
 - **`playwright`**：Chromium 截图，作为 takumi 未安装/渲染失败时的自动回退（无需配置）。
 
 两种引擎产物均为 560px 宽 JPEG（与 `.container` 设计宽一致）；模板约定 `body` 无 margin、`.container` 顶格，两引擎输出画面等价。
+
+## 致谢
+
+- [arknights-plugin](https://github.com/gxy12345/arknights-plugin) — 功能对标与鹰角 OAuth 抽卡链参考
+- [EndUID](https://github.com/Loping151/EndUID) — 森空岛登录/签名实现参考与凭据回退复用
+- [gsuid_core](https://docs.sayu-bot.com/) — 插件运行核心
+- [PRTS Wiki](https://prts.wiki/) — 词条/关卡/公招数据与图片资源
+- [tomimi-dev](https://github.com/tanch-p/tomimi-dev) — 肉鸽藏品与敌人数据
+- [Kengxxiao/ArknightsGameData](https://github.com/Kengxxiao/ArknightsGameData) — 游戏数据表镜像
+- [一图流](https://ark.yituliu.cn/) — 攒抽规划折算与保底口径参考
+- [森空岛 Skland](https://www.skland.com/) — 玩家数据来源
+- [pytakumi](https://github.com/KimigaiiWuyi/pytakumi) — takumi 渲染引擎
+
+## 丨其他
+
++ 本项目仅供学习使用，请勿用于商业用途。使用本插件视为同意提供用户凭据，用户凭据仅用于查询游戏数据。使用本插件造成的任何数据滥用行为与作者无关。
