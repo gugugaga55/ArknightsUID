@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 from datetime import datetime, timedelta, timezone
 
 from jinja2.exceptions import TemplateNotFound
@@ -1059,24 +1060,71 @@ def _stage_condition_blocks(stage: StageInfo) -> list[dict]:
     return blocks
 
 
+_MAP_MISS_TTL = 7 * 86400  # 无图关卡负缓存：地图文件名固定，7 天复核一次
+
+
+async def _get_stage_map_b64(code: str, name: str) -> str:
+    """关卡地图 → base64（磁盘缓存）。
+
+    优先 md5 直链（map_file_url，零 API、URL 永久固定），标准 + 辅助两种
+    命名；都 404 时兜底一次 imageinfo 查询（覆盖极少数改名文件）；仍无则
+    空串——卡片降级无图，map_url 仍给 PRTS.Map 链接。
+
+    无图关卡（14 章未上传 / 活动关）写 7 天负缓存标记，避免每次查询
+    都吃 2×404 + 1 次 API。
+    """
+    if not code or not name:
+        return ""
+    import hashlib as _hashlib
+
+    from ..utils.prts.client import map_candidate_titles, map_file_url
+    from ..utils.render import get_image_b64_with_cache
+    from ..utils.resource.RESOURCE_PATH import CACHE_PATH
+
+    cache = CACHE_PATH / "wiki" / "map"
+    miss = cache / (
+        "nomap_" + _hashlib.md5(f"{code}_{name}".encode("utf-8")).hexdigest()[:12]
+    )
+    if miss.exists() and time.time() - miss.stat().st_mtime < _MAP_MISS_TTL:
+        return ""
+
+    def _url_miss(url: str) -> Path:
+        return cache / (url.rsplit("/", 1)[-1] + ".miss")
+
+    for title in map_candidate_titles(code, name):
+        url = map_file_url(title)
+        marker = _url_miss(url)
+        if marker.exists() and time.time() - marker.stat().st_mtime < _MAP_MISS_TTL:
+            continue
+        b64 = await get_image_b64_with_cache(url, cache)
+        if b64:
+            return b64
+        try:
+            cache.mkdir(parents=True, exist_ok=True)
+            marker.touch()
+        except OSError:
+            pass
+    fallback_url = await resolve_map_file_url(code, name)
+    if fallback_url:
+        b64 = await get_image_b64_with_cache(fallback_url, cache)
+        if b64:
+            return b64
+    try:
+        cache.mkdir(parents=True, exist_ok=True)
+        miss.touch()
+    except OSError:
+        pass
+    return ""
+
+
 async def _build_stage_context(stage: StageInfo) -> dict:
     title = stage.code or stage.title
-    # 地图：PRTS 文件命名规律 {代号}_{关卡名}_地图.png（imageinfo 解析直链，
-    # 24h 缓存）；活动关等无此文件时降级为无图，map_url 仍给 PRTS.Map 链接
-    map_b64 = ""
-    if stage.code and stage.name:
-        try:
-            image_url = await resolve_map_file_url(stage.code, stage.name)
-            if image_url:
-                from ..utils.render import get_image_b64_with_cache
-                from ..utils.resource.RESOURCE_PATH import CACHE_PATH
-
-                map_b64 = await get_image_b64_with_cache(
-                    image_url, CACHE_PATH / "wiki" / "map"
-                )
-        except Exception:
-            logger.debug("[ArknightsUID] 关卡地图下载失败，卡片降级无图", exc_info=True)
-            map_b64 = ""
+    # 地图：md5 直链优先（固定资源，命中磁盘缓存后零网络零 API）
+    try:
+        map_b64 = await _get_stage_map_b64(stage.code, stage.name)
+    except Exception:
+        logger.debug("[ArknightsUID] 关卡地图下载失败，卡片降级无图", exc_info=True)
+        map_b64 = ""
 
     async def _drop_rows(names: list[str], limit: int = 8) -> list[dict]:
         """掉落物名 → {name, icon}（PRTS 带框道具图标，失败空串降级）。"""
@@ -1924,7 +1972,19 @@ async def send_module_info(bot: Bot, ev: Event) -> None:
     context = await build_module_context(query)
     if isinstance(context, str):
         return await _send_text(bot, ev, context)
-    await _send_text(bot, ev, format_module_context(context))
+    # 解锁材料图标（失败空串降级，不影响出卡）
+    try:
+        from ..utils.gamedata.itemicon import item_icon_b64
+
+        for module in context.get("modules") or []:
+            for cost in module.get("costs") or []:
+                cost["icon"] = await item_icon_b64(cost.get("name") or "")
+    except Exception:
+        logger.debug("[ArknightsUID] 模组材料图标获取失败", exc_info=True)
+    context["version"] = ArknightsUID_version
+    await _render_or_text(
+        bot, ev, "ark_module.html", context, format_module_context(context)
+    )
 
 
 @wiki_sv.on_command(("危机合约", "合约"), block=True)
@@ -1945,13 +2005,27 @@ async def send_crisis_info(bot: Bot, ev: Event) -> None:
                 bot, ev, "危机合约赛季数据不可用（gamedata 拉取失败），请稍后再试。"
             )
         lines = ["「明日方舟」危机合约赛季（近 8 期）："]
+        context_rows = []
         for season in seasons[:8]:
             mark = "（新制式）" if season["version"] == "危机合约V2" else ""
             lines.append(
                 f"- {season['name']}{mark}｜{season['start']} ~ {season['end']}"
             )
+            context_rows.append(
+                {
+                    "name": season["name"],
+                    "v2": season["version"] == "危机合约V2",
+                    "start": season["start"],
+                    "end": season["end"],
+                }
+            )
         lines.append("词条检索：ark危机合约 <关键词>（如 ark危机合约 攻击速度）")
-        return await _send_text(bot, ev, "\n".join(lines))
+        return await _render_or_text(
+            bot, ev,
+            "ark_crisis.html",
+            {"seasons": context_rows, "version": ArknightsUID_version},
+            "\n".join(lines),
+        )
 
 @wiki_sv.on_command(("语音", "台词"), block=True)
 async def send_voice_lines(bot: Bot, ev: Event) -> None:

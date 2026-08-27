@@ -152,6 +152,23 @@ class IconNegativeCacheTest(unittest.IsolatedAsyncioTestCase):
             marker = cache / f"{icon_mod.prts_item_icon_url('固源岩组').split('/')[-1]}.miss"
             self.assertFalse(marker.exists())
 
+    def test_item_icon_url_strips_drop_mode_suffix(self) -> None:
+        """PRTS 掉落文本的掉落方式后缀不得进入图标文件名（否则 404）。"""
+        import ArknightsUID.utils.gamedata.itemicon as icon_mod
+
+        cases = [
+            ("固源岩", "固源岩:固定掉落"),
+            ("全新装置", "全新装置:小概率"),
+            ("固源岩", "固源岩:概率掉落"),
+            ("固源岩", "固源岩：全角冒号"),
+        ]
+        for clean, suffixed in cases:
+            self.assertEqual(
+                icon_mod.prts_item_icon_url(suffixed),
+                icon_mod.prts_item_icon_url(clean),
+                f"后缀未剥离：{suffixed}",
+            )
+
     async def test_empty_name_returns_empty_without_request(self) -> None:
         from unittest import mock
 

@@ -78,6 +78,16 @@
             {% endfor %}
         </div>
 
+        {% if maps %}
+        <div class="sect" style="margin-top: var(--space-4);">
+            <span class="sect-label bk">关卡地图</span>
+            <span class="sect-en">MAP{% if maps | length > 1 %}S // {{ maps | length }} 变体{% endif %}</span>
+        </div>
+        {% for m in maps %}
+        <img src="{{ m }}" alt="" style="display: block; width: 100%; margin-top: var(--space-3); border: 1px solid var(--hairline);">
+        {% endfor %}
+        {% endif %}
+
         <div class="prose" style="margin-top: var(--space-3); font-size: 11px;">
             {% if floor_note %}{{ floor_note }}。<br>{% endif %}查具体敌人面板与技能：ark肉鸽敌人 &lt;敌名&gt; {{ name }}{% if difficulty is not none %} N{{ difficulty }}{% endif %}{% if elite %} 紧急{% endif %}。
         </div>

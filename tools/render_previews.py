@@ -259,6 +259,84 @@ MOCK_CONTEXTS = {
         "version": VERSION,
     },
     "ark_gacha_plan.html": _gacha_plan_preview(),
+    "ark_module.html": {
+        "name": "银灰",
+        "modules": [
+            {
+                "id": "uniequip_002_svrash",
+                "name": "雪境羽兽护理套组",
+                "type": "X",
+                "type_name": "领袖的远见",
+                "desc": "出击时若在部署位 Operator 列表内，自身与「血狼」的嘲讽等级提高",
+                "unlock_phase": 2,
+                "unlock_level": 60,
+                "unlock_favor": 100,
+                "costs": [
+                    {"name": "模组数据块", "count": 4, "icon": ""},
+                    {"name": "晶体电子单元", "count": 2, "icon": ""},
+                    {"name": "龙门币", "count": 120000, "icon": ""},
+                ],
+                "level_attrs": {
+                    "L1": "攻击 +45，防御 +25",
+                    "L2": "攻击 +55，防御 +30",
+                    "L3": "攻击 +65，防御 +35",
+                },
+            },
+            {
+                "id": "uniequip_003_svrash",
+                "name": "崖岸切割者",
+                "type": "Y",
+                "type_name": "领袖的决断",
+                "desc": "「真银斩」技能期间攻击重量大于等于4的敌人时攻击力提升",
+                "unlock_phase": 2,
+                "unlock_level": 70,
+                "unlock_favor": 0,
+                "costs": [{"name": "模组数据块", "count": 4, "icon": ""}],
+                "level_attrs": {"L1": "生命 +180，攻击 +30"},
+            },
+        ],
+        "version": VERSION,
+    },
+    "ark_craft.html": {
+        "name": "聚酸酯块",
+        "need": 1,
+        "icon": "",
+        "rows": [
+            {"depth": 0, "name": "聚酸酯块", "need": 1, "craftable": True, "output": 1, "gold": 400,
+             "costs": [{"name": "聚酸酯组", "count": 4, "icon": ""}, {"name": "异铁", "count": 2, "icon": ""}]},
+            {"depth": 1, "name": "聚酸酯组", "need": 4, "craftable": True, "output": 1, "gold": 100,
+             "costs": [{"name": "聚酸酯", "count": 4, "icon": ""}]},
+            {"depth": 2, "name": "聚酸酯", "need": 16, "craftable": False, "output": 0, "gold": 0, "costs": []},
+            {"depth": 1, "name": "异铁", "need": 2, "craftable": True, "output": 1, "gold": 100,
+             "costs": [{"name": "异铁碎片", "count": 3, "icon": ""}]},
+            {"depth": 2, "name": "异铁碎片", "need": 6, "craftable": False, "output": 0, "gold": 0, "costs": []},
+        ],
+        "version": VERSION,
+    },
+    "ark_farm_plan.html": {
+        "rows": [
+            {"name": "聚酸酯块", "count": 10, "icon": "",
+             "farm": {"stage_code": "1-8", "ap_expect": 26.5, "sanity": 2650.0, "times": 99.4},
+             "craft": {"sanity": 2310.0, "leaves": "聚酸酯×160 + 异铁×20"}, "note": ""},
+            {"name": "D32钢", "count": 4, "icon": "",
+             "farm": None,
+             "craft": {"sanity": 2394.0, "leaves": "研磨石×12 + RMA70-24×8 + 三水锰矿×8"}, "note": ""},
+            {"name": "提纯源岩", "count": 6, "icon": "",
+             "farm": None, "craft": None, "note": "没有样本充足的掉落关卡"},
+        ],
+        "total_farm": 2650.0,
+        "unknown": [],
+        "version": VERSION,
+    },
+    "ark_crisis.html": {
+        "seasons": [
+            {"name": "弧光作战", "v2": True, "start": "2026-08-16", "end": "2026-08-30"},
+            {"name": "湮灭计划", "v2": True, "start": "2026-05-01", "end": "2026-05-15"},
+            {"name": "尘环行动", "v2": False, "start": "2026-02-05", "end": "2026-02-19"},
+            {"name": "松烟行动", "v2": False, "start": "2025-11-20", "end": "2025-12-04"},
+        ],
+        "version": VERSION,
+    },
     "ark_wiki_page.html": {
         "title": "源石",
         "summary": "泰拉大陆上普遍存在的黑色半透明矿物，蕴含着巨大的能量，也是天灾与矿石病的源头。它被广泛用于能源、工业与法术催化等领域，是这个世界运转的基石之一。",
@@ -962,16 +1040,12 @@ async def _enrich_icons(name: str, context: dict) -> None:
         if context.get("rows"):
             context["rows"][0]["icon"] = await relic_icon_b64("rogue_5_relic_legacy_1")
     elif name == "ark_wiki_stage.html":
-        # 真实关卡地图（PRTS 文件 {代号}_{关卡名}_地图.png，走缓存）
-        from ArknightsUID.utils.prts.client import resolve_map_file_url
-        from ArknightsUID.utils.render import get_image_b64_with_cache
-        from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
+        # 真实关卡地图（md5 直链 + 磁盘缓存，与生产同一取图函数）
+        from ArknightsUID.arknightsuid_wiki import _get_stage_map_b64
 
-        image_url = await resolve_map_file_url(context["title"], context["name"])
-        if image_url:
-            context["map_image"] = await get_image_b64_with_cache(
-                image_url, CACHE_PATH / "wiki" / "map"
-            )
+        context["map_image"] = await _get_stage_map_b64(
+            context["title"], context["name"]
+        )
         # 敌人头像（头像_敌人_{名}.png，失败空串降级）
         from ArknightsUID.utils.gamedata.itemicon import enemy_icon_b64
 

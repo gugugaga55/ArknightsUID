@@ -1,0 +1,76 @@
+<!--
+  ark_craft.html —— 加工站合成树卡（#29）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_push.show_craft_tree 组装）：
+    name: str   目标材料名
+    need: int   需求数量
+    icon: str   目标材料图标（可空）
+    rows: [{
+        depth: int,          缩进层级（0=目标）
+        name: str, need: int,
+        craftable: bool,     true=可合成（含 costs/output/gold），false=叶子刷取
+        output: int, gold: int,
+        costs: [{name: str, count: int, icon: str}],
+    }]
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="CRAFT">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 加工站 WORKSHOP</em></span>
+            <span class="mast-meta"><span class="idx">29</span>GAMEDATA</span>
+        </div>
+
+        <div class="titleblock" style="align-items: center;">
+            <div style="display: flex; align-items: center; gap: 14px;">
+                {% if icon %}<span class="iicon iicon--lg"><img src="{{ icon }}" alt=""></span>{% endif %}
+                <div>
+                    <div class="eyebrow">合成树 · 含递归子材料</div>
+                    <h1 class="title title--s"><em>{{ name }}</em> ×{{ need }}</h1>
+                </div>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_cultivate.b64" %}" alt="">
+        </div>
+        <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">CRAFT TREE</span></div>
+
+        <div class="sect">
+            <span class="sect-label">合成路径</span>
+            <span class="sect-en">TREE // {{ rows | length }} 节点</span>
+        </div>
+        <div class="rows">
+            {% for r in rows %}
+            <div class="row" style="display: block; padding: 8px 2px; {% if r.depth == 0 %}background: var(--yellow-dim); border-left: 3px solid var(--yellow); padding-left: 8px;{% endif %}">
+                <div class="bar-row" style="padding-left: {{ r.depth * 18 }}px;">
+                    {% if r.craftable %}
+                    <span class="row-value" style="font-size: 13px;">{{ r.name }} <span class="u-mute" style="font-size: 10px; font-weight: 400;">×{{ r.need }} · 合成产出 {{ r.output }}/次{% if r.gold %} · 龙门币 {{ r.gold }}{% endif %}</span></span>
+                    {% else %}
+                    <span class="row-value" style="font-size: 13px; color: var(--tx-1);">{{ r.name }} <span class="u-mute" style="font-size: 10px; font-weight: 400;">×{{ r.need }} · 刷取</span></span>
+                    {% endif %}
+                </div>
+                {% if r.craftable and r.costs %}
+                <div class="chip-flow" style="padding-left: {{ r.depth * 18 }}px; margin-top: 5px;">
+                    {% for c in r.costs %}<span class="chip">{% if c.icon %}<img src="{{ c.icon }}" alt="" style="width: 16px; height: 16px; object-fit: contain; vertical-align: -3px; margin-right: 4px;">{% endif %}{{ c.name }}×{{ c.count }}</span>{% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="prose" style="margin-top: var(--space-3); font-size: 11px;">
+            子材料需求按制作次数缩放；合成需加工站 Lv3。对比直刷与合成代价：ark计划 {{ name }}:{{ need }}。
+        </div>
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 合成</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// WORKSHOP // ARKNIGHTS GAMEDATA</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

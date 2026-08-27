@@ -314,6 +314,7 @@ class ActivityInfo:
     start_ts: float = 0.0
     end_ts: float = 0.0
     source_url: str = ""
+    image_url: str = ""   # 官方标题图直链（activity_banner_urls 填充，可空）
 
 
 @dataclass(slots=True)
@@ -358,14 +359,51 @@ def map_file_title(code: str, name: str) -> str:
     return f"{code}_{name}_地图.png"
 
 
+def map_file_url(title: str) -> str:
+    """地图文件名 → media 直链（MediaWiki md5 散列路径，与道具图标同规则）。
+
+    文件路径由文件名 md5 决定且永久固定，无需 imageinfo API——已对照
+    1-7/H5-1/JT8-3/5-10 实际下载地址逐一验证。文件不存在时该 URL 404，
+    由调用方按无图降级。
+    """
+    title = title.strip()
+    if not title:
+        return ""
+    digest = hashlib.md5(title.encode("utf-8")).hexdigest()
+    return (
+        f"https://media.prts.wiki/{digest[0]}/{digest[:2]}/"
+        f"{quote(title)}"
+    )
+
+
+def map_candidate_titles(code: str, name: str) -> list[str]:
+    """关卡地图候选文件名：标准命名 + 辅助命名（JT 插曲关只有后者）。"""
+    if not code or not name:
+        return []
+    return [f"{code}_{name}_地图.png", f"{code}_{name}_辅助地图.png"]
+
+
 async def resolve_map_file_url(code: str, name: str) -> str:
     """关卡地图文件直链（MediaWiki imageinfo，随 _api 缓存 24h）。
 
-    文件不存在/接口失败返回空串——调用方降级为 PRTS.Map 链接。
+    依次尝试 `{代号}_{名}_地图.png` 与 `{代号}_{名}_辅助地图.png`
+    （JT 插曲关等只有辅助地图命名，如 JT8-3_昂首，足践烈焰_辅助地图.png）；
+    均不存在/接口失败返回空串——调用方降级为 PRTS.Map 链接。
+
+    注意：常规路径优先走 map_file_url 的 md5 直链（零 API），
+    本函数仅作改名/特殊路径文件的兜底查询。
     """
-    title = map_file_title(code, name)
-    if not title:
+    if not code or not name:
         return ""
+    for title in map_candidate_titles(code, name):
+        url = await _imageinfo_url(title)
+        if url:
+            return url
+    return ""
+
+
+async def _imageinfo_url(title: str) -> str:
+    """单文件 imageinfo 直链；文件不存在返回空串。"""
     data = await _api(
         {
             "action": "query",
@@ -387,6 +425,44 @@ async def resolve_map_file_url(code: str, name: str) -> str:
         if isinstance(info, list) and info and isinstance(info[0], dict):
             return str(info[0].get("url") or "")
     return ""
+
+
+async def rogue_map_file_urls(code: str, name: str) -> list[str]:
+    """肉鸽关卡地图直链·wiki 上传文件（多变体，最多 3 张，仅少数关卡有）。
+
+    两种命名并存：标准 `{代号}_{名}_地图.png`（ISW-NO_乌萨斯方块_地图.png）
+    与多变体 `{代号}_{名}_地图_{1..3}.png`（ISW-DF_不容拒绝_地图_1.png，
+    页面 tabber 切换的紧急/难度变体）。均查不到返回空列表——调用方回退
+    rogue_map_preview_urls（torappu 预览）。
+    """
+    if not code or not name:
+        return []
+    urls: list[str] = []
+    for title in (
+        f"{code}_{name}_地图.png",
+        *(f"{code}_{name}_地图_{i}.png" for i in (1, 2, 3)),
+    ):
+        url = await _imageinfo_url(title)
+        if url:
+            urls.append(url)
+    return urls[:3]
+
+
+def rogue_map_preview_urls(level_id: str) -> list[str]:
+    """tomimi level_id → torappu 地图预览直链（PRTS 肉鸽关卡页地图的实际来源）。
+
+    规律（实测）：level_rogue4_2-2 → ro4_n_2_2.png（层关加 n 前缀=普通；
+    紧急 e 版地图布局相同不重复嵌）；level_rogue4_b-8 → ro4_b_8.png（分歧关）；
+    level_rogue5_b-9-c → ro5_b_9_c.png（带变体尾）。非肉鸽 id 返回空。
+    """
+    match = re.match(r"^level_rogue(\d+)_(.+)$", (level_id or "").strip())
+    if not match:
+        return []
+    k, rest = match.groups()
+    part = rest.replace("-", "_")
+    if part[0].isdigit():
+        part = f"n_{part}"
+    return [f"https://torappu.prts.wiki/assets/map_preview/ro{k}_{part}.png"]
 
 
 def _cache_file(params: dict[str, Any]) -> Path:
@@ -534,7 +610,7 @@ async def parse_page(
                 "page": current,
                 "prop": "wikitext",
             },
-            cache_seconds=86400,
+            cache_seconds=_STATIC_PAGE_CACHE_SECONDS,
         )
         if not data or "error" in data:
             return None
@@ -1555,7 +1631,7 @@ async def query_base_skill(name: str) -> tuple[str, str] | None:
             "where": f"name='{safe_name}'",
             "limit": "1",
         },
-        cache_seconds=86400,
+        cache_seconds=_STATIC_PAGE_CACHE_SECONDS,
     )
     if not data:
         return None
@@ -1621,6 +1697,11 @@ _LST_SECTION_RE = re.compile(
 )
 # 日历类查询缓存 1 小时（活动数据按天变化，无需 1 天缓存）
 _CALENDAR_CACHE_SECONDS = 3600
+
+# 静态游戏数据页缓存 30 天：干员/敌人/关卡页面文本、基建技能表等内容
+# 不随时间变化（干员数值无后续调整），增量只有新版本内容——新页面靠
+# search（仍 24h）发现，新模组走 gamedata 表（独立 7 天 TTL），互不耦合。
+_STATIC_PAGE_CACHE_SECONDS = 30 * 86400
 
 
 def _parse_smw_raw_date(raw: str) -> tuple[str, float]:
@@ -1750,6 +1831,76 @@ async def query_gacha_pools(
             )
         )
     return pools
+
+
+# 活动页信息框 {{活动信息}} 的标题图参数（`标题图文件名=主题图 xxx.png`）
+_BANNER_FILE_RE = re.compile(r"^\s*\|\s*标题图文件名\s*=\s*(.+?)\s*$", re.MULTILINE)
+
+
+async def activity_banner_urls(titles: list[str]) -> dict[str, str]:
+    """活动页 → 官方标题图直链（批量，两次 API：revisions 提文件名 + imageinfo 换直链）。
+
+    来源是 PRTS 活动页信息框的 `标题图文件名` 参数（官方主题图/宣传图，
+    与 PRTS 页面顶部横幅同源）。无信息框或文件缺失的页面不出现在
+    返回值里——调用方按无图降级，不影响列表本身。
+    """
+    titles = [t.strip() for t in titles if t and t.strip()]
+    if not titles:
+        return {}
+    data = await _api(
+        {
+            "action": "query",
+            "titles": "|".join(titles),
+            "prop": "revisions",
+            "rvprop": "content",
+            "rvslots": "main",
+        }
+    )
+    pages = ((data or {}).get("query") or {}).get("pages") or {}
+    file_by_title: dict[str, str] = {}
+    for page in pages.values():
+        if not isinstance(page, dict):
+            continue
+        title = str(page.get("title") or "")
+        revisions = page.get("revisions")
+        slots = (
+            revisions[0].get("slots") or {}
+            if isinstance(revisions, list) and revisions and isinstance(revisions[0], dict)
+            else {}
+        )
+        content = str((slots.get("main") or {}).get("*") or "")
+        match = _BANNER_FILE_RE.search(content)
+        if title and match and match.group(1).strip():
+            file_by_title[title] = match.group(1).strip()
+    if not file_by_title:
+        return {}
+    info = await _api(
+        {
+            "action": "query",
+            "titles": "|".join(f"File:{name}" for name in file_by_title.values()),
+            "prop": "imageinfo",
+            "iiprop": "url",
+        }
+    )
+    url_by_file: dict[str, str] = {}
+    ipages = ((info or {}).get("query") or {}).get("pages") or {}
+    for page in ipages.values():
+        if not isinstance(page, dict):
+            continue
+        ii = page.get("imageinfo")
+        if not (isinstance(ii, list) and ii and isinstance(ii[0], dict)):
+            continue
+        file_title = str(page.get("title") or "")
+        # PRTS 会把 File: 规范化为中文命名空间 文件:，两种前缀都剥
+        for prefix in ("File:", "文件:"):
+            if file_title.startswith(prefix):
+                url_by_file[file_title[len(prefix):]] = str(ii[0].get("url") or "")
+                break
+    return {
+        title: url_by_file[name]
+        for title, name in file_by_title.items()
+        if url_by_file.get(name)
+    }
 
 
 def parse_lst_sections(wikitext: str) -> dict[str, str]:

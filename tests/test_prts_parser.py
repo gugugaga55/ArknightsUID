@@ -667,7 +667,152 @@ class StageMapFileTest(unittest.IsolatedAsyncioTestCase):
         finally:
             prts_client._api = orig
         self.assertEqual(url, "")  # 无文件名直接空
-        self.assertEqual(url_found, "")  # 查无文件降级空串
+        self.assertEqual(url_found, "")  # 两种命名均查无文件，降级空串
+
+    def test_resolve_map_file_url_assist_fallback(self) -> None:
+        """JT 插曲关只有 辅助地图 命名：主命名 miss 后回退辅助命名。"""
+
+        async def fake_api(params: dict[str, Any], *, cache_seconds: int = 86400) -> dict[str, Any]:
+            title = params["titles"]
+            if "辅助地图" in title:
+                return {
+                    "query": {
+                        "pages": {
+                            "9": {
+                                "title": f"File:{title[5:]}",
+                                "imageinfo": [{"url": "https://media.prts.wiki/x/assist.png"}],
+                            }
+                        }
+                    }
+                }
+            return {"query": {"pages": {"-1": {"title": title, "missing": ""}}}}
+
+        orig = prts_client._api
+        prts_client._api = fake_api  # type: ignore[assignment]
+        try:
+            url = asyncio.run(prts_client.resolve_map_file_url("JT8-3", "昂首，足践烈焰"))
+        finally:
+            prts_client._api = orig
+        self.assertEqual(url, "https://media.prts.wiki/x/assist.png")
+
+    def test_rogue_map_file_urls_variants(self) -> None:
+        """肉鸽地图：标准命名 + _1..3 变体都尝试，命中的按序返回。"""
+
+        async def fake_api(params: dict[str, Any], *, cache_seconds: int = 86400) -> dict[str, Any]:
+            title = params["titles"]
+            if "地图_" in title:  # 变体命名存在
+                idx = title[5:].split("_")[-1].split(".")[0]
+                return {
+                    "query": {
+                        "pages": {
+                            f"1{idx}": {
+                                "title": f"文件:{title[5:]}",
+                                "imageinfo": [{"url": f"https://media.prts.wiki/m/{idx}.png"}],
+                            }
+                        }
+                    }
+                }
+            return {"query": {"pages": {"-1": {"title": title, "missing": ""}}}}
+
+        orig = prts_client._api
+        prts_client._api = fake_api  # type: ignore[assignment]
+        try:
+            urls = asyncio.run(prts_client.rogue_map_file_urls("ISW-DF", "不容拒绝"))
+        finally:
+            prts_client._api = orig
+        self.assertEqual(
+            urls,
+            [
+                "https://media.prts.wiki/m/1.png",
+                "https://media.prts.wiki/m/2.png",
+                "https://media.prts.wiki/m/3.png",
+            ],
+        )
+
+    def test_rogue_map_preview_urls_derivation(self) -> None:
+        """tomimi level_id → torappu 预览直链推导（层关加 n 前缀，分歧/变体直映射）。"""
+        cases = {
+            "level_rogue4_2-2": "https://torappu.prts.wiki/assets/map_preview/ro4_n_2_2.png",
+            "level_rogue4_b-8": "https://torappu.prts.wiki/assets/map_preview/ro4_b_8.png",
+            "level_rogue5_b-9-c": "https://torappu.prts.wiki/assets/map_preview/ro5_b_9_c.png",
+        }
+        for level_id, url in cases.items():
+            self.assertEqual(prts_client.rogue_map_preview_urls(level_id), [url])
+        self.assertEqual(prts_client.rogue_map_preview_urls("main_01-07"), [])
+        self.assertEqual(prts_client.rogue_map_preview_urls(""), [])
+
+    def test_map_file_url_md5_pattern(self) -> None:
+        """地图直链 md5 散列路径（对照真实下载地址锁定，免 API 查询）。"""
+        cases = {
+            "1-7_暴君_地图.png": "https://media.prts.wiki/7/74/1-7_%E6%9A%B4%E5%90%9B_%E5%9C%B0%E5%9B%BE.png",
+            "JT8-3_昂首，足践烈焰_辅助地图.png": (
+                "https://media.prts.wiki/5/50/JT8-3_%E6%98%82%E9%A6%96%EF%BC%8C"
+                "%E8%B6%B3%E8%B7%B5%E7%83%88%E7%84%B0_%E8%BE%85%E5%8A%A9%E5%9C%B0%E5%9B%BE.png"
+            ),
+        }
+        for title, url in cases.items():
+            self.assertEqual(prts_client.map_file_url(title), url)
+        self.assertEqual(prts_client.map_file_url(""), "")
+        self.assertEqual(
+            prts_client.map_candidate_titles("JT8-3", "昂首，足践烈焰"),
+            ["JT8-3_昂首，足践烈焰_地图.png", "JT8-3_昂首，足践烈焰_辅助地图.png"],
+        )
+        self.assertEqual(prts_client.map_candidate_titles("", "暴君"), [])
+
+    def test_activity_banner_urls_batch(self) -> None:
+        """活动标题图：revisions 提信息框文件名 + imageinfo 换直链；无信息框降级。"""
+
+        async def fake_api(params: dict[str, Any], *, cache_seconds: int = 86400) -> dict[str, Any]:
+            if params.get("prop") == "revisions":
+                return {
+                    "query": {
+                        "pages": {
+                            "1": {
+                                "title": "沉沦者的黑流树海",
+                                "revisions": [
+                                    {
+                                        "slots": {
+                                            "main": {
+                                                "*": "{{活动信息\n|类型=集成战略\n|标题图文件名=主题图 黑流.png\n}}"
+                                            }
+                                        }
+                                    }
+                                ],
+                            },
+                            "2": {
+                                "title": "无图活动",
+                                "revisions": [
+                                    {"slots": {"main": {"*": "{{活动信息\n|类型=_side_story_\n}}"}}}
+                                ],
+                            },
+                        }
+                    }
+                }
+            if params.get("prop") == "imageinfo":
+                # PRTS 会把 File: 规范化为中文命名空间 文件:
+                return {
+                    "query": {
+                        "pages": {
+                            "3": {
+                                "title": "文件:主题图 黑流.png",
+                                "imageinfo": [{"url": "https://media.prts.wiki/b/banner.png"}],
+                            }
+                        }
+                    }
+                }
+            raise AssertionError(f"未预期的请求: {params}")
+
+        orig = prts_client._api
+        prts_client._api = fake_api  # type: ignore[assignment]
+        try:
+            urls = asyncio.run(
+                prts_client.activity_banner_urls(["沉沦者的黑流树海", "无图活动"])
+            )
+        finally:
+            prts_client._api = orig
+        self.assertEqual(
+            urls, {"沉沦者的黑流树海": "https://media.prts.wiki/b/banner.png"}
+        )
 
 
 class InlineValueTemplateTest(unittest.TestCase):

@@ -131,6 +131,22 @@ def _format_ann_list(anns: list[dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
+async def _activity_banner_b64(url: str) -> str:
+    """活动标题图直链 → base64（下载缓存 + webp 压缩；失败空串降级）。"""
+    if not url:
+        return ""
+    try:
+        from ..utils.render import get_image_b64_with_cache
+        from ..utils.resource.RESOURCE_PATH import CACHE_PATH
+
+        return await get_image_b64_with_cache(
+            url, CACHE_PATH / "activity", quality=82
+        )
+    except Exception as e:
+        logger.debug(f"[ArknightsUID] 活动标题图下载失败: {e}")
+        return ""
+
+
 @push_sv.on_command(
     (
         "活动",
@@ -142,12 +158,29 @@ def _format_ann_list(anns: list[dict[str, str]]) -> str:
 async def show_ark_activities(bot: Bot, ev: Event) -> None:
     activities = await query_activities()
     pools = await query_gacha_pools()
+    # 官方标题图（PRTS 活动页信息框，批量两次 API；失败按无图降级）
+    banner_urls: dict[str, str] = {}
+    try:
+        from ..utils.prts.client import activity_banner_urls
+
+        banner_urls = await activity_banner_urls([a.title for a in activities])
+    except Exception as e:
+        logger.debug(f"[ArknightsUID] 活动标题图拉取失败: {e}")
+    activity_rows = []
+    for act in activities:
+        activity_rows.append(
+            {
+                "title": act.title,
+                "start": act.start,
+                "end": act.end,
+                "image": await _activity_banner_b64(
+                    banner_urls.get(act.title, "")
+                ),
+            }
+        )
     context = {
         "version": ArknightsUID_version,
-        "activities": [
-            {"title": act.title, "start": act.start, "end": act.end}
-            for act in activities
-        ],
+        "activities": activity_rows,
         "pools": [
             {"title": pool.title, "start": pool.start, "end": pool.end}
             for pool in pools
@@ -512,7 +545,44 @@ async def show_craft_tree(bot: Bot, ev: Event) -> None:
     lines = [f"「明日方舟」{item_index[item_id]['name']} · 合成树"]
     lines.extend(format_craft_tree(tree, item_index))
     lines.append("数据：ArknightsGameData（workshopFormulas）；合成需加工站 Lv3")
-    await _send_text(bot, ev, "\n".join(lines))
+
+    # 卡片行：树展平为带缩进层级的节点列表（图标仅首两层，避免逐叶下载）
+    from ..utils.gamedata.itemicon import item_icon_b64
+
+    card_rows: list[dict] = []
+
+    async def _walk(node: dict, depth: int) -> None:
+        costs = node.get("costs") or []
+        if depth <= 1 and costs:
+            for cost in costs:
+                cost["icon"] = await item_icon_b64(cost.get("name") or "")
+        card_rows.append(
+            {
+                "depth": depth,
+                "name": node.get("name") or node.get("item_id"),
+                "need": node.get("need") or 0,
+                "craftable": bool(node.get("craftable")),
+                "output": node.get("output") or 0,
+                "gold": node.get("gold") or 0,
+                "costs": costs,
+            }
+        )
+        for child in node.get("children") or []:
+            await _walk(child, depth + 1)
+
+    await _walk(tree, 0)
+    await send_card_or_text(
+        bot, ev,
+        "ark_craft.html",
+        {
+            "name": item_index[item_id]["name"],
+            "need": 1,
+            "icon": await item_icon_b64(item_index[item_id]["name"]),
+            "rows": card_rows,
+            "version": ArknightsUID_version,
+        },
+        "\n".join(lines),
+    )
 
 
 @push_sv.on_command(("计划", "刷图计划"), block=True)
@@ -549,6 +619,7 @@ async def show_farm_plan(bot: Bot, ev: Event) -> None:
     lines: list[str] = ["「明日方舟」刷图规划"]
     total_farm = 0.0
     unknown: list[str] = []
+    card_rows: list[dict] = []
     for name, count in targets[:6]:
         item_id = _match_item_id(name, item_index)
         if not item_id:
@@ -559,11 +630,19 @@ async def show_farm_plan(bot: Bot, ev: Event) -> None:
         )
         head = f"◆ {result['name']} ×{count}"
         options: list[str] = []
+        farm_row = None
+        craft_row = None
         if result["farm"]:
             options.append(
                 f"直刷 {result['farm']['stage_code']}（{result['farm']['ap_expect']:.0f} 理智/件"
                 f"≈{result['farm_sanity']:.0f} 理智，需 {count / result['farm']['rate']:.0f} 把）"
             )
+            farm_row = {
+                "stage_code": result["farm"]["stage_code"],
+                "ap_expect": result["farm"]["ap_expect"],
+                "sanity": result["farm_sanity"],
+                "times": count / result["farm"]["rate"],
+            }
             if result["farm_sanity"] is not None:
                 total_farm += result["farm_sanity"]
         if result["craft"] is not None:
@@ -576,14 +655,48 @@ async def show_farm_plan(bot: Bot, ev: Event) -> None:
                 options.append(
                     f"合成（叶子材料 {leaves} ≈{result['craft_sanity']:.0f} 理智）"
                 )
+                craft_row = {
+                    "sanity": result["craft_sanity"],
+                    "leaves": leaves,
+                }
             else:
                 options.append("合成可行，但部分子材料无掉落数据")
+                craft_row = {"sanity": None, "leaves": "部分子材料无掉落数据"}
+        note = "" if options else "没有样本充足的掉落关卡"
         if not options:
             lines.append(f"{head}：没有样本充足的掉落关卡")
         else:
             lines.append(f"{head}：" + "｜".join(options))
+        card_rows.append(
+            {
+                "name": result["name"],
+                "count": count,
+                "icon": "",
+                "farm": farm_row,
+                "craft": craft_row,
+                "note": note,
+            }
+        )
     if unknown:
         lines.append(f"未识别：{'、'.join(unknown)}（支持精确材料名）")
     lines.append(f"直刷合计 ≈{total_farm:.0f} 理智")
     lines.append("数据：ArknightsGameData + ark.yituliu.cn（样本>300 关卡）")
-    await _send_text(bot, ev, "\n".join(lines))
+    # 材料图标（失败空串降级）
+    try:
+        from ..utils.gamedata.itemicon import item_icon_b64
+
+        for row in card_rows:
+            row["icon"] = await item_icon_b64(row["name"])
+    except Exception as e:
+        logger.debug(f"[ArknightsUID] 计划卡材料图标获取失败: {e}")
+    await send_card_or_text(
+        bot, ev,
+        "ark_farm_plan.html",
+        {
+            "rows": card_rows,
+            "total_farm": total_farm,
+            "unknown": unknown,
+            "version": ArknightsUID_version,
+        },
+        "\n".join(lines),
+    )

@@ -55,8 +55,13 @@ _COUNT_SPLIT = re.compile(r"^(.*?)\s*[×xX\*]\s*(\d+)\s*$")
 
 
 def prts_item_icon_url(item_name: str) -> str:
-    """材料名 → PRTS 带框道具图 URL（MediaWiki md5 散列路径）。"""
-    name = item_name.strip()
+    """材料名 → PRTS 带框道具图 URL（MediaWiki md5 散列路径）。
+
+    PRTS 掉落文本自带掉落方式后缀（"固源岩:概率掉落"/"全新装置:小概率"），
+    图标文件名只有净材料名——先剥后缀，否则拼出 404 的 URL（道具_带框_固源岩:概率掉落.png 不存在）。
+    材料名本身不含冒号，剥离安全；显示文本不受影响（调用方各自保留原文）。
+    """
+    name = item_name.split(":")[0].split("：")[0].strip()
     if not name:
         return ""
     filename = f"道具_带框_{name}.png"

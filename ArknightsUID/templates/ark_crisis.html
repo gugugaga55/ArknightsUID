@@ -1,0 +1,54 @@
+<!--
+  ark_crisis.html —— 危机合约赛季时间线卡（#31）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_wiki.send_crisis_info 组装）：
+    seasons: [{name: str, v2: bool, start: str, end: str}]
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="CRISIS">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 危机合约 CRISIS</em></span>
+            <span class="mast-meta"><span class="idx">31</span>GAMEDATA</span>
+        </div>
+
+        <div class="titleblock" style="align-items: center;">
+            <div>
+                <div class="eyebrow">赛季时间线 · 近 {{ seasons | length }} 期</div>
+                <h1 class="title title--s">危机<em>合约</em></h1>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_campaign.b64" %}" alt="">
+        </div>
+        <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">CRIMSON CONTRACTS</span></div>
+
+        <div class="sect">
+            <span class="sect-label">赛季一览</span>
+            <span class="sect-en">SEASONS</span>
+        </div>
+        <div class="rows">
+            {% for s in seasons %}
+            <div class="row">
+                <span class="row-value" style="font-size: 13px;">{{ s.name }}{% if s.v2 %}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 6px;">新制式</span>{% endif %}</span>
+                <span class="bar-num">{{ s.start }} ~ {{ s.end }}</span>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="prose" style="margin-top: var(--space-3); font-size: 11px;">
+            词条检索：ark危机合约 &lt;关键词&gt;（如 ark危机合约 攻击速度）。
+        </div>
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 危机合约</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// CRISIS CONTRACT // GAMEDATA</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

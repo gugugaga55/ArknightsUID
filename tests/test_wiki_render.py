@@ -781,8 +781,22 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         async def no_map(code: str, name: str) -> str:
             return ""
 
-        with mock.patch(
-            "ArknightsUID.arknightsuid_wiki.resolve_map_file_url", new=no_map
+        async def no_fetch(url, cache_path, *args, **kwargs):
+            return ""
+
+        import tempfile
+        from pathlib import Path as _P
+
+        import ArknightsUID.utils.render as render_mod
+        import ArknightsUID.utils.resource.RESOURCE_PATH as rp_mod
+
+        with (
+            mock.patch(
+                "ArknightsUID.arknightsuid_wiki.resolve_map_file_url", new=no_map
+            ),
+            mock.patch.object(render_mod, "get_image_b64_with_cache", no_fetch),
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.object(rp_mod, "CACHE_PATH", _P(tmp)),
         ):
             context = await _build_stage_context(stage)
 
@@ -796,21 +810,24 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(context["version"])
 
     async def test_build_stage_context_downloads_map_image(self) -> None:
-        """地图：{代号}_{关卡名}_地图.png 直链解析成功 → 下载转 base64 上卡。"""
+        """地图：md5 直连命中 → 零 API 直接下载上卡。"""
         stage = StageInfo(
             title="1-7",
             code="1-7",
             name="暴君",
             map_url="https://map.prts.wiki/1-7",
         )
+        import hashlib as _hl
 
-        async def fake_resolve(code: str, name: str) -> str:
-            self.assertEqual((code, name), ("1-7", "暴君"))
-            return "https://media.prts.wiki/7/74/1-7.png"
+        digest = _hl.md5("1-7_暴君_地图.png".encode("utf-8")).hexdigest()
+        md5_url = f"https://media.prts.wiki/{digest[0]}/{digest[:2]}/1-7_%E6%9A%B4%E5%90%9B_%E5%9C%B0%E5%9B%BE.png"
 
         async def fake_fetch(url, cache_path, *args, **kwargs):
-            self.assertEqual(url, "https://media.prts.wiki/7/74/1-7.png")
+            self.assertEqual(url, md5_url)
             return "BASE64MAP"
+
+        async def fake_resolve(code: str, name: str) -> str:
+            raise AssertionError("md5 直连命中时不应回退 API 查询")
 
         import ArknightsUID.utils.render as render_mod
 
@@ -830,6 +847,43 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         html = template.render(font_css_url="about:blank", **context)
         self.assertIn("关卡地图", html)
         self.assertIn("PRTS.MAP // https://map.prts.wiki/1-7", html)
+
+    async def test_build_stage_map_falls_back_to_api(self) -> None:
+        """地图：md5 直连与辅助命名均 404 → 兜底 imageinfo 查询。"""
+        stage = StageInfo(
+            title="CW-1",
+            code="CW-1",
+            name="触前瞻",
+            map_url="https://map.prts.wiki/CW-1",
+        )
+
+        async def fake_fetch(url, cache_path, *args, **kwargs):
+            # md5 直连（标准+辅助）都拿不到；API 兜底 URL 才有图
+            if url == "https://media.prts.wiki/api/found.png":
+                return "API_MAP"
+            return ""
+
+        async def fake_resolve(code: str, name: str) -> str:
+            return "https://media.prts.wiki/api/found.png"
+
+        import tempfile
+        from pathlib import Path as _P
+
+        import ArknightsUID.utils.render as render_mod
+        import ArknightsUID.utils.resource.RESOURCE_PATH as rp_mod
+
+        with (
+            mock.patch(
+                "ArknightsUID.arknightsuid_wiki.resolve_map_file_url",
+                new=fake_resolve,
+            ),
+            mock.patch.object(render_mod, "get_image_b64_with_cache", fake_fetch),
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.object(rp_mod, "CACHE_PATH", _P(tmp)),
+        ):
+            context = await _build_stage_context(stage)
+
+        self.assertEqual(context["map_image"], "API_MAP")
 
     async def test_stage_context_enriches_enemy_basic_stats(self) -> None:
         """敌方情报基础数值：敌人页一级 HP/攻/防/抗上卡；查不到降级仅名字。"""

@@ -1,0 +1,80 @@
+<!--
+  ark_farm_plan.html —— 刷图规划卡（#30）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_push.show_farm_plan 组装）：
+    rows: [{
+        name: str, count: int, icon: str(可空),
+        farm: {stage_code, ap_expect, sanity, times} | None,   最佳直刷
+        craft: {sanity, leaves: str} | None,                   合成（叶子全直刷）
+        note: str,                                              无数据说明（可空）
+    }]
+    total_farm: float   直刷合计理智
+    unknown: [str]      未识别材料名
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="PLAN">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 刷图规划 FARM PLAN</em></span>
+            <span class="mast-meta"><span class="idx">30</span>YITULIU</span>
+        </div>
+
+        <div class="titleblock" style="align-items: center;">
+            <div>
+                <div class="eyebrow">直刷 vs 合成 · 去哪刷最省</div>
+                <h1 class="title title--s">刷图<em>规划</em></h1>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_drop_rate.b64" %}" alt="">
+        </div>
+        <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">FARM OR CRAFT</span></div>
+
+        <div class="sect">
+            <span class="sect-label">目标材料</span>
+            <span class="sect-en">TARGETS // {{ rows | length }}</span>
+        </div>
+        <div class="rows">
+            {% for r in rows %}
+            <div class="row" style="display: block; padding: 10px 2px;">
+                <div class="bar-row">
+                    <span class="row-value" style="font-size: 13px;">{% if r.icon %}<img src="{{ r.icon }}" alt="" style="width: 18px; height: 18px; object-fit: contain; vertical-align: -4px; margin-right: 5px;">{% endif %}{{ r.name }} ×{{ r.count }}</span>
+                </div>
+                {% if r.farm %}
+                <div class="mono" style="font-size: 11px; margin-top: 4px; color: var(--tx-2);">直刷 <span style="color: var(--tx-0);">{{ r.farm.stage_code }}</span> · {{ "%.0f" | format(r.farm.ap_expect) }} 理智/件 · 约 {{ "%.0f" | format(r.farm.times) }} 把 ≈ <span style="color: var(--tx-0);">{{ "%.0f" | format(r.farm.sanity) }} 理智</span></div>
+                {% endif %}
+                {% if r.craft and r.craft.sanity %}
+                <div class="mono" style="font-size: 11px; margin-top: 3px; color: var(--tx-2);">合成 · 叶子 {{ r.craft.leaves }} ≈ <span style="color: var(--tx-0);">{{ "%.0f" | format(r.craft.sanity) }} 理智</span></div>
+                {% elif r.craft %}
+                <div class="u-mute" style="font-size: 11px; margin-top: 3px;">合成 · {{ r.craft.leaves }}</div>
+                {% endif %}
+                {% if r.note %}
+                <div class="u-mute" style="font-size: 11px; margin-top: 3px;">{{ r.note }}</div>
+                {% endif %}
+            </div>
+            {% endfor %}
+        </div>
+
+        {% if total_farm %}
+        <div class="sect" style="margin-top: var(--space-4);">
+            <span class="sect-label bk">直刷合计</span>
+            <span class="sect-en">TOTAL SANITY</span>
+        </div>
+        <div class="bignum" style="margin-top: var(--space-3);"><span class="red">{{ "%.0f" | format(total_farm) }}</span><span class="u-mute" style="font-size: 12px; margin-left: 6px;">理智（仅直刷可算部分）</span></div>
+        {% endif %}
+        {% if unknown %}
+        <div class="prose" style="margin-top: var(--space-3); font-size: 11px;">未识别：{{ unknown | join("、") }}（请写材料全名）。</div>
+        {% endif %}
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 规划</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// FARM PLAN // GAMEDATA + YITULIU</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

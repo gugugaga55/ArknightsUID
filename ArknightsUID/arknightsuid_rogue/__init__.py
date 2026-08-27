@@ -509,6 +509,29 @@ async def _build_rogue_stage_context(query: str) -> dict | str:
     )
     if difficulty is not None and not grades:
         difficulty_label += "（该期难度数据暂不可用，按基础数值）"
+
+    # 关卡地图：优先 wiki 上传文件（多变体），无则回退 torappu 预览（按
+    # level_id 系统性生成，覆盖所有层关；PRTS 肉鸽关卡页地图即此来源）
+    maps: list[str] = []
+    try:
+        from ..utils.prts.client import rogue_map_file_urls, rogue_map_preview_urls
+        from ..utils.render import get_image_b64_with_cache
+        from ..utils.resource.RESOURCE_PATH import CACHE_PATH
+
+        map_urls = await rogue_map_file_urls(stage["code"], stage["name"])
+        if not map_urls:
+            map_urls = rogue_map_preview_urls(stage["level_id"])
+        for url in map_urls:
+            b64 = await get_image_b64_with_cache(
+                url, CACHE_PATH / "wiki" / "map_rogue", quality=85
+            )
+            if b64:
+                maps.append(b64)
+    except Exception as e:
+        from gsuid_core.logger import logger
+
+        logger.debug(f"[ArknightsUID] 肉鸽地图获取失败: {e}")
+
     return {
         "name": stage["name"],
         "code": stage["code"],
@@ -526,6 +549,7 @@ async def _build_rogue_stage_context(query: str) -> dict | str:
         "row_count": len(rows),
         "skipped": len(stage_data.get("enemies") or []) - len(rows),
         "floor_note": floor_note,
+        "maps": maps,
         "template": "ark_rogue_stage.html",
         "source_note": "数据 tomimi.dev（游戏解包）",
         "version": ArknightsUID_version,
