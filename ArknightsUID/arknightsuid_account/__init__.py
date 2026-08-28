@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 
 from gsuid_core.bot import Bot
+from gsuid_core.logger import logger
 from gsuid_core.models import Event
 from gsuid_core.sv import SV
 
@@ -130,6 +131,12 @@ def _value(data: Any, key: str) -> Any:
     if isinstance(data, dict) and key in data:
         return data[key]
     return None
+
+
+def _clip(text: Any, limit: int) -> str:
+    """技能效果等长文本的单行截断。"""
+    s = str(text or "").strip().replace("\n", " ")
+    return s if len(s) <= limit else s[: limit - 1] + "…"
 
 
 def _path(data: Any, *keys: str) -> Any:
@@ -391,9 +398,9 @@ async def show_ark_accounts(bot: Bot, ev: Event) -> None:
 
 @account_sv.on_command(
     (
-        "切换",
         "切换账号",
         "方舟切换",
+        "切换",
     ),
     block=True,
 )
@@ -753,6 +760,50 @@ async def show_ark_campaign(bot: Bot, ev: Event) -> None:
     await _send_text(bot, ev, _format_campaign(credential, data, uid_display=shown))
 
 
+# 注册顺序约束：练度卡 必须先于「练度统计/练度」注册（startswith 匹配下
+# 短词「练度」会抢走「ark练度卡」，实机踩坑：练度卡曾渲染成练度统计卡）。
+@account_sv.on_command(
+    (
+        "练度卡",
+        "干员练度卡",
+    ),
+    block=True,
+)
+async def show_ark_char_card(bot: Bot, ev: Event) -> None:
+    name, uid, index = _parse_char_query(ev.text)
+    try:
+        from ..utils.user_alias import apply_user_alias
+
+        name = await apply_user_alias(ev.bot_id, ev.user_id, name)
+    except Exception:
+        pass
+    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
+    if isinstance(credential, str):
+        return await _send_text(bot, ev, credential)
+
+    loaded = await _load_player_data(credential)
+    if isinstance(loaded, str):
+        return await _send_text(bot, ev, loaded)
+    data = loaded
+    if not data.chars:
+        return await _send_text(bot, ev, "未识别到干员练度数据。")
+
+    resolved = await _resolve_char_entry(data, name)
+    if isinstance(resolved, str):
+        return await _send_text(bot, ev, resolved)
+    entry = resolved
+
+    # PRTS 技能效果增强（当前级/满级描述；失败静默降级为纯专精点展示）
+    skill_effects = await _char_skill_effects(entry)
+    context = await build_char_card_context(
+        entry, ArknightsUID_version, skill_effects
+    )
+    await send_card_or_text(
+        bot, ev, "ark_char_card.html", context,
+        _format_char_card_text(entry, skill_effects),
+    )
+
+
 @account_sv.on_command(
     (
         "练度统计",
@@ -794,11 +845,11 @@ async def show_ark_char_stat(bot: Bot, ev: Event) -> None:
 
 @account_sv.on_command(
     (
-        "BOX",
-        "box",
         "BOX分析",
         "box分析",
         "方舟BOX",
+        "BOX",
+        "box",
     ),
     block=True,
 )
@@ -859,48 +910,6 @@ def _parse_char_query(text: str) -> tuple[str, str, int]:
         index = int(match.group(1))
         cleaned = cleaned[: match.start()].strip()
     return cleaned, uid, index
-
-
-@account_sv.on_command(
-    (
-        "练度卡",
-        "干员练度卡",
-    ),
-    block=True,
-)
-async def show_ark_char_card(bot: Bot, ev: Event) -> None:
-    name, uid, index = _parse_char_query(ev.text)
-    try:
-        from ..utils.user_alias import apply_user_alias
-
-        name = await apply_user_alias(ev.bot_id, ev.user_id, name)
-    except Exception:
-        pass
-    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-    if isinstance(credential, str):
-        return await _send_text(bot, ev, credential)
-
-    loaded = await _load_player_data(credential)
-    if isinstance(loaded, str):
-        return await _send_text(bot, ev, loaded)
-    data = loaded
-    if not data.chars:
-        return await _send_text(bot, ev, "未识别到干员练度数据。")
-
-    resolved = await _resolve_char_entry(data, name)
-    if isinstance(resolved, str):
-        return await _send_text(bot, ev, resolved)
-    entry = resolved
-
-    # PRTS 技能效果增强（当前级/满级描述；失败静默降级为纯专精点展示）
-    skill_effects = await _char_skill_effects(entry)
-    context = await build_char_card_context(
-        entry, ArknightsUID_version, skill_effects
-    )
-    await send_card_or_text(
-        bot, ev, "ark_char_card.html", context,
-        _format_char_card_text(entry, skill_effects),
-    )
 
 
 @account_sv.on_command(
@@ -1051,10 +1060,10 @@ def _format_skin_collection(
 
 @account_sv.on_command(
     (
-        "皮肤",
         "皮肤收集",
         "时装",
         "方舟皮肤",
+        "皮肤",
     ),
     block=True,
 )

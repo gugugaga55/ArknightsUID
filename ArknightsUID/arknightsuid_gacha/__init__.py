@@ -20,6 +20,7 @@ try:
     from ArknightsUID.ArknightsUID.utils.card import send_card_or_text
     from ArknightsUID.ArknightsUID.utils.enduid.adapter import (
         hide_uid,
+        hide_uid_for,
         resolve_credential,
     )
     from ArknightsUID.ArknightsUID.utils.gacha_plan import (
@@ -38,6 +39,7 @@ try:
         build_gacha_context,
         format_gacha_text,
         load_local_logs,
+        save_local_logs,
         sync_gacha_logs,
     )
     from ArknightsUID.ArknightsUID.utils.player.context import char_avatar_b64
@@ -49,6 +51,7 @@ except ModuleNotFoundError:
     from ArknightsUID.utils.card import send_card_or_text
     from ArknightsUID.utils.enduid.adapter import (
         hide_uid,
+        hide_uid_for,
         resolve_credential,
     )
     from ArknightsUID.utils.gacha_plan import (
@@ -67,6 +70,7 @@ except ModuleNotFoundError:
         build_gacha_context,
         format_gacha_text,
         load_local_logs,
+        save_local_logs,
         sync_gacha_logs,
     )
     from ArknightsUID.utils.player.context import char_avatar_b64
@@ -218,9 +222,9 @@ async def _pick_pool(keyword: str) -> tuple[dict | None, str]:
 
 @gacha_sv.on_command(
     (
-        "攒抽",
-        "抽卡规划",
         "攒抽规划",
+        "抽卡规划",
+        "攒抽",
     ),
     block=True,
 )
@@ -331,7 +335,7 @@ def _annual_report(records: list[dict], year: str) -> str | None:
     return "\n".join(lines)
 
 
-@gacha_sv.on_command(("年度", "年度报告", "抽卡年度"), block=True)
+@gacha_sv.on_command(("年度报告", "抽卡年度", "年度"), block=True)
 async def send_annual_report(bot: Bot, ev: Event) -> None:
     from datetime import datetime
 
@@ -503,6 +507,27 @@ def build_export_payload(
         },
         "records": export_records,
     }
+
+
+@gacha_sv.on_command(("删除抽卡记录", "清空抽卡记录"), block=True)
+async def delete_gacha_records(bot: Bot, ev: Event) -> None:
+    """隐私清理：删除该账号的本地寻访记录存档（官方服务器数据不受影响）。"""
+    uid = extract_uid(ev.text)
+    index = extract_index(ev.text)
+    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
+    if isinstance(credential, str):
+        return await _send_text(bot, ev, credential)
+
+    shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
+    records = await load_local_logs(credential.uid)
+    if not records:
+        return await _send_text(bot, ev, f"UID {shown} 本地没有抽卡记录。")
+    await save_local_logs(credential.uid, [])
+    await _send_text(
+        bot, ev,
+        f"已删除 UID {shown} 的 {len(records)} 条本地抽卡记录。\n"
+        "（仅清本地存档；如需重新统计，ark抽卡记录 会从官方接口重新拉取。）",
+    )
 
 
 @gacha_sv.on_command(("导出抽卡", "抽卡导出", "导出寻访记录"), block=True)

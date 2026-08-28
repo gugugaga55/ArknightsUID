@@ -29,6 +29,7 @@ from gsuid_core.subscribe import gs_subscribe
 from gsuid_core.sv import SV
 
 try:
+    from ArknightsUID.ArknightsUID.utils.config import ArkConfig
     from ArknightsUID.ArknightsUID.utils.enduid.adapter import (
         hide_uid,
         resolve_credential,
@@ -44,6 +45,7 @@ try:
     )
     from ArknightsUID.ArknightsUID.utils.skland.client import ark_attendance
 except ModuleNotFoundError:
+    from ArknightsUID.utils.config import ArkConfig
     from ArknightsUID.utils.enduid.adapter import (
         hide_uid,
         resolve_credential,
@@ -235,9 +237,8 @@ async def _send_text(bot: Bot, ev: Event, msg: str) -> None:
 
 @notify_sv.on_command(
     (
-        "订阅理智",
-        "理智推送",
         "订阅理智提醒",
+        "订阅理智",
     ),
     block=True,
 )
@@ -459,8 +460,8 @@ def _save_train_state(state: dict[str, dict]) -> None:
 
 @notify_sv.on_command(
     (
-        "订阅训练",
         "订阅专精训练",
+        "订阅训练",
         "训练推送",
     ),
     block=True,
@@ -649,7 +650,7 @@ def _iso_week_key(now_ts: float | None = None) -> str:
     return f"{year}-W{week:02d}"
 
 
-@notify_sv.on_command(("订阅剿灭", "剿灭推送"), block=True)
+@notify_sv.on_command(("订阅剿灭",), block=True)
 async def subscribe_campaign_push(bot: Bot, ev: Event) -> None:
     uid, index = _extract_target(ev.text)
     credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
@@ -871,9 +872,8 @@ def format_recruit_push_message(name: str, done_count: int, uid_masked: str) -> 
 
 @notify_sv.on_command(
     (
-        "订阅基建",
-        "基建推送",
         "订阅基建推送",
+        "订阅基建",
     ),
     block=True,
 )
@@ -1146,7 +1146,6 @@ def format_sign_push_message(
     (
         "订阅签到",
         "自动签到",
-        "签到推送",
     ),
     block=True,
 )
@@ -1201,9 +1200,26 @@ async def unsubscribe_sign_push(bot: Bot, ev: Event) -> None:
     await _send_text(bot, ev, "已取消全部自动签到。")
 
 
-@scheduler.scheduled_job("cron", hour=8, minute=5, id="ark_sign_push")
+def _sign_schedule() -> tuple[int, int]:
+    """SignTime 配置 [时, 分] → cron 参数，非法值回落 08:05。"""
+    try:
+        raw = ArkConfig.get_config("SignTime").data or ["8", "5"]
+        hour, minute = int(raw[0]), int(raw[1])
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return hour, minute
+    except Exception:
+        pass
+    return 8, 5
+
+
+_SIGN_HOUR, _SIGN_MINUTE = _sign_schedule()
+
+
+@scheduler.scheduled_job(
+    "cron", hour=_SIGN_HOUR, minute=_SIGN_MINUTE, id="ark_sign_push"
+)
 async def check_sign_push() -> None:
-    """每天 08:05 自动签到订阅账号并回报（失败/成功推送，已签静默）。"""
+    """每天按 SignTime 配置自动签到订阅账号并回报（失败/成功推送，已签静默）。"""
     datas = await gs_subscribe.get_subscribe(SIGN_TASK_NAME)
     if not datas:
         return
@@ -1260,3 +1276,69 @@ async def check_sign_push() -> None:
         state[key] = {"date": today}
         _save_sign_state(state)
         await asyncio.sleep(random.uniform(1, 2))
+
+
+# ---------------------------------------------------------------------------
+# ark全部签到（pm=1）：对所有可用登录手动执行一次签到（对齐 EndUID）
+# ---------------------------------------------------------------------------
+sign_all_sv = SV("ArknightsUID全部签到", pm=1, priority=5)
+
+# 单次手动全签的账号上限（防误装了大量凭据时刷接口）
+_SIGN_ALL_LIMIT = 50
+
+
+@sign_all_sv.on_fullmatch(("全部签到", "签到全部"), block=True)
+async def sign_all_accounts(bot: Bot, ev: Event) -> None:
+    from ..utils.database.models import ArkUser
+
+    try:
+        rows = await ArkUser.select_rows(cookie_status="")
+    except Exception as exc:
+        logger.warning(
+            f"[ArknightsUID·签到] 全部签到查询失败: {exc.__class__.__name__}"
+        )
+        rows = []
+
+    targets: list[tuple[str, str, str]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for row in rows:
+        uid = (getattr(row, "uid", "") or "").strip()
+        user_id = getattr(row, "user_id", "") or ""
+        bot_id = getattr(row, "bot_id", "") or ""
+        if not uid or (user_id, bot_id, uid) in seen:
+            continue
+        seen.add((user_id, bot_id, uid))
+        targets.append((user_id, bot_id, uid))
+    if not targets:
+        return await _send_text(bot, ev, "没有可用登录（需先 ark绑定）。")
+
+    await _send_text(bot, ev, f"开始为 {min(len(targets), _SIGN_ALL_LIMIT)} 个账号签到…")
+    ok = failed = skipped = 0
+    for user_id, bot_id, uid in targets[:_SIGN_ALL_LIMIT]:
+        credential = await resolve_credential(user_id, bot_id, uid=uid)
+        if isinstance(credential, str):
+            failed += 1
+            logger.warning(
+                f"[ArknightsUID·签到] 全部签到账号不可用 uid={hide_uid(uid)}"
+            )
+            continue
+        response = await ark_attendance(credential)
+        if isinstance(response, str):
+            failed += 1
+            continue
+        code = response.get("code") if isinstance(response, dict) else None
+        if code == 0:
+            ok += 1
+        elif code == 10001:
+            skipped += 1  # 今日已签
+        else:
+            failed += 1
+        await asyncio.sleep(random.uniform(1.0, 2.0))
+
+    lines = [
+        "「明日方舟」全部签到完成：",
+        f"成功 {ok} · 已签跳过 {skipped} · 失败 {failed}",
+    ]
+    if len(targets) > _SIGN_ALL_LIMIT:
+        lines.append(f"（共 {len(targets)} 个账号，仅处理前 {_SIGN_ALL_LIMIT} 个）")
+    await _send_text(bot, ev, "\n".join(lines))

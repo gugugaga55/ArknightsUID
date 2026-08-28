@@ -253,9 +253,9 @@ async def _activity_banner_b64(url: str) -> str:
 
 @push_sv.on_command(
     (
-        "活动",
-        "方舟活动",
         "活动列表",
+        "方舟活动",
+        "活动",
     ),
     block=True,
 )
@@ -321,6 +321,127 @@ async def show_ark_announcements(bot: Bot, ev: Event) -> None:
     }
     await send_card_or_text(
         bot, ev, "ark_announce.html", context, _format_ann_list(anns)
+    )
+
+
+# 注册顺序约束：计划（含别名 刷图计划）必须先于 刷图推荐（含别名 刷图）注册，
+# 否则「ark刷图计划」会被短词「刷图」按 startswith 抢走。
+
+
+@push_sv.on_command(("计划", "刷图计划"), block=True)
+async def show_farm_plan(bot: Bot, ev: Event) -> None:
+    """ark计划 材料:数量 [...] → 直刷 vs 合成 规划（去哪刷/多少理智）。"""
+    text = ev.text.strip()
+    targets = _parse_plan_targets(text)
+    if not targets:
+        return await _send_text(
+            bot, ev,
+            "用法：ark计划 材料:数量 [材料:数量 …]（如 ark计划 聚酸酯块:10 龙门币:20000）",
+        )
+
+    try:
+        from ArknightsUID.utils.gamedata.craft import craft_vs_farm, load_formulas
+    except ModuleNotFoundError:
+        from ArknightsUID.ArknightsUID.utils.gamedata.craft import (
+            craft_vs_farm,
+            load_formulas,
+        )
+
+    item_index = await load_item_index()
+    matrix = await fetch_drop_matrix()
+    stages = await fetch_stage_info()
+    if not item_index or not matrix or not stages:
+        return await _send_text(bot, ev, "数据源不可用（gamedata/一图流拉取失败），请稍后再试。")
+
+    from ..utils.yituliu import latest_matrix_by_item
+
+    matrix_by_item = latest_matrix_by_item(matrix)
+    stage_meta = {str(s.get("stageId", "")): s for s in stages}
+    formulas = await load_formulas()
+
+    lines: list[str] = ["「明日方舟」刷图规划"]
+    total_farm = 0.0
+    unknown: list[str] = []
+    card_rows: list[dict] = []
+    for name, count in targets[:6]:
+        item_id = _match_item_id(name, item_index)
+        if not item_id:
+            unknown.append(name)
+            continue
+        result = craft_vs_farm(
+            item_id, count, formulas, item_index, matrix_by_item, stage_meta
+        )
+        head = f"◆ {result['name']} ×{count}"
+        options: list[str] = []
+        farm_row = None
+        craft_row = None
+        if result["farm"]:
+            options.append(
+                f"直刷 {result['farm']['stage_code']}（{result['farm']['ap_expect']:.0f} 理智/件"
+                f"≈{result['farm_sanity']:.0f} 理智，需 {count / result['farm']['rate']:.0f} 把）"
+            )
+            farm_row = {
+                "stage_code": result["farm"]["stage_code"],
+                "ap_expect": result["farm"]["ap_expect"],
+                "sanity": result["farm_sanity"],
+                "times": count / result["farm"]["rate"],
+            }
+            if result["farm_sanity"] is not None:
+                total_farm += result["farm_sanity"]
+        if result["craft"] is not None:
+            if result["craft_sanity"] is not None:
+                leaves = " + ".join(
+                    f"{item_index[lid]['name']}×{ln}"
+                    if lid in item_index else lid
+                    for lid, ln in result["craft_leaves"].items()
+                )
+                options.append(
+                    f"合成（叶子材料 {leaves} ≈{result['craft_sanity']:.0f} 理智）"
+                )
+                craft_row = {
+                    "sanity": result["craft_sanity"],
+                    "leaves": leaves,
+                }
+            else:
+                options.append("合成可行，但部分子材料无掉落数据")
+                craft_row = {"sanity": None, "leaves": "部分子材料无掉落数据"}
+        note = "" if options else "没有样本充足的掉落关卡"
+        if not options:
+            lines.append(f"{head}：没有样本充足的掉落关卡")
+        else:
+            lines.append(f"{head}：" + "｜".join(options))
+        card_rows.append(
+            {
+                "name": result["name"],
+                "count": count,
+                "icon": "",
+                "farm": farm_row,
+                "craft": craft_row,
+                "note": note,
+            }
+        )
+    if unknown:
+        lines.append(f"未识别：{'、'.join(unknown)}（支持精确材料名）")
+    lines.append(f"直刷合计 ≈{total_farm:.0f} 理智")
+    lines.append("数据：ArknightsGameData + ark.yituliu.cn（样本>300 关卡）")
+    # 材料图标（失败空串降级）
+    try:
+        from ..utils.gamedata.itemicon import item_icon_b64
+
+        for row in card_rows:
+            row["icon"] = await item_icon_b64(row["name"])
+    except Exception as e:
+        logger.debug(f"[ArknightsUID] 计划卡材料图标获取失败: {e}")
+    await send_card_or_text(
+        bot, ev,
+        "ark_farm_plan.html",
+        {
+            "rows": card_rows,
+            "total_farm": total_farm,
+            "unknown": unknown,
+            "version": ArknightsUID_version,
+        },
+        "\n".join(lines),
     )
 
 
@@ -635,7 +756,7 @@ def _parse_plan_targets(text: str) -> list[tuple[str, int]]:
     return targets
 
 
-@push_sv.on_command(("合成", "合成树"), block=True)
+@push_sv.on_command(("合成树", "合成"), block=True)
 async def show_craft_tree(bot: Bot, ev: Event) -> None:
     """ark合成 材料 → 加工站合成树（含子材料递归）+ 直刷对比。"""
     query = ev.text.strip()
@@ -706,123 +827,6 @@ async def show_craft_tree(bot: Bot, ev: Event) -> None:
             "need": 1,
             "icon": await item_icon_b64(item_index[item_id]["name"]),
             "rows": card_rows,
-            "version": ArknightsUID_version,
-        },
-        "\n".join(lines),
-    )
-
-
-@push_sv.on_command(("计划", "刷图计划"), block=True)
-async def show_farm_plan(bot: Bot, ev: Event) -> None:
-    """ark计划 材料:数量 [...] → 直刷 vs 合成 规划（去哪刷/多少理智）。"""
-    text = ev.text.strip()
-    targets = _parse_plan_targets(text)
-    if not targets:
-        return await _send_text(
-            bot, ev,
-            "用法：ark计划 材料:数量 [材料:数量 …]（如 ark计划 聚酸酯块:10 龙门币:20000）",
-        )
-
-    try:
-        from ArknightsUID.utils.gamedata.craft import craft_vs_farm, load_formulas
-    except ModuleNotFoundError:
-        from ArknightsUID.ArknightsUID.utils.gamedata.craft import (
-            craft_vs_farm,
-            load_formulas,
-        )
-
-    item_index = await load_item_index()
-    matrix = await fetch_drop_matrix()
-    stages = await fetch_stage_info()
-    if not item_index or not matrix or not stages:
-        return await _send_text(bot, ev, "数据源不可用（gamedata/一图流拉取失败），请稍后再试。")
-
-    from ..utils.yituliu import latest_matrix_by_item
-
-    matrix_by_item = latest_matrix_by_item(matrix)
-    stage_meta = {str(s.get("stageId", "")): s for s in stages}
-    formulas = await load_formulas()
-
-    lines: list[str] = ["「明日方舟」刷图规划"]
-    total_farm = 0.0
-    unknown: list[str] = []
-    card_rows: list[dict] = []
-    for name, count in targets[:6]:
-        item_id = _match_item_id(name, item_index)
-        if not item_id:
-            unknown.append(name)
-            continue
-        result = craft_vs_farm(
-            item_id, count, formulas, item_index, matrix_by_item, stage_meta
-        )
-        head = f"◆ {result['name']} ×{count}"
-        options: list[str] = []
-        farm_row = None
-        craft_row = None
-        if result["farm"]:
-            options.append(
-                f"直刷 {result['farm']['stage_code']}（{result['farm']['ap_expect']:.0f} 理智/件"
-                f"≈{result['farm_sanity']:.0f} 理智，需 {count / result['farm']['rate']:.0f} 把）"
-            )
-            farm_row = {
-                "stage_code": result["farm"]["stage_code"],
-                "ap_expect": result["farm"]["ap_expect"],
-                "sanity": result["farm_sanity"],
-                "times": count / result["farm"]["rate"],
-            }
-            if result["farm_sanity"] is not None:
-                total_farm += result["farm_sanity"]
-        if result["craft"] is not None:
-            if result["craft_sanity"] is not None:
-                leaves = " + ".join(
-                    f"{item_index[lid]['name']}×{ln}"
-                    if lid in item_index else lid
-                    for lid, ln in result["craft_leaves"].items()
-                )
-                options.append(
-                    f"合成（叶子材料 {leaves} ≈{result['craft_sanity']:.0f} 理智）"
-                )
-                craft_row = {
-                    "sanity": result["craft_sanity"],
-                    "leaves": leaves,
-                }
-            else:
-                options.append("合成可行，但部分子材料无掉落数据")
-                craft_row = {"sanity": None, "leaves": "部分子材料无掉落数据"}
-        note = "" if options else "没有样本充足的掉落关卡"
-        if not options:
-            lines.append(f"{head}：没有样本充足的掉落关卡")
-        else:
-            lines.append(f"{head}：" + "｜".join(options))
-        card_rows.append(
-            {
-                "name": result["name"],
-                "count": count,
-                "icon": "",
-                "farm": farm_row,
-                "craft": craft_row,
-                "note": note,
-            }
-        )
-    if unknown:
-        lines.append(f"未识别：{'、'.join(unknown)}（支持精确材料名）")
-    lines.append(f"直刷合计 ≈{total_farm:.0f} 理智")
-    lines.append("数据：ArknightsGameData + ark.yituliu.cn（样本>300 关卡）")
-    # 材料图标（失败空串降级）
-    try:
-        from ..utils.gamedata.itemicon import item_icon_b64
-
-        for row in card_rows:
-            row["icon"] = await item_icon_b64(row["name"])
-    except Exception as e:
-        logger.debug(f"[ArknightsUID] 计划卡材料图标获取失败: {e}")
-    await send_card_or_text(
-        bot, ev,
-        "ark_farm_plan.html",
-        {
-            "rows": card_rows,
-            "total_farm": total_farm,
-            "unknown": unknown,
             "version": ArknightsUID_version,
         },
         "\n".join(lines),
