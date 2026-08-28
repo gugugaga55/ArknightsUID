@@ -140,6 +140,92 @@ async def _resolve_query_to_char_id(
     return char_id, ""
 
 
+# 注册顺序约束：养成计划 必须先于「养成计算/养成」注册（startswith 匹配下
+# 短词「养成」会抢走「ark养成计划」，实机踩坑：计划请求曾落到养成计算）。
+
+
+@cultivate_sv.on_command(
+    (
+        "养成计划",
+        "养成规划",
+        "多干员养成",
+    ),
+    block=True,
+)
+async def show_cultivation_plan(bot: Bot, ev: Event) -> None:
+    """ark养成计划 <干员名>… → 多干员到毕业的合并材料缺口 + 刷图建议。"""
+    text = ev.text.strip()
+    uid = extract_uid(text)
+    if uid:
+        text = text.replace(uid, "", 1).strip()
+    index = extract_index(text)
+    if index:
+        import re as _re
+
+        text = _re.sub(r"\s(?:第)?\d{1,2}(?:号)?\s*$", "", text).strip()
+
+    names = _split_plan_names(text)
+    if not names:
+        return await _send_text(
+            bot, ev,
+            "用法：ark养成计划 <干员名> [干员名 …]（最多 6 名，空格/顿号分隔，"
+            "如 ark养成计划 银灰 史尔特尔 42）",
+        )
+    if len(names) > _PLAN_MAX_CHARS:
+        names = names[:_PLAN_MAX_CHARS]
+
+    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
+    if isinstance(credential, str):
+        return await _send_text(bot, ev, credential)
+
+    results: list[dict] = []
+    unresolved: list[str] = []
+    for name in names:
+        char_id, resolve_error = await _resolve_query_to_char_id(
+            name, ev.bot_id, ev.user_id
+        )
+        if not char_id:
+            unresolved.append(f"{name}（{resolve_error}）")
+            continue
+        result = await calculate_cultivation(credential, char_id, max_rows=999)
+        if isinstance(result, str):
+            unresolved.append(f"{name}（{result}）")
+            continue
+        results.append(result)
+
+    if not results:
+        return await _send_text(
+            bot, ev, "没有可计算的干员：\n" + "\n".join(unresolved)
+        )
+
+    from ..utils.cultivate import merge_cultivation_results
+
+    merged = merge_cultivation_results(results)
+    if unresolved:
+        merged["warnings"] = list(merged.get("warnings") or []) + [
+            f"未计入：{'；'.join(unresolved)}"
+        ]
+
+    farm_rows = await _build_farm_rows(merged, credential)
+
+    gap = merged
+    for row in gap["materials"] + gap["exp_books"]:
+        row["icon"] = await item_icon_b64(row["name"])
+    if gap["gold_lack"]:
+        gap["gold_icon"] = await item_icon_b64("龙门币")
+
+    context = {
+        "version": ArknightsUID_version,
+        "uid": hide_uid(credential.uid),
+        "merged": merged,
+        "farm_rows": farm_rows,
+    }
+    await send_card_or_text(
+        bot, ev, "ark_cultivate_plan.html", context,
+        _format_plan_result(credential, merged, farm_rows),
+    )
+
+
 @cultivate_sv.on_command(
     (
         "养成计算",
@@ -281,19 +367,19 @@ async def _build_farm_rows(
     if not targets:
         return []
     try:
-        from ArknightsUID.utils.gamedata.craft import craft_vs_farm, load_formulas
-        from ArknightsUID.utils.yituliu import (
-            fetch_drop_matrix,
-            fetch_stage_info,
-            latest_matrix_by_item,
-        )
-        from ..utils.gamedata.charinfo import load_item_index
-    except ModuleNotFoundError:
         from ArknightsUID.ArknightsUID.utils.gamedata.craft import (
             craft_vs_farm,
             load_formulas,
         )
         from ArknightsUID.ArknightsUID.utils.yituliu import (
+            fetch_drop_matrix,
+            fetch_stage_info,
+            latest_matrix_by_item,
+        )
+        from ArknightsUID.ArknightsUID.utils.gamedata.charinfo import load_item_index
+    except ModuleNotFoundError:
+        from ArknightsUID.utils.gamedata.craft import craft_vs_farm, load_formulas
+        from ArknightsUID.utils.yituliu import (
             fetch_drop_matrix,
             fetch_stage_info,
             latest_matrix_by_item,
@@ -326,85 +412,3 @@ async def _build_farm_rows(
             }
         )
     return rows
-
-
-@cultivate_sv.on_command(
-    (
-        "养成计划",
-        "养成规划",
-        "多干员养成",
-    ),
-    block=True,
-)
-async def show_cultivation_plan(bot: Bot, ev: Event) -> None:
-    """ark养成计划 <干员名>… → 多干员到毕业的合并材料缺口 + 刷图建议。"""
-    text = ev.text.strip()
-    uid = extract_uid(text)
-    if uid:
-        text = text.replace(uid, "", 1).strip()
-    index = extract_index(text)
-    if index:
-        import re as _re
-
-        text = _re.sub(r"\s(?:第)?\d{1,2}(?:号)?\s*$", "", text).strip()
-
-    names = _split_plan_names(text)
-    if not names:
-        return await _send_text(
-            bot, ev,
-            "用法：ark养成计划 <干员名> [干员名 …]（最多 6 名，空格/顿号分隔，"
-            "如 ark养成计划 银灰 史尔特尔 42）",
-        )
-    if len(names) > _PLAN_MAX_CHARS:
-        names = names[:_PLAN_MAX_CHARS]
-
-    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-    if isinstance(credential, str):
-        return await _send_text(bot, ev, credential)
-
-    results: list[dict] = []
-    unresolved: list[str] = []
-    for name in names:
-        char_id, resolve_error = await _resolve_query_to_char_id(
-            name, ev.bot_id, ev.user_id
-        )
-        if not char_id:
-            unresolved.append(f"{name}（{resolve_error}）")
-            continue
-        result = await calculate_cultivation(credential, char_id, max_rows=999)
-        if isinstance(result, str):
-            unresolved.append(f"{name}（{result}）")
-            continue
-        results.append(result)
-
-    if not results:
-        return await _send_text(
-            bot, ev, "没有可计算的干员：\n" + "\n".join(unresolved)
-        )
-
-    from ..utils.cultivate import merge_cultivation_results
-
-    merged = merge_cultivation_results(results)
-    if unresolved:
-        merged["warnings"] = list(merged.get("warnings") or []) + [
-            f"未计入：{'；'.join(unresolved)}"
-        ]
-
-    farm_rows = await _build_farm_rows(merged, credential)
-
-    gap = merged
-    for row in gap["materials"] + gap["exp_books"]:
-        row["icon"] = await item_icon_b64(row["name"])
-    if gap["gold_lack"]:
-        gap["gold_icon"] = await item_icon_b64("龙门币")
-
-    context = {
-        "version": ArknightsUID_version,
-        "uid": hide_uid(credential.uid),
-        "merged": merged,
-        "farm_rows": farm_rows,
-    }
-    await send_card_or_text(
-        bot, ev, "ark_cultivate_plan.html", context,
-        _format_plan_result(credential, merged, farm_rows),
-    )

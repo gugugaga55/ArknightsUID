@@ -320,8 +320,8 @@ git clone https://github.com/gugugaga55/ArknightsUID.git
 
 ## 致谢
 
+- [EndUID](https://github.com/Loping151/EndUID) · [Loping151](https://github.com/Loping151) — 151 很棒的，咕咕嘎嘎
 - [arknights-plugin](https://github.com/gxy12345/arknights-plugin) — 功能对标与鹰角 OAuth 抽卡链参考
-- [EndUID](https://github.com/Loping151/EndUID) — 森空岛登录/签名实现参考与凭据回退复用
 - [gsuid_core](https://docs.sayu-bot.com/) — 插件运行核心
 - [PRTS Wiki](https://prts.wiki/) — 词条/关卡/公招数据与图片资源
 - [tomimi-dev](https://github.com/tanch-p/tomimi-dev) — 肉鸽藏品与敌人数据

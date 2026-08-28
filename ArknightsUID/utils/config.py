@@ -11,6 +11,7 @@ from gsuid_core.utils.plugins_config.models import (
     GSC,
     GsBoolConfig,
     GsIntConfig,
+    GsListStrConfig,
     GsStrConfig,
 )
 from gsuid_core.utils.plugins_config.gs_config import StringConfig
@@ -25,6 +26,14 @@ CONFIG_DEFAULT: Dict[str, GSC] = {
         "playwright = Chromium 截图（默认兜底）。"
         "takumi 未安装或渲染失败时自动回退 playwright，外置渲染（RemoteRenderEnable）不受此项影响。",
         "takumi",
+    ),
+    "RenderScale": GsIntConfig(
+        "渲染倍率（清晰度）",
+        "1 = 与卡片设计宽同像素（560px，文件最小但手机上发糊）；"
+        "2 = 2 倍分辨率（1120px，推荐，文字锐利）；3 = 3 倍（更清晰，文件更大）。"
+        "对 takumi 与 playwright 本地渲染均生效，修改后立即生效。",
+        2,
+        options=[1, 2, 3],
     ),
     "RemoteRenderEnable": GsBoolConfig(
         "启用外置渲染",
@@ -80,6 +89,13 @@ CONFIG_DEFAULT: Dict[str, GSC] = {
         "每隔多少分钟检查一次新活动/卡池/公告并推送订阅群。修改后需重启 core 生效。",
         30,
         max_value=1440,
+    ),
+
+    # === 签到 ===
+    "SignTime": GsListStrConfig(
+        "自动签到时间（时, 分）",
+        "订阅了自动签到的账号每天在此时间批量签到并回报。修改后需重启 core 生效。",
+        ["8", "5"],
     ),
 }
 

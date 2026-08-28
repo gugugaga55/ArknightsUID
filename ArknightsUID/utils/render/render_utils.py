@@ -87,16 +87,32 @@ def _local_cjk_fonts() -> list:
 
 
 def _render_via_takumi(html_content: str, width: int = TAKUMI_RENDER_WIDTH) -> bytes:
-    """Takumi 无浏览器渲染（同步，调用方负责下放线程）。失败抛异常由上层回退。"""
+    """Takumi 无浏览器渲染（同步，调用方负责下放线程）。失败抛异常由上层回退。
+
+    device_pixel_ratio 由 RenderScale 配置驱动。注意 pytakumi 的 width 参数是
+    物理像素、CSS 视口 = width / DPR，因此要传 width×scale 才能保持 560px 的
+    卡片设计宽：1x 输出 560px（手机端拉伸发糊），默认 2x 输出 1120px。
+    """
     if pytakumi is None:
         raise RuntimeError("pytakumi 不可用")
+    scale = _render_scale()
     return pytakumi.html_to_pic(
         html_content,
-        width=width,
+        width=int(width * scale),
         format="jpeg",
         quality=90,
         fonts=_local_cjk_fonts() or None,
+        device_pixel_ratio=scale,
     )
+
+
+def _render_scale() -> float:
+    """RenderScale 配置 → 渲染倍率，非法值回落 2（清晰度优先）。"""
+    try:
+        value = int(ArkConfig.get_config("RenderScale").data or 2)
+    except Exception:
+        value = 2
+    return float(value) if value >= 1 else 2.0
 
 
 async def _render_local_takumi(html_content: str) -> Optional[bytes]:
@@ -245,7 +261,15 @@ async def _ensure_browser():
                 _playwright = await async_playwright().start()
 
             _browser = await _playwright.chromium.launch(
-                args=["--no-sandbox", "--disable-setuid-sandbox"]
+                # --disable-gpu/--no-zygote：对齐 EndUID 实测，禁 GPU 避免
+                # Windows 上 NVIDIA 驱动锁泄漏；单 renderer 进程降常驻内存
+                args=[
+                    "--no-sandbox",
+                    "--disable-setuid-sandbox",
+                    "--disable-gpu",
+                    "--no-zygote",
+                    "--renderer-process-limit=1",
+                ]
             )
             _browser_uses = 0
 
@@ -286,7 +310,9 @@ async def _acquire_page():
                 ctx_closed = True
         if ctx_closed:
             _pool_ctx = await browser.new_context(
-                viewport={"width": 1200, "height": 1000}
+                viewport={"width": 1200, "height": 1000},
+                # 截图物理分辨率 = CSS 尺寸 × 倍率（RenderScale，默认 2x 防手机端发糊）
+                device_scale_factor=_render_scale(),
             )
 
     page = await _pool_ctx.new_page()
