@@ -1795,7 +1795,11 @@ async def query_activities(limit: int = 15, now_ts: float | None = None) -> list
 async def query_gacha_pools(
     limit: int = 10, now_ts: float | None = None
 ) -> list[ActivityInfo]:
-    """进行中/未来的限定卡池（SMW：Category:国服寻访）。now_ts 仅供测试注入。"""
+    """进行中/未来的限定卡池（SMW：Category:国服寻访）。now_ts 仅供测试注入。
+
+    SMW 结果键即卡池横幅的文件页（`文件:联合行动23.jpg`）——文件名经
+    map_file_url（md5 散列路径）直接换出 media 直链，无需再查 imageinfo。
+    """
     today = datetime.fromtimestamp(
         now_ts if now_ts is not None else time.time(), _BEIJING_TZ
     ).strftime("%Y-%m-%d")
@@ -1816,6 +1820,7 @@ async def query_gacha_pools(
         # 卡池名 printout 或页面标题都可能带「寻访模拟/」前缀，取末段
         raw_name = _smw_first_value(prints.get("卡池名")) or title
         name = raw_name.split("/")[-1]
+        banner_file = title.split(":", 1)[1].strip() if ":" in title else ""
         start, start_ts = _smw_datetime(prints.get("寻访开启时间cn"))
         end, end_ts = _smw_datetime(prints.get("寻访关闭时间cn"))
         if not end or end_ts <= now_ts:
@@ -1828,6 +1833,7 @@ async def query_gacha_pools(
                 start_ts=start_ts,
                 end_ts=end_ts,
                 source_url=page_url(title),
+                image_url=map_file_url(banner_file),
             )
         )
     return pools

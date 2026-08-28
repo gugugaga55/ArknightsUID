@@ -577,9 +577,10 @@ class PRTSParserTest(unittest.IsolatedAsyncioTestCase):
             return {
                 "query": {
                     "results": {
-                        "卡池页": {
+                        # SMW 结果键即卡池横幅文件页（真实结构，探测验证）
+                        "文件:·深水 Nile.png": {
                             "printouts": {
-                                "卡池名": [{"raw": "·深水 Nile"}],
+                                "卡池名": [{"raw": "寻访模拟/·深水 Nile"}],
                                 "寻访开启时间cn": [{"raw": "1/2099/8/7/4/0/0/0"}],
                                 "寻访关闭时间cn": [{"raw": "1/2099/8/21/3/59/0/0"}],
                             }
@@ -597,6 +598,10 @@ class PRTSParserTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(pools), 1)
         self.assertEqual(pools[0].title, "·深水 Nile")
         self.assertEqual(pools[0].end, "2099-08-21 03:59")
+        # 横幅直链：文件名 md5 散列路径（map_file_url 同规则）
+        digest = __import__("hashlib").md5("·深水 Nile.png".encode()).hexdigest()
+        self.assertIn(f"/{digest[0]}/{digest[:2]}/", pools[0].image_url)
+        self.assertTrue(pools[0].image_url.endswith("%C2%B7%E6%B7%B1%E6%B0%B4%20Nile.png"))
 
     async def test_query_game_info_merges_lst_pages(self) -> None:
         pages = {

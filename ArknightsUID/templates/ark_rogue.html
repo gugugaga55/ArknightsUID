@@ -8,6 +8,7 @@
         rogue_id: str,        主题 ID（rogue_1..rogue_6）
         latest: bool,         最新期（模板加 · 进行中 标）
         name: str,            主题名（可选，缺省显示 rogue_id）
+        image: str,           主题 KV 图 b64（PRTS 主题页标题图，可空串降级）
         clear_time: int,      通关次数
         bp_level: int,        声望等级
         relic_cnt: int,       收藏品解锁数
@@ -20,7 +21,20 @@
 -->
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head>{% include "ark_head.html" %}</head>
+<head>{% include "ark_head.html" %}
+<style>
+    /* 主题 KV（PRTS 主题页信息框标题图）：定高裁切，宽度撑满，缺图不占位 */
+    .rogue-kv {
+        display: block;
+        width: 100%;
+        height: 108px;
+        object-fit: cover;
+        object-position: center 30%;
+        border: 1px solid var(--hairline);
+        margin-bottom: var(--space-3);
+    }
+</style>
+</head>
 <body>
     <div class="container" data-ghost="ROGUE">
         <div class="mast">
@@ -63,6 +77,9 @@
             <span class="sect-label bk">{{ r.name or r.rogue_id }}{% if r.latest %} · 最新{% endif %}</span>
             <span class="sect-en">{{ r.rogue_id }}</span>
         </div>
+        {% if r.image %}
+        <img class="rogue-kv" src="{{ r.image }}" alt="">
+        {% endif %}
         <div class="grid grid-4">
             <div class="cell">
                 <div class="cell-label">通关 CLEARS</div>

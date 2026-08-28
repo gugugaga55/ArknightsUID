@@ -6,6 +6,7 @@
     modules: [{
         name: str, type: str(X/Y/ORIGINAL), type_name: str,
         desc: str,
+        icon: str,                                模组图标 b64（PRTS torappu，可空）
         unlock_phase: int, unlock_level: int, unlock_favor: int,
         costs: [{name: str, count: int, icon: str}],   解锁档材料（icon 可空）
         level_attrs: {L1: str, L2: str, L3: str},      各等级属性（可缺）
@@ -39,6 +40,7 @@
         <div class="rows">
             <div class="row row--active" style="display: block; padding: 10px 2px;">
                 <div class="bar-row">
+                    {% if m.icon %}<img src="{{ m.icon }}" alt="" style="width: 28px; height: 28px; object-fit: contain; margin-right: 8px; flex-shrink: 0;">{% endif %}
                     <span class="row-value" style="font-size: 13px;">{{ m.name }}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 6px;">{{ m.type }} · {{ m.type_name }}</span></span>
                     <span style="flex: 1;"></span>
                     <span class="bar-num">{% if m.unlock_phase %}精{{ m.unlock_phase }} {% endif %}{% if m.unlock_level %}Lv{{ m.unlock_level }} {% endif %}{% if m.unlock_favor %}好感{{ m.unlock_favor }}{% endif %}</span>

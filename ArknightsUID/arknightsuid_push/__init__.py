@@ -169,14 +169,51 @@ def _format_ann_detail(detail: dict) -> str:
     if videos:
         extra.append(f"{len(videos)} 视频")
     if extra:
-        lines.append("（含 " + "+".join(extra) + "，详见链接）")
+        lines.append("（含 " + "+".join(extra) + "，超长原图已单独发送，完整内容见链接）")
     if detail.get("id"):
         lines.append(f"https://www.skland.com/article?id={detail['id']}")
     return "\n".join(lines)
 
 
-async def _announce_image_b64(url: str) -> str:
-    """公告配图直链 → base64（下载缓存 + webp 压缩；失败空串降级）。"""
+# 公告配图高宽比阈值：超过视为超长图（维护公告整图），不内嵌卡片，
+# 下载后按原画质单独追发（对齐 EndUID ann_detail_card 的 5 倍阈值）
+_ANN_LONG_IMAGE_RATIO = 5.0
+# 详情卡内嵌配图上限（防纯图帖把卡片撑爆渲染）；追发超长图上限（防刷屏）
+_ANN_CARD_IMAGE_LIMIT = 12
+_ANN_LONG_IMAGE_LIMIT = 6
+
+
+def split_ann_images(detail: dict) -> tuple[list[dict], list[str]]:
+    """公告配图 →（内嵌卡片的普通图, 单独追发的超长图直链）。
+
+    与视频封面重复的图片跳过（EndUID 同规则）；无尺寸信息的图按普通图
+    处理（内嵌显示宽度由卡片约束）。
+    """
+    video_cover_urls = {
+        str(v.get("coverUrl") or "") for v in detail.get("videos") or []
+    }
+    normal: list[dict] = []
+    longs: list[str] = []
+    for img in detail.get("images") or []:
+        url = str(img.get("url") or "")
+        if not url or url in video_cover_urls:
+            continue
+        width = int(img.get("width") or 0)
+        height = int(img.get("height") or 0)
+        if width > 0 and height / width > _ANN_LONG_IMAGE_RATIO:
+            longs.append(url)
+        else:
+            normal.append({"url": url, "width": width, "height": height})
+    return normal[:_ANN_CARD_IMAGE_LIMIT], longs[:_ANN_LONG_IMAGE_LIMIT]
+
+
+async def _announce_image_b64(
+    url: str, quality: int = 80, cover_size: tuple | None = None
+) -> str:
+    """公告配图直链 → base64（下载缓存 + webp 压缩；失败空串降级）。
+
+    cover_size 传 (宽, 高) 时中心裁切到该尺寸（列表封面缩略用，EndUID 同参）。
+    """
     if not url:
         return ""
     try:
@@ -184,11 +221,30 @@ async def _announce_image_b64(url: str) -> str:
         from ..utils.resource.RESOURCE_PATH import CACHE_PATH
 
         return await get_image_b64_with_cache(
-            url, CACHE_PATH / "announce", quality=82
+            url, CACHE_PATH / "announce", quality=quality, cover_size=cover_size
         )
     except Exception as e:
         logger.debug(f"[ArknightsUID] 公告配图下载失败: {e}")
         return ""
+
+
+async def _announce_long_image_bytes(url: str) -> bytes:
+    """超长公告图 → 独立追发用图片 bytes（下载缓存 + JPEG；失败空跳过）。"""
+    if not url:
+        return b""
+    try:
+        from gsuid_core.utils.image.convert import convert_img
+
+        from ..utils.image import pic_download_from_url
+        from ..utils.resource.RESOURCE_PATH import CACHE_PATH
+
+        img = await pic_download_from_url(CACHE_PATH / "announce", url)
+        return await convert_img(img)
+    except Exception as e:
+        logger.warning(
+            f"[ArknightsUID] 公告超长图处理失败: {e.__class__.__name__}"
+        )
+        return b""
 
 
 async def _show_ann_detail(bot: Bot, ev: Event, index: int) -> None:
@@ -205,33 +261,52 @@ async def _show_ann_detail(bot: Bot, ev: Event, index: int) -> None:
         return await _send_text(
             bot, ev, f"公告详情获取失败：{ann['title']}\n{ann.get('url', '')}"
         )
-    # 首张配图作卡片横幅；高长图（维护公告整图）不嵌入，只计数提示
-    banner_b64 = ""
-    for img in detail.get("images") or []:
-        width = int(img.get("width") or 0)
-        height = int(img.get("height") or 0)
-        if width and height and height / width > 3:
-            continue
-        banner_b64 = await _announce_image_b64(img.get("url", ""))
-        if banner_b64:
-            break
+    # 配图三路（对齐 EndUID）：普通图全部内嵌卡片、视频封面作封面位、
+    # 超长图（维护整图）下载后按原画质在卡片后单独追发
+    normal_images, long_urls = split_ann_images(detail)
+    card_images: list[dict] = []
+    for img in normal_images:
+        b64 = await _announce_image_b64(img["url"])
+        if b64:
+            card_images.append(
+                {"b64": b64, "width": img["width"], "height": img["height"]}
+            )
+    video_covers: list[dict] = []
+    for video in detail.get("videos") or []:
+        b64 = await _announce_image_b64(str(video.get("coverUrl") or ""))
+        if b64:
+            video_covers.append({"b64": b64})
+    avatar_b64 = await _announce_image_b64(
+        str(detail.get("userAvatar") or ""), quality=70
+    )
+    long_images = [
+        await _announce_long_image_bytes(url) for url in long_urls
+    ]
+    long_images = [img for img in long_images if img]
     context = {
         "version": ArknightsUID_version,
         "index": index,
         "title": detail.get("title", ""),
         "date": detail.get("date", ""),
         "author": detail.get("userName", ""),
+        "avatar": avatar_b64,
         "ip": detail.get("userIpLocation", ""),
         "url": f"https://www.skland.com/article?id={detail.get('id', '')}",
         "paragraphs": [
             p[:400] for p in (detail.get("paragraphs") or [])[:30]
         ],
-        "image": banner_b64,
+        "images": card_images,
+        "videos": video_covers,
+        "longImageCount": len(long_images),
         "imageCount": len(detail.get("images") or []),
         "videoCount": len(detail.get("videos") or []),
     }
     await send_card_or_text(
-        bot, ev, "ark_announce_detail.html", context, _format_ann_detail(detail)
+        bot, ev,
+        "ark_announce_detail.html",
+        context,
+        _format_ann_detail(detail),
+        extra_images=long_images,
     )
 
 
@@ -286,7 +361,13 @@ async def show_ark_activities(bot: Bot, ev: Event) -> None:
         "version": ArknightsUID_version,
         "activities": activity_rows,
         "pools": [
-            {"title": pool.title, "start": pool.start, "end": pool.end}
+            {
+                "title": pool.title,
+                "start": pool.start,
+                "end": pool.end,
+                # 卡池横幅：SMW 结果键即文件页（文件:xxx.jpg）→ md5 散列直链
+                "image": await _activity_banner_b64(pool.image_url),
+            }
             for pool in pools
         ],
     }
@@ -311,13 +392,27 @@ async def show_ark_announcements(bot: Bot, ev: Event) -> None:
     anns = await get_ark_ann_list()
     if not anns:
         return await _send_text(bot, ev, _format_ann_list(anns))
+    # 列表卡内嵌官方封面 + 作者头像（对齐 EndUID ann_list_card：
+    # 封面中心裁切 400x200 缩略；纯文本公告无封面时按空串降级为纯文字行）
+    ann_rows: list[dict] = []
+    for ann in anns:
+        ann_rows.append(
+            {
+                "title": ann["title"],
+                "date": ann.get("date", ""),
+                "url": ann.get("url", ""),
+                "author": ann.get("author", ""),
+                "cover": await _announce_image_b64(
+                    ann.get("cover", ""), quality=60, cover_size=(400, 200)
+                ),
+                "avatar": await _announce_image_b64(
+                    ann.get("avatar", ""), quality=70
+                ),
+            }
+        )
     context = {
         "version": ArknightsUID_version,
-        "anns": [
-            {"title": ann["title"], "date": ann.get("date", ""),
-             "url": ann.get("url", "")}
-            for ann in anns
-        ],
+        "anns": ann_rows,
     }
     await send_card_or_text(
         bot, ev, "ark_announce.html", context, _format_ann_list(anns)

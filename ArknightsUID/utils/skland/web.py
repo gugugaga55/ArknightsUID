@@ -200,10 +200,33 @@ def _format_ts(ts: Any) -> str:
     return datetime.fromtimestamp(value).strftime("%Y-%m-%d")
 
 
-def parse_ann_list(response: dict[str, Any] | None, limit: int = 10) -> list[dict[str, str]]:
-    """home/index 响应 → 公告列表（id/title/url/date，新→旧）。
+def _ann_cover_url(item: dict[str, Any]) -> str:
+    """列表项官方封面 → 直链（EndUID 同链路：imageCover → 首图 → 视频封面）。"""
+    cover = item.get("imageCover")
+    if isinstance(cover, dict) and cover.get("url"):
+        return str(cover["url"])
+    slices = item.get("imageListSlice")
+    if isinstance(slices, list) and slices:
+        first = slices[0]
+        if isinstance(first, dict) and first.get("url"):
+            return str(first["url"])
+    videos = item.get("videoListSlice")
+    if isinstance(videos, list) and videos:
+        video = videos[0]
+        if isinstance(video, dict):
+            vc = video.get("cover")
+            if isinstance(vc, dict) and vc.get("url"):
+                return str(vc["url"])
+    return ""
+
+
+def parse_ann_list(
+    response: dict[str, Any] | None, limit: int = 10
+) -> list[dict[str, str]]:
+    """home/index 响应 → 公告列表（id/title/url/date/cover/author/avatar，新→旧）。
 
     响应结构（与终末地同型）：data.list[] = {item: {title, url, date...}, user: {...}}
+    cover/avatar 供列表卡内嵌官方图（纯文本公告无封面时为空串）。
     """
     if not isinstance(response, dict) or response.get("code") != 0:
         return []
@@ -225,12 +248,16 @@ def parse_ann_list(response: dict[str, Any] | None, limit: int = 10) -> list[dic
         if not url and item.get("id"):
             # 明日方舟列表项无 url 字段，统一拼 web 端文章页
             url = f"https://www.skland.com/article?id={item['id']}"
+        user = entry.get("user") if isinstance(entry.get("user"), dict) else {}
         result.append(
             {
                 "id": str(item.get("id") or ""),
                 "title": title,
                 "url": url,
                 "date": date,
+                "cover": _ann_cover_url(item),
+                "author": str(user.get("nickname") or "").strip(),
+                "avatar": str(user.get("avatar") or "").strip(),
             }
         )
         if len(result) >= limit:

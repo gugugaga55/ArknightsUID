@@ -173,7 +173,32 @@ class PushCardContractTest(unittest.TestCase):
         })
         self.assertIn("ArknightsUID", html)
         self.assertIn("闪断更新公告", html)
-        self.assertIn("08-08", html)
+
+    def test_announce_detail_card_media(self) -> None:
+        """详情卡媒体契约：画廊/视频封面/头像/长图追发提示（对齐 EndUID）。"""
+        html = _render("ark_announce_detail.html", {
+            "version": VERSION,
+            "index": 2,
+            "title": "限时活动开启公告",
+            "date": "2026-08-07",
+            "author": "明日方舟",
+            "avatar": "data:image/png;base64,AAAA",
+            "ip": "上海",
+            "url": "https://www.skland.com/article?id=1",
+            "paragraphs": ["正文段落"],
+            "images": [
+                {"b64": "data:image/webp;base64,BBBB", "width": 100, "height": 100},
+            ],
+            "videos": [{"b64": "data:image/webp;base64,CCCC"}],
+            "longImageCount": 1,
+            "imageCount": 2,
+            "videoCount": 1,
+        })
+        self.assertIn("data:image/png;base64,AAAA", html)      # 头像
+        self.assertIn("data:image/webp;base64,BBBB", html)     # 配图画廊
+        self.assertIn("data:image/webp;base64,CCCC", html)     # 视频封面
+        self.assertIn("超长原图", html)                          # 追发提示
+        self.assertIn("正文段落", html)
 
     def test_drop_rate_card(self) -> None:
         html = _render("ark_drop_rate.html", {

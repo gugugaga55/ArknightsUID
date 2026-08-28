@@ -144,6 +144,35 @@ def _build_rogue_context(response: object) -> dict | None:
     }
 
 
+async def _fill_rogue_theme_images(context: dict) -> None:
+    """每期肉鸽配主题 KV 图：主题名 → PRTS 主题页信息框标题图（与活动横幅
+    同源，activity_banner_urls 批量取），下载缓存后 b64 内嵌；失败按无图降级。
+    """
+    records = context.get("records") or []
+    names = [str(r.get("name") or "") for r in records]
+    if not names:
+        return
+    try:
+        from ..utils.prts.client import activity_banner_urls
+        from ..utils.render import get_image_b64_with_cache
+        from ..utils.resource.RESOURCE_PATH import CACHE_PATH
+
+        banner_urls = await activity_banner_urls(names)
+        for r in records:
+            url = banner_urls.get(str(r.get("name") or ""), "")
+            r["image"] = (
+                await get_image_b64_with_cache(
+                    url, CACHE_PATH / "rogue_theme", quality=82
+                )
+                if url
+                else ""
+            )
+    except Exception:
+        from gsuid_core.logger import logger
+
+        logger.debug("[ArknightsUID] 肉鸽主题图获取失败", exc_info=True)
+
+
 def _parse_rogue_query(text: str) -> tuple[str, str | None, int | None, bool]:
     """`名字 [期] [难度] [紧急]` → (敌人名/关卡名, 期目录, 难度, 紧急)。
 
@@ -653,6 +682,7 @@ async def send_rogue_info(bot: Bot, ev: Event) -> None:
     # 前端卡片路径：模板缺失/渲染失败时回退纯文本（与 wiki 模块同模式）
     context = _build_rogue_context(response)
     if context is not None:
+        await _fill_rogue_theme_images(context)
         img = None
         try:
             from ..utils.render import ark_templates, render_html
