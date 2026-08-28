@@ -134,7 +134,9 @@ class WebAnnTest(unittest.IsolatedAsyncioTestCase):
             "data": {
                 "list": [
                     {"item": {"id": "9", "title": "维护公告", "url": "https://x/9",
-                              "date": "2026-08-14"}},
+                              "date": "2026-08-14",
+                              "imageCover": {"url": "https://img/9.webp"}},
+                     "user": {"nickname": "罗德岛公共", "avatar": "https://img/a9.webp"}},
                     {"item": {"title": ""}},  # 空 title 跳过
                     {"item": {"id": "8", "title": "活动开启", "url": "", "date": ""}},
                 ]
@@ -144,9 +146,32 @@ class WebAnnTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(anns), 2)
         self.assertEqual(anns[0]["title"], "维护公告")
         self.assertEqual(anns[0]["id"], "9")
+        self.assertEqual(anns[0]["cover"], "https://img/9.webp")
+        self.assertEqual(anns[0]["author"], "罗德岛公共")
+        self.assertEqual(anns[0]["avatar"], "https://img/a9.webp")
         self.assertEqual(anns[1]["title"], "活动开启")
+        # 纯文本公告无封面/作者 → 空串（列表卡降级为纯文字行）
+        self.assertEqual(anns[1]["cover"], "")
+        self.assertEqual(anns[1]["author"], "")
         self.assertEqual(sk_web.parse_ann_list(None), [])
         self.assertEqual(sk_web.parse_ann_list({"code": 1}), [])
+
+    def test_parse_ann_list_cover_fallback_chain(self) -> None:
+        # 封面降级链路（EndUID 同规则）：imageCover → 首图 → 视频封面
+        response = {
+            "code": 0,
+            "data": {"list": [
+                {"item": {"id": "1", "title": "首图兜底",
+                          "imageListSlice": [{"url": "https://img/s1.webp"}]}},
+                {"item": {"id": "2", "title": "视频封面兜底",
+                          "videoListSlice": [{"cover": {"url": "https://img/v1.webp"}}]}},
+                {"item": {"id": "3", "title": "无任何媒体"}},
+            ]},
+        }
+        anns = sk_web.parse_ann_list(response)
+        self.assertEqual(anns[0]["cover"], "https://img/s1.webp")
+        self.assertEqual(anns[1]["cover"], "https://img/v1.webp")
+        self.assertEqual(anns[2]["cover"], "")
 
     def test_parse_ann_list_url_and_date_fallback(self) -> None:
         # 明日方舟列表项无 url/date 字段：拼文章页链接 + publishedAtTs（毫秒）转日期
@@ -321,6 +346,47 @@ class AnnDetailFormatTest(unittest.TestCase):
         self.assertIn("…", text)  # 超长段落截断
         self.assertIn("1 图", text)
         self.assertIn("https://www.skland.com/article?id=9", text)
+
+
+class SplitAnnImagesTest(unittest.TestCase):
+    """公告配图分流（对齐 EndUID ann_detail_card：普通图内嵌 / 超长图追发）。"""
+
+    def test_split_by_ratio_and_skip_video_covers(self) -> None:
+        from ArknightsUID.arknightsuid_push import split_ann_images
+
+        normal, longs = split_ann_images({
+            "images": [
+                {"url": "https://img/normal.webp", "width": 1200, "height": 900},
+                {"url": "https://img/maint.webp", "width": 800, "height": 8000},  # 10 倍超长
+                {"url": "https://img/cover.webp", "width": 600, "height": 400},   # 视频封面重复
+                {"url": "https://img/nosize.webp", "width": 0, "height": 0},      # 无尺寸按普通图
+            ],
+            "videos": [{"url": "https://v/1", "coverUrl": "https://img/cover.webp"}],
+        })
+        self.assertEqual(
+            [img["url"] for img in normal],
+            ["https://img/normal.webp", "https://img/nosize.webp"],
+        )
+        self.assertEqual(longs, ["https://img/maint.webp"])
+
+    def test_limits_truncate(self) -> None:
+        from ArknightsUID.arknightsuid_push import (
+            _ANN_CARD_IMAGE_LIMIT,
+            _ANN_LONG_IMAGE_LIMIT,
+            split_ann_images,
+        )
+
+        normal, longs = split_ann_images({
+            "images": [
+                *[{"url": f"https://img/n{i}", "width": 100, "height": 100}
+                  for i in range(_ANN_CARD_IMAGE_LIMIT + 5)],
+                *[{"url": f"https://img/l{i}", "width": 100, "height": 1000}
+                  for i in range(_ANN_LONG_IMAGE_LIMIT + 5)],
+            ],
+            "videos": [],
+        })
+        self.assertEqual(len(normal), _ANN_CARD_IMAGE_LIMIT)
+        self.assertEqual(len(longs), _ANN_LONG_IMAGE_LIMIT)
 
 
 class YituliuCacheTest(unittest.IsolatedAsyncioTestCase):

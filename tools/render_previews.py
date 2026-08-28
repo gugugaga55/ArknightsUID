@@ -283,16 +283,16 @@ MOCK_CONTEXTS = {
                 },
             },
             {
-                "id": "uniequip_003_svrash",
-                "name": "崖岸切割者",
-                "type": "Y",
-                "type_name": "领袖的决断",
-                "desc": "「真银斩」技能期间攻击重量大于等于4的敌人时攻击力提升",
-                "unlock_phase": 2,
-                "unlock_level": 70,
+                "id": "uniequip_001_svrash",
+                "name": "银灰证章",
+                "type": "ORIGINAL",
+                "type_name": "基础证章",
+                "desc": "干员银灰的模组证章，喀兰贸易颁发了这枚象征信任的证章。",
+                "unlock_phase": 0,
+                "unlock_level": 0,
                 "unlock_favor": 0,
-                "costs": [{"name": "模组数据块", "count": 4, "icon": ""}],
-                "level_attrs": {"L1": "生命 +180，攻击 +30"},
+                "costs": [],
+                "level_attrs": {},
             },
         ],
         "version": VERSION,
@@ -752,32 +752,35 @@ MOCK_CONTEXTS = {
         "version": VERSION,
     },
     "ark_activity.html": {
+        # 静态兜底（enrich 阶段整体替换为实时活动/卡池 + 官方横幅，生产同源）
         "activities": [
-            {"title": "SideStory「挽歌燃烧殆尽」", "start": "08-09 16:00", "end": "08-30 03:59"},
-            {"title": "危机合约「弧光作战」", "start": "08-16 16:00", "end": "08-30 03:59"},
-            {"title": "「促融共竞」#2", "start": "08-22 16:00", "end": "09-05 03:59"},
+            {"title": "SideStory「挽歌燃烧殆尽」", "start": "08-09 16:00", "end": "08-30 03:59", "image": ""},
+            {"title": "危机合约「弧光作战」", "start": "08-16 16:00", "end": "08-30 03:59", "image": ""},
         ],
         "pools": [
-            {"title": "【限定寻访·庆典】「宿愿」", "start": "08-09 16:00", "end": "08-23 03:59"},
-            {"title": "【中坚寻访】", "start": "08-15 04:00", "end": "08-29 03:59"},
+            {"title": "【限定寻访·庆典】「宿愿」", "start": "08-09 16:00", "end": "08-23 03:59", "image": ""},
         ],
         "version": VERSION,
     },
     "ark_announce.html": {
+        # 静态兜底（enrich 阶段整体替换为森空岛实时公告列表 + 真实封面/头像）
         "anns": [
-            {"title": "《明日方舟》2026年夏日嘉年华活动公告", "date": "08-09", "url": ""},
-            {"title": "SideStory「挽歌燃烧殆尽」限时活动开启公告", "date": "08-07", "url": ""},
-            {"title": "08月09日 16:00 闪断更新公告", "date": "08-08", "url": ""},
-            {"title": "「弧光作战」危机合约开启公告", "date": "08-14", "url": ""},
-            {"title": "新干员追加：维什戴尔、逻各斯", "date": "08-05", "url": ""},
+            {"title": "《明日方舟》2026年夏日嘉年华活动公告", "date": "08-09",
+             "author": "", "cover": "", "avatar": "", "url": ""},
+            {"title": "SideStory「挽歌燃烧殆尽」限时活动开启公告", "date": "08-07",
+             "author": "", "cover": "", "avatar": "", "url": ""},
+            {"title": "08月09日 16:00 闪断更新公告", "date": "08-08",
+             "author": "", "cover": "", "avatar": "", "url": ""},
         ],
         "version": VERSION,
     },
     "ark_announce_detail.html": {
+        # 静态兜底（enrich 阶段整体替换为真实公告详情：标题/头像/段落/配图/视频封面）
         "index": 2,
         "title": "SideStory「挽歌燃烧殆尽」限时活动开启公告",
         "date": "2026-08-07",
         "author": "明日方舟",
+        "avatar": "",
         "ip": "上海",
         "url": "https://www.skland.com/article?id=6240522",
         "paragraphs": [
@@ -786,8 +789,10 @@ MOCK_CONTEXTS = {
             "新增干员：维什戴尔（六星·狙击）、逻各斯（五星·术师）。",
             "完成活动关卡与任务可获取合成玉、物资筹备券与限定家具等奖励。",
         ],
-        "image": "",
-        "imageCount": 3,
+        "images": [],
+        "videos": [],
+        "longImageCount": 0,
+        "imageCount": 0,
         "videoCount": 0,
         "version": VERSION,
     },
@@ -824,13 +829,14 @@ MOCK_CONTEXTS = {
         "game_version": "2.7.21",
         "game_updated": "2026-08-09",
         "maint_text": "下次维护：2026-08-22 06:00（还剩 6 天 18 小时）",
+        # 静态兜底（enrich 阶段整体替换为实时活动/卡池 + 标题图，生产同源）
         "activities": [
-            {"title": "SideStory「挽歌燃烧殆尽」", "remaining": "还剩 14 天", "start": "08-09 16:00", "end": "08-30 03:59"},
-            {"title": "危机合约「弧光作战」", "remaining": "还剩 15 天", "start": "08-16 16:00", "end": "08-30 03:59"},
+            {"title": "SideStory「挽歌燃烧殆尽」", "remaining": "还剩 14 天", "start": "08-09 16:00", "end": "08-30 03:59", "image": ""},
+            {"title": "危机合约「弧光作战」", "remaining": "还剩 15 天", "start": "08-16 16:00", "end": "08-30 03:59", "image": ""},
         ],
         "pools": [
-            {"title": "【限定寻访·庆典】「宿愿」", "remaining": "还剩 7 天"},
-            {"title": "【中坚寻访】", "remaining": "还剩 13 天"},
+            {"title": "【限定寻访·庆典】「宿愿」", "remaining": "还剩 7 天", "image": ""},
+            {"title": "【中坚寻访】", "remaining": "还剩 13 天", "image": ""},
         ],
         "version": VERSION,
     },
@@ -1083,6 +1089,238 @@ async def _enrich_icons(name: str, context: dict) -> None:
                 "",
             )
             row["avatar"] = await char_avatar_b64(hit) if hit else ""
+
+    if name == "ark_craft.html":
+        # 目标材料图标 + 首两层子材料图标（与生产 show_craft_tree 同规则）
+        context["icon"] = await item_icon_b64(context["name"])
+        for row in context.get("rows", []):
+            if int(row.get("depth") or 0) <= 1:
+                for c in row.get("costs", []):
+                    c["icon"] = await item_icon_b64(c.get("name") or "")
+
+    if name == "ark_module.html":
+        # 模组图标（PRTS torappu）+ 解锁材料图标（与生产 send_module_info 同源）
+        from ArknightsUID.utils.path import EQUIP_CACHE_PATH
+        from ArknightsUID.utils.player.context import equip_icon_url
+        from ArknightsUID.utils.render import get_image_b64_with_cache
+
+        for m in context.get("modules", []):
+            m["icon"] = await get_image_b64_with_cache(
+                equip_icon_url(str(m.get("id") or "")), EQUIP_CACHE_PATH
+            )
+            for c in m.get("costs", []):
+                c["icon"] = await item_icon_b64(c.get("name") or "")
+
+    if name == "ark_rogue.html":
+        # 每期主题 KV（PRTS 主题页标题图，与生产 _fill_rogue_theme_images 同源）
+        try:
+            from ArknightsUID.utils.prts.client import activity_banner_urls
+            from ArknightsUID.utils.render import get_image_b64_with_cache
+            from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
+
+            names = [str(r.get("name") or "") for r in context.get("records", [])]
+            banner_urls = await activity_banner_urls(names)
+            for r in context.get("records", []):
+                url = banner_urls.get(str(r.get("name") or ""), "")
+                r["image"] = (
+                    await get_image_b64_with_cache(
+                        url, CACHE_PATH / "rogue_theme", quality=82
+                    )
+                    if url
+                    else ""
+                )
+        except Exception as e:
+            print(f"⚠️  ark_rogue 主题图拉取失败，按无图降级: {e}")
+
+    if name == "ark_activity.html":
+        # 实时活动/卡池 + 官方标题图（与生产 show_ark_activities 同源），
+        # 失败保留静态占位（无图行，与缺图降级一致）
+        try:
+            from ArknightsUID.utils.prts.client import (
+                activity_banner_urls,
+                query_activities,
+                query_gacha_pools,
+            )
+            from ArknightsUID.utils.render import get_image_b64_with_cache
+            from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
+
+            activities = await query_activities()
+            pools = await query_gacha_pools()
+            banner_urls = await activity_banner_urls(
+                [a.title for a in activities]
+            )
+
+            async def _act_b64(url: str) -> str:
+                return (
+                    await get_image_b64_with_cache(
+                        url, CACHE_PATH / "activity", quality=82
+                    )
+                    if url
+                    else ""
+                )
+
+            acts = [
+                {"title": a.title, "start": a.start, "end": a.end,
+                 "image": await _act_b64(banner_urls.get(a.title, ""))}
+                for a in activities
+            ]
+            pls = [
+                {"title": p.title, "start": p.start, "end": p.end,
+                 "image": await _act_b64(p.image_url)}
+                for p in pools
+            ]
+            if acts:
+                context["activities"] = acts
+            if pls:
+                context["pools"] = pls
+        except Exception as e:
+            print(f"⚠️  ark_activity 实时数据失败，保留静态占位: {e}")
+
+    if name == "ark_calendar.html":
+        # 实时活动/卡池 + 标题图（与生产 send_calendar 同源），失败保留静态占位
+        try:
+            from datetime import datetime, timedelta, timezone
+
+            from ArknightsUID.arknightsuid_wiki import _format_remaining
+            from ArknightsUID.utils.prts.client import (
+                activity_banner_urls,
+                query_activities,
+                query_gacha_pools,
+            )
+            from ArknightsUID.utils.render import get_image_b64_with_cache
+            from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
+
+            now_ts = datetime.now(timezone(timedelta(hours=8))).timestamp()
+            activities = await query_activities()
+            pools = await query_gacha_pools()
+            banner_urls = await activity_banner_urls(
+                [a.title for a in activities]
+            )
+
+            async def _cal_b64(url: str) -> str:
+                return (
+                    await get_image_b64_with_cache(
+                        url, CACHE_PATH / "activity", quality=82
+                    )
+                    if url
+                    else ""
+                )
+
+            acts = [
+                {"title": a.title,
+                 "remaining": _format_remaining(a.end_ts, now_ts),
+                 "start": a.start, "end": a.end,
+                 "image": await _cal_b64(banner_urls.get(a.title, ""))}
+                for a in activities
+            ]
+            pls = [
+                {"title": p.title,
+                 "remaining": _format_remaining(p.end_ts, now_ts),
+                 "image": await _cal_b64(p.image_url)}
+                for p in pools
+            ]
+            if acts:
+                context["activities"] = acts
+            if pls:
+                context["pools"] = pls
+        except Exception as e:
+            print(f"⚠️  ark_calendar 实时数据失败，保留静态占位: {e}")
+
+    if name == "ark_announce.html":
+        # 森空岛实时公告列表 + 真实封面/头像（与生产 show_ark_announcements 同源）
+        try:
+            from ArknightsUID.arknightsuid_push import get_ark_ann_list
+            from ArknightsUID.utils.render import get_image_b64_with_cache
+            from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
+
+            anns = await get_ark_ann_list()
+            if anns:
+                rows = []
+                for ann in anns:
+                    rows.append({
+                        "title": ann["title"],
+                        "date": ann.get("date", ""),
+                        "url": ann.get("url", ""),
+                        "author": ann.get("author", ""),
+                        "cover": await get_image_b64_with_cache(
+                            ann.get("cover", ""), CACHE_PATH / "announce",
+                            quality=60, cover_size=(400, 200),
+                        ),
+                        "avatar": await get_image_b64_with_cache(
+                            ann.get("avatar", ""), CACHE_PATH / "announce",
+                            quality=70,
+                        ),
+                    })
+                context["anns"] = rows
+        except Exception as e:
+            print(f"⚠️  ark_announce 实时列表失败，保留静态占位: {e}")
+
+    if name == "ark_announce_detail.html":
+        # 真实公告详情（森空岛 web 免登录，优先挑带配图的一条；
+        # 与生产 _show_ann_detail 同源：普通图内嵌、视频封面占位、超长图只计数）
+        try:
+            from ArknightsUID.arknightsuid_push import (
+                get_ann_detail,
+                get_ark_ann_list,
+                split_ann_images,
+            )
+            from ArknightsUID.utils.render import get_image_b64_with_cache
+            from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
+
+            async def _ann_b64(url: str, quality: int = 80) -> str:
+                return await get_image_b64_with_cache(
+                    url, CACHE_PATH / "announce", quality=quality
+                )
+
+            anns = await get_ark_ann_list()
+            detail = None
+            detail_index = 0
+            for i, ann in enumerate(anns or [], start=1):
+                d = await get_ann_detail(ann["id"])
+                if d and (d.get("images") or []):
+                    detail, detail_index = d, i
+                    break
+            if detail:
+                normal_images, long_urls = split_ann_images(detail)
+                card_images = []
+                for img in normal_images:
+                    b64 = await _ann_b64(img["url"])
+                    if b64:
+                        card_images.append({
+                            "b64": b64,
+                            "width": img["width"],
+                            "height": img["height"],
+                        })
+                video_covers = []
+                for v in detail.get("videos") or []:
+                    b64 = await _ann_b64(str(v.get("coverUrl") or ""))
+                    if b64:
+                        video_covers.append({"b64": b64})
+                context.update({
+                    "index": detail_index,
+                    "title": detail.get("title", ""),
+                    "date": detail.get("date", ""),
+                    "author": detail.get("userName", ""),
+                    "avatar": await _ann_b64(
+                        str(detail.get("userAvatar") or ""), 70
+                    ),
+                    "ip": detail.get("userIpLocation", ""),
+                    "url": (
+                        "https://www.skland.com/article"
+                        f"?id={detail.get('id', '')}"
+                    ),
+                    "paragraphs": [
+                        p[:400]
+                        for p in (detail.get("paragraphs") or [])[:30]
+                    ],
+                    "images": card_images,
+                    "videos": video_covers,
+                    "longImageCount": len(long_urls),
+                    "imageCount": len(detail.get("images") or []),
+                    "videoCount": len(detail.get("videos") or []),
+                })
+        except Exception as e:
+            print(f"⚠️  ark_announce_detail 真实公告失败，保留静态占位: {e}")
 
     # 头像增强（面板模拟卡用 char_id 换头像）
     if name == "ark_op_panel.html":

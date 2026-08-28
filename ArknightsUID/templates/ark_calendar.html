@@ -6,13 +6,29 @@
     game_version: str       当前版本号（可空）
     game_updated: str       版本更新日期（可空）
     maint_text: str         维护状态文案（可空，如 "维护中，预计 xx 结束"）
-    activities: [{title: str, remaining: str, start: str, end: str}]
-    pools: [{title: str, remaining: str}]
+    activities: [{title: str, remaining: str, start: str, end: str,
+                  image: str}]   活动标题图 b64（PRTS，可空串降级）
+    pools: [{title: str, remaining: str, image: str}]   卡池横幅 b64（可空串降级）
     version: str
 -->
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head>{% include "ark_head.html" %}</head>
+<head>{% include "ark_head.html" %}
+<style>
+    /* 条目横幅（活动标题图 / 卡池横幅）：定高裁切撑满宽，缺图时只剩标题行 */
+    .cal-block { border-bottom: 1px solid var(--hairline); }
+    .cal-block .row { border-bottom: none; }
+    .cal-banner {
+        display: block;
+        width: 100%;
+        height: 108px;
+        object-fit: cover;
+        object-position: center 32%;
+        margin-top: var(--space-3);
+        border: 1px solid var(--hairline);
+    }
+</style>
+</head>
 <body>
     <div class="container" data-ghost="CALENDAR">
         <div class="mast">
@@ -53,9 +69,14 @@
         </div>
         <div class="rows">
             {% for act in activities %}
-            <div class="row">
-                <span class="row-value" style="font-size: 13px;">{{ act.title }}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 6px;">{{ act.start }} ~ {{ act.end }}</span></span>
-                <span class="bar-num u-yellow" style="font-size: 12px; font-weight: 700;">{{ act.remaining }}</span>
+            <div class="cal-block">
+                {% if act.image %}
+                <img class="cal-banner" src="{{ act.image }}" alt="">
+                {% endif %}
+                <div class="row">
+                    <span class="row-value" style="font-size: 13px;">{{ act.title }}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 6px;">{{ act.start }} ~ {{ act.end }}</span></span>
+                    <span class="bar-num u-yellow" style="font-size: 12px; font-weight: 700;">{{ act.remaining }}</span>
+                </div>
             </div>
             {% endfor %}
         </div>
@@ -68,9 +89,14 @@
         </div>
         <div class="rows">
             {% for p in pools %}
-            <div class="row">
-                <span class="row-value" style="font-size: 13px;">{{ p.title }}</span>
-                <span class="bar-num u-yellow" style="font-size: 12px; font-weight: 700;">{{ p.remaining }}</span>
+            <div class="cal-block">
+                {% if p.image %}
+                <img class="cal-banner" src="{{ p.image }}" alt="">
+                {% endif %}
+                <div class="row">
+                    <span class="row-value" style="font-size: 13px;">{{ p.title }}</span>
+                    <span class="bar-num u-yellow" style="font-size: 12px; font-weight: 700;">{{ p.remaining }}</span>
+                </div>
             </div>
             {% endfor %}
         </div>

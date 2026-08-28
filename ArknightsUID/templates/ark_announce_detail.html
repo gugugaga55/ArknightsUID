@@ -1,11 +1,13 @@
 <!--
   ark_announce_detail.html —— 官方公告详情卡（#17b）
   设计语言：罗德岛终端（见 ark_base.css 头部注释）
-  上下文（由 arknightsuid_push._show_ann_detail 组装）：
+  上下文（由 arknightsuid_push._show_ann_detail 组装，对齐 EndUID ann_detail_card）：
     index: int              列表编号
-    title / date / author / ip / url: str
+    title / date / author / avatar / ip / url: str   avatar 为发布者头像 b64（可空串）
     paragraphs: [str]       正文段落（format 还原阅读顺序，已截断）
-    image: str              首张横幅配图 b64（高长图跳过，可空串）
+    images: [{b64, width, height}]   全部普通配图（高宽比≤5，内嵌卡片；下载失败项已剔除）
+    videos: [{b64}]         视频封面 b64（卡片内只展示封面+播放角标）
+    longImageCount: int     超长图张数（已按原画质在卡片后单独发送）
     imageCount / videoCount: int
     version: str
 -->
@@ -18,16 +20,45 @@
         margin-top: var(--space-4); padding: var(--space-3) var(--space-4);
         border: 1px solid var(--hairline); background: var(--panel);
     }
-    .ann-meta .kv { font-size: 12px; color: var(--tx-2); }
-    .ann-meta .kv b { color: var(--tx-0); font-weight: 600; margin-left: 4px; }
-    .ann-banner {
-        display: block; width: 100%;
-        margin-top: var(--space-4); border: 1px solid var(--hairline);
+    .ann-meta .kv {
+        display: inline-flex; align-items: center; gap: 6px;
+        font-size: 12px; color: var(--tx-2);
+    }
+    .ann-meta .kv b { color: var(--tx-0); font-weight: 600; }
+    .ann-meta .kv .avatar {
+        width: 22px; height: 22px; border-radius: 50%;
+        border: 1px solid var(--hairline); object-fit: cover;
     }
     .ann-paras { margin-top: var(--space-4); display: grid; gap: var(--space-3); }
     .ann-paras p {
         margin: 0; font-size: 13px; line-height: 1.8; color: var(--tx-1);
         word-break: break-word; white-space: pre-wrap;
+    }
+    /* 配图画廊：按原帖顺序纵向堆叠（EndUID content-image 同布局） */
+    .ann-images {
+        margin-top: var(--space-4); display: grid; gap: var(--space-3);
+    }
+    .ann-images img {
+        display: block; width: 100%;
+        border: 1px solid var(--hairline);
+    }
+    /* 视频封面：播放角标提示点击链接观看 */
+    .ann-video {
+        position: relative; margin-top: var(--space-3);
+    }
+    .ann-video img {
+        display: block; width: 100%;
+        border: 1px solid var(--hairline);
+    }
+    .ann-video .play {
+        position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+        width: 44px; height: 44px; border-radius: 50%;
+        background: rgba(0, 0, 0, 0.55); border: 1px solid rgba(255, 255, 255, 0.8);
+    }
+    .ann-video .play::after {
+        content: ""; position: absolute; left: 17px; top: 13px;
+        border-style: solid; border-width: 9px 0 9px 14px;
+        border-color: transparent transparent transparent #fff;
     }
     .ann-media {
         margin-top: var(--space-4); padding: var(--space-2) var(--space-4);
@@ -62,14 +93,13 @@
         </div>
 
         <div class="ann-meta">
+            {% if avatar %}
+            <span class="kv"><img class="avatar" src="{{ avatar }}" alt=""></span>
+            {% endif %}
             {% if author %}<span class="kv">发布者<b>{{ author }}</b></span>{% endif %}
             {% if date %}<span class="kv">日期<b>{{ date }}</b></span>{% endif %}
             {% if ip %}<span class="kv">IP<b>{{ ip }}</b></span>{% endif %}
         </div>
-
-        {% if image %}
-        <img class="ann-banner" src="{{ image }}" alt="">
-        {% endif %}
 
         {% if paragraphs %}
         <div class="ann-paras">
@@ -77,11 +107,32 @@
             <p>{{ para }}</p>
             {% endfor %}
         </div>
-        {% else %}
+        {% endif %}
+
+        {% if images %}
+        <div class="ann-images">
+            {% for img in images %}
+            <img src="{{ img.b64 }}" alt="">
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% for video in videos %}
+        <div class="ann-video">
+            <img src="{{ video.b64 }}" alt="">
+            <span class="play"></span>
+        </div>
+        {% endfor %}
+
+        {% if not paragraphs and not images and not videos %}
         <div class="prose" style="margin-top: var(--space-4);">该公告无正文文本（纯图/视频帖）。</div>
         {% endif %}
 
-        {% if imageCount or videoCount %}
+        {% if longImageCount %}
+        <div class="ann-media">
+            另含 {{ longImageCount }} 张超长原图（维护整图等），已在后方单独发送
+        </div>
+        {% elif imageCount or videoCount %}
         <div class="ann-media">
             本帖含 {{ imageCount }} 张图片{% if videoCount %}、{{ videoCount }} 个视频{% endif %}，完整内容见链接
         </div>

@@ -2,20 +2,23 @@
   ark_activity.html —— 进行中活动 / 限定卡池卡（#16）
   设计语言：罗德岛终端（见 ark_base.css 头部注释）
   上下文（由 arknightsuid_push.show_ark_activities 组装）：
-    activities: [{title, start, end, image}]   限时活动（可空；image 为官方标题图 b64，可空串降级）
-    pools: [{title: str, start: str, end: str}]        限定卡池（可空）
+    activities: [{title, start, end, image}]   限时活动（可空；image 为 PRTS 标题图 b64，可空串降级）
+    pools: [{title, start, end, image}]        限定卡池（可空；image 为 SMW 文件页横幅 b64，可空串降级）
     version: str
 -->
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>{% include "ark_head.html" %}
 <style>
-    /* 活动块：官方标题图（PRTS 页信息框「标题图文件名」，缺图时只剩标题行） */
+    /* 条目块：官方标题图（活动页信息框「标题图文件名」/ 卡池 SMW 文件页），缺图时只剩标题行 */
     .act-block { border-bottom: 1px solid var(--hairline); }
     .act-block .row { border-bottom: none; }
     .act-banner {
         display: block;
         width: 100%;
+        height: 118px;
+        object-fit: cover;
+        object-position: center 32%;
         margin-top: var(--space-3);
         border: 1px solid var(--hairline);
     }
@@ -64,9 +67,14 @@
         </div>
         <div class="rows">
             {% for p in pools %}
-            <div class="row">
-                <span class="row-value" style="font-size: 13px;">{{ p.title }}</span>
-                <span class="bar-num">{{ p.start }} ~ {{ p.end }}</span>
+            <div class="act-block">
+                {% if p.image %}
+                <img class="act-banner" src="{{ p.image }}" alt="">
+                {% endif %}
+                <div class="row">
+                    <span class="row-value" style="font-size: 13px;">{{ p.title }}</span>
+                    <span class="bar-num">{{ p.start }} ~ {{ p.end }}</span>
+                </div>
             </div>
             {% endfor %}
         </div>

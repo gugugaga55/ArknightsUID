@@ -1,13 +1,43 @@
 <!--
   ark_announce.html —— 官方公告列表卡（#17）
   设计语言：罗德岛终端（见 ark_base.css 头部注释）
-  上下文（由 arknightsuid_push.show_ark_announcements 组装）：
-    anns: [{title: str, date: str, url: str}]   公告列表（date 可空）
+  上下文（由 arknightsuid_push.show_ark_announcements 组装，对齐 EndUID ann_list_card）：
+    anns: [{title: str, date: str, url: str, author: str,
+            cover: str, avatar: str}]   官方封面/头像 b64（纯文本公告为空串）
     version: str
 -->
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head>{% include "ark_head.html" %}</head>
+<head>{% include "ark_head.html" %}
+<style>
+    /* 公告列表：官方封面媒体行（封面 16:9 缩略 + 标题 + 作者/日期） */
+    .ann-list { margin-top: var(--space-5); border-top: 1px solid var(--hairline); }
+    .ann-item {
+        display: flex; align-items: flex-start; gap: var(--space-3);
+        padding: 10px 2px; border-bottom: 1px solid var(--hairline);
+    }
+    .ann-item .idx--ghost { margin-top: 2px; flex-shrink: 0; }
+    .ann-cover {
+        display: block; width: 132px; height: 74px;
+        object-fit: cover; flex-shrink: 0;
+        border: 1px solid var(--hairline); background: var(--panel-2);
+    }
+    .ann-body { flex: 1; min-width: 0; display: grid; gap: 6px; }
+    .ann-title {
+        font-size: 13px; font-weight: 600; line-height: 1.55;
+        color: var(--tx-0); word-break: break-word;
+    }
+    .ann-meta2 {
+        display: flex; align-items: center; gap: 6px;
+        font-size: 11px; color: var(--tx-2);
+    }
+    .ann-meta2 .avatar {
+        width: 18px; height: 18px; border-radius: 50%;
+        border: 1px solid var(--hairline); object-fit: cover;
+    }
+    .ann-meta2 .date { margin-left: auto; font-family: var(--mono); }
+</style>
+</head>
 <body>
     <div class="container" data-ghost="NOTICE">
         <div class="mast">
@@ -24,13 +54,28 @@
             <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_announce.b64" %}" alt="">
         </div>
 
-        <div class="rows" style="margin-top: var(--space-5);">
+        <div class="ann-list">
             {% for ann in anns %}
+            {% if ann.cover %}
+            <div class="ann-item">
+                <span class="idx idx--ghost">{{ "%02d" | format(loop.index) }}</span>
+                <img class="ann-cover" src="{{ ann.cover }}" alt="">
+                <span class="ann-body">
+                    <span class="ann-title">{{ ann.title }}</span>
+                    <span class="ann-meta2">
+                        {% if ann.avatar %}<img class="avatar" src="{{ ann.avatar }}" alt="">{% endif %}
+                        {% if ann.author %}<span>{{ ann.author }}</span>{% endif %}
+                        <span class="date">{{ ann.date }}</span>
+                    </span>
+                </span>
+            </div>
+            {% else %}
             <div class="row" style="align-items: flex-start;">
                 <span class="idx idx--ghost" style="margin-top: 3px;">{{ "%02d" | format(loop.index) }}</span>
                 <span class="row-value" style="flex: 1; min-width: 0; margin-left: var(--space-3); font-size: 13px; font-weight: 600; line-height: 1.6;">{{ ann.title }}</span>
                 <span class="bar-num">{{ ann.date }}</span>
             </div>
+            {% endif %}
             {% endfor %}
         </div>
 

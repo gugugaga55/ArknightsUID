@@ -1927,6 +1927,30 @@ async def send_calendar(bot: Bot, ev: Event) -> None:
 
     _append_source(lines, "https://prts.wiki/w/首页")
 
+    # 活动标题图 + 卡池横幅（与 ark活动 同源：PRTS 标题图 / SMW 文件页，
+    # 下载缓存后 b64 内嵌；失败空串降级为纯文字行）
+    banner_urls: dict[str, str] = {}
+    try:
+        from ..utils.prts.client import activity_banner_urls
+
+        banner_urls = await activity_banner_urls([a.title for a in activities])
+    except Exception:
+        logger.debug("[ArknightsUID] 日历活动标题图拉取失败", exc_info=True)
+
+    async def _calendar_banner_b64(url: str) -> str:
+        if not url:
+            return ""
+        try:
+            from ..utils.render import get_image_b64_with_cache
+            from ..utils.resource.RESOURCE_PATH import CACHE_PATH
+
+            return await get_image_b64_with_cache(
+                url, CACHE_PATH / "activity", quality=82
+            )
+        except Exception:
+            logger.debug("[ArknightsUID] 日历横幅下载失败", exc_info=True)
+            return ""
+
     context = {
         "version": ArknightsUID_version,
         "now_str": now_str,
@@ -1939,11 +1963,18 @@ async def send_calendar(bot: Bot, ev: Event) -> None:
                 "remaining": _format_remaining(act.end_ts, now_ts),
                 "start": act.start,
                 "end": act.end,
+                "image": await _calendar_banner_b64(
+                    banner_urls.get(act.title, "")
+                ),
             }
             for act in activities
         ],
         "pools": [
-            {"title": pool.title, "remaining": _format_remaining(pool.end_ts, now_ts)}
+            {
+                "title": pool.title,
+                "remaining": _format_remaining(pool.end_ts, now_ts),
+                "image": await _calendar_banner_b64(pool.image_url),
+            }
             for pool in pools
         ],
     }
@@ -1983,6 +2014,18 @@ async def send_module_info(bot: Bot, ev: Event) -> None:
                 cost["icon"] = await item_icon_b64(cost.get("name") or "")
     except Exception:
         logger.debug("[ArknightsUID] 模组材料图标获取失败", exc_info=True)
+    # 模组图标（PRTS torappu 资产，按 uniequip id 直取；失败空串降级）
+    try:
+        from ..utils.path import EQUIP_CACHE_PATH
+        from ..utils.player.context import equip_icon_url
+        from ..utils.render import get_image_b64_with_cache
+
+        for module in context.get("modules") or []:
+            module["icon"] = await get_image_b64_with_cache(
+                equip_icon_url(str(module.get("id") or "")), EQUIP_CACHE_PATH
+            )
+    except Exception:
+        logger.debug("[ArknightsUID] 模组图标获取失败", exc_info=True)
     context["version"] = ArknightsUID_version
     await _render_or_text(
         bot, ev, "ark_module.html", context, format_module_context(context)
