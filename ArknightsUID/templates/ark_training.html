@@ -1,0 +1,85 @@
+<!--
+  ark_training.html —— 训练室专精进度卡（#33）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_account.show_ark_training 组装）：
+    name: str, uid: str
+    trainee: str          受训干员名（空 = 空闲）
+    portrait/avatar: str  立绘/头像 b64（可空串降级）
+    state/state_en: str   受训中 TRAINING / 已完成 DONE / 空闲 IDLE
+    remain_text: str      剩余时长文案（约X小时Y分；已完成="已完成"，未知/空闲=空）
+    finish_at: str        预计完成时刻（MM-dd HH:mm；未知/空闲=空）
+    pct: int|None         进度估算（24h 基准，约值；空闲/未知 None）
+    speed: float          速度加成（1.0 = 无加成）
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="TRAINING">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 训练室 TRAINING</em></span>
+            <span class="mast-meta"><span class="idx">33</span>UID {{ uid }}</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">{{ name }} · 基建训练室</div>
+                <h1 class="title">专精<em>训练</em></h1>
+                <div class="title-rule"><span class="en">MASTERY TRAINING</span></div>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_mastery.b64" %}" alt="">
+        </div>
+
+        {% if trainee %}
+        <div class="sect">
+            <span class="sect-label bk">{{ trainee }}</span>
+            <span class="sect-en">{{ state_en }} // {{ state }}</span>
+        </div>
+        <div class="rows" style="display: flex; align-items: center; gap: var(--space-4); padding: var(--space-3) 2px;">
+            {% if portrait or avatar %}
+            <img src="{{ portrait or avatar }}" alt="" style="width: 96px; height: 96px; object-fit: cover; object-position: top; border: 1px solid var(--hairline); flex-shrink: 0;">
+            {% endif %}
+            <div style="flex: 1; min-width: 0;">
+                <div class="row-label">剩余时间 REMAINING</div>
+                <div style="font-size: 30px; font-weight: 800; letter-spacing: 0.5px; margin-top: 2px;">{{ remain_text or "未知" }}</div>
+                {% if finish_at %}
+                <div class="u-mute mono" style="font-size: 11px; margin-top: 4px;">预计 {{ finish_at }} 完成</div>
+                {% endif %}
+            </div>
+            {% if state == "已完成" %}<span class="chip chip--yellow" style="align-self: flex-start;">已完成</span>{% endif %}
+        </div>
+        {% if pct is not none %}
+        <div class="bar bar--lg" style="margin-top: var(--space-3);">
+            <i style="width: {{ pct }}%;"></i>
+            <span class="bar-txt">约 {{ pct }}%</span>
+        </div>
+        {% endif %}
+        <div class="rows" style="margin-top: var(--space-3); border-top: 0;">
+            <div class="row">
+                <span class="row-label">速度加成 SPEED</span>
+                <span class="bar-num">{{ speed }}x{% if speed <= 1.0 %}（无加成）{% endif %}</span>
+            </div>
+        </div>
+        <div class="prose">进度按专精 24h 基准估算（接口无目标档位字段），带约值误差；ark订阅训练 可在完成前 1 小时预警并提醒完成。</div>
+        {% else %}
+        <div class="rows" style="margin-top: var(--space-5);">
+            <div class="row">
+                <span class="row-label">训练室状态</span>
+                <span class="row-value" style="font-size: 13px;">空闲——当前没有干员在受训</span>
+            </div>
+        </div>
+        <div class="prose">派干员进训练室专精技能后，这里会显示剩余时间与预计完成时刻；ark基建 查看基建总览。</div>
+        {% endif %}
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 训练室</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// MASTERY TRAINING // SKLAND</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

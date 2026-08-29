@@ -1024,6 +1024,20 @@ MOCK_CONTEXTS = {
         "tired_more": 3,
         "version": VERSION,
     },
+    "ark_training.html": {
+        "name": "刀客塔不吃香菜",
+        "uid": "12****89",
+        "trainee": "史尔特尔",
+        "portrait": "",
+        "avatar": "",
+        "state": "受训中",
+        "state_en": "TRAINING",
+        "remain_text": "约2小时15分",
+        "finish_at": "08-30 02:15",
+        "pct": 62,
+        "speed": 1.3,
+        "version": VERSION,
+    },
 }
 
 
@@ -1475,6 +1489,25 @@ async def _enrich_icons(name: str, context: dict) -> None:
                     "",
                 )
                 m["avatar"] = await char_avatar_b64(hit) if hit else ""
+
+    if name == "ark_training.html":
+        # 受训干员立绘/头像：干员名反查 charId（与生产 build_training_context 同口径）
+        from ArknightsUID.utils.gamedata.charinfo import load_char_index
+        from ArknightsUID.utils.player.context import (
+            char_avatar_b64,
+            char_portrait_b64,
+        )
+
+        char_index = await load_char_index()
+        hit = next(
+            (cid for cid, info in char_index.items()
+             if info.get("name") == context.get("trainee")),
+            "",
+        )
+        if hit:
+            rarity = int(char_index[hit].get("rarity") or 0)
+            context["portrait"] = await char_portrait_b64(hit, rarity)
+            context["avatar"] = await char_avatar_b64(hit)
 
 
 async def main() -> int:

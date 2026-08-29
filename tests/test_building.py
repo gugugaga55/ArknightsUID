@@ -371,3 +371,94 @@ class BuildingContextTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TrainingContextTest(unittest.IsolatedAsyncioTestCase):
+    """ark_training.html 上下文契约：受训中/已完成/空闲三态。"""
+
+    def _payload_with_training(self, training: dict | None) -> dict:
+        payload = _player_info()
+        if training is not None:
+            payload["data"]["building"]["training"] = training
+        else:
+            payload["data"]["building"].pop("training", None)
+        return payload
+
+    async def _context(self, payload: dict) -> dict | None:
+        import time as time_mod
+        from unittest import mock
+
+        from ArknightsUID.utils.player.context import build_training_context
+
+        data = parse_player_info(payload)
+        assert data is not None
+        building = parse_building(data)
+        assert building is not None
+        with (
+            mock.patch(
+                "ArknightsUID.utils.player.context.char_portrait_b64",
+                new=mock.AsyncMock(return_value="P"),
+            ),
+            mock.patch(
+                "ArknightsUID.utils.player.context.char_avatar_b64",
+                new=mock.AsyncMock(return_value="A"),
+            ),
+        ):
+            return await build_training_context(data, building, VERSION, "123***789")
+
+    async def test_training_state_fields(self) -> None:
+        import time as time_mod
+
+        now = int(time_mod.time())
+        ctx = await self._context(self._payload_with_training({
+            "level": 3, "speed": 1.3, "remainSecs": 8100,
+            "lastUpdateTime": now, "trainee": {"charId": "char_002_amiya"},
+        }))
+        assert ctx is not None
+        self.assertEqual(ctx["trainee"], "阿米娅")
+        self.assertEqual(ctx["state"], "受训中")
+        self.assertEqual(ctx["state_en"], "TRAINING")
+        self.assertEqual(ctx["remain_text"], "约2小时15分")
+        self.assertTrue(ctx["finish_at"])
+        self.assertIsNotNone(ctx["pct"])
+        assert ctx["pct"] is not None
+        self.assertTrue(0 <= ctx["pct"] <= 100)
+        self.assertEqual(ctx["speed"], 1.3)
+        self.assertEqual(ctx["portrait"], "P")
+        self.assertEqual(ctx["avatar"], "A")
+
+    async def test_done_state(self) -> None:
+        import time as time_mod
+
+        now = int(time_mod.time())
+        ctx = await self._context(self._payload_with_training({
+            "level": 3, "speed": 1.0, "remainSecs": 0,
+            "lastUpdateTime": now, "trainee": {"charId": "char_002_amiya"},
+        }))
+        assert ctx is not None
+        self.assertEqual(ctx["state"], "已完成")
+        self.assertEqual(ctx["remain_text"], "已完成")
+        self.assertEqual(ctx["finish_at"], "")
+
+    async def test_idle_state(self) -> None:
+        ctx = await self._context(self._payload_with_training(None))
+        assert ctx is not None
+        self.assertEqual(ctx["state"], "空闲")
+        self.assertEqual(ctx["trainee"], "")
+        self.assertIsNone(ctx["pct"])
+        self.assertEqual(ctx["portrait"], "")
+
+    async def test_template_renders(self) -> None:
+        """模板契约：三态上下文都能被 jinja 渲染（漏键/类型错误会抛错）。"""
+        import time as time_mod
+
+        template = ark_templates.get_template("ark_training.html")
+        for training in (
+            {"level": 3, "speed": 1.3, "remainSecs": 8100,
+             "lastUpdateTime": int(time_mod.time()),
+             "trainee": {"charId": "char_002_amiya"}},
+            None,
+        ):
+            ctx = await self._context(self._payload_with_training(training))
+            html = template.render(font_css_url="about:blank", **ctx)
+            self.assertIn("专精", html)
