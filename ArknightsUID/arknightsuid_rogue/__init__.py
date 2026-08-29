@@ -34,6 +34,10 @@ except ModuleNotFoundError:
     from ArknightsUID.utils.rogue import flatten_rogue, parse_rogue
     from ArknightsUID.version import ArknightsUID_version
 
+# 注册顺序约束：rogue_alias_sv 必须先于 rogue_sv 创建——core 按 SV 注册序
+# startswith 分发，否则「肉鸽别名/肉鸽别名删除」会被「肉鸽」命令抢走
+# （别名命令的 handler 定义在文件末尾，SV 创建序即分发序）。
+rogue_alias_sv = SV("ArknightsUID肉鸽别名", priority=5)
 rogue_sv = SV("ArknightsUID肉鸽", priority=5)
 
 # 集成战略主题名（玩家数据 rogue_id → 官方主题名，客观游戏数据）。
@@ -173,13 +177,17 @@ async def _fill_rogue_theme_images(context: dict) -> None:
         logger.debug("[ArknightsUID] 肉鸽主题图获取失败", exc_info=True)
 
 
-def _parse_rogue_query(text: str) -> tuple[str, str | None, int | None, bool]:
+def _parse_rogue_query(
+    text: str,
+    extra_aliases: dict[str, str] | None = None,
+) -> tuple[str, str | None, int | None, bool]:
     """`名字 [期] [难度] [紧急]` → (敌人名/关卡名, 期目录, 难度, 紧急)。
 
     难度取 N7 / 难度7 / 难度 7（大小写不敏感，N+数字 无空格也可）；
-    期按整词匹配 THEME_ALIASES（萨卡兹/水月/黑流…，长名优先）——不能用
-    子串替换：「萨卡兹魔剑士」这类敌人名本身含期名，子串会拆坏名字；
-    「紧急」为保留词（紧急作战：关卡自带 buff + 额外出怪）。
+    期按整词匹配（extra_aliases 用户别名优先于 THEME_ALIASES 内建，
+    萨卡兹/水月/黑流…）——不能用子串替换：「萨卡兹魔剑士」这类敌人名
+    本身含期名，子串会拆坏名字；「紧急」为保留词（紧急作战：关卡自带
+    buff + 额外出怪）。
     """
     remaining = (text or "").strip()
     difficulty: int | None = None
@@ -206,7 +214,11 @@ def _parse_rogue_query(text: str) -> tuple[str, str | None, int | None, bool]:
     kept: list[str] = []
     for token in remaining.split():
         if theme_dir is None:
-            hit = THEME_ALIASES.get(token) or THEME_ALIASES.get(token.strip("· "))
+            hit = (extra_aliases or {}).get(token.lower())
+            if hit is None:
+                hit = THEME_ALIASES.get(token) or THEME_ALIASES.get(
+                    token.strip("· ")
+                )
             if hit:
                 theme_dir = hit
                 continue
@@ -271,7 +283,10 @@ def _format_rogue_enemy(context: dict) -> str:
     return "\n".join(lines)
 
 
-async def _build_rogue_enemy_context(query: str) -> dict | str:
+async def _build_rogue_enemy_context(
+    query: str,
+    extra_aliases: dict[str, str] | None = None,
+) -> dict | str:
     """肉鸽敌人 buff 面板查询：基础形态面板 + 机制 + 条件精确面板。
 
     查询语法：`名字 [期名] [N难度] [关名] [紧急]`——不指定期时自动判定
@@ -300,7 +315,9 @@ async def _build_rogue_enemy_context(query: str) -> dict | str:
         status_labels,
     )
 
-    name, theme_hint, difficulty, elite = _parse_rogue_query(query)
+    name, theme_hint, difficulty, elite = _parse_rogue_query(
+        query, extra_aliases
+    )
     if not name:
         return "用法：ark肉鸽敌人 名字 [期名] [N难度] [关名] [紧急]（如 ark肉鸽敌人 歌利亚 萨卡兹 N12）"
 
@@ -458,7 +475,10 @@ def _format_rogue_stage(context: dict) -> str:
     return "\n".join(lines)
 
 
-async def _build_rogue_stage_context(query: str) -> dict | str:
+async def _build_rogue_stage_context(
+    query: str,
+    extra_aliases: dict[str, str] | None = None,
+) -> dict | str:
     """关卡视图：出怪列表（含难度/紧急折算面板）+ 紧急作战描述。
 
     语法：`关名 [期名] [N难度] [紧急]`——四期关卡名零重复，关名即唯一定位；
@@ -478,7 +498,9 @@ async def _build_rogue_stage_context(query: str) -> dict | str:
         stage_panel_rows,
     )
 
-    name, _theme_hint, difficulty, elite = _parse_rogue_query(query)
+    name, _theme_hint, difficulty, elite = _parse_rogue_query(
+        query, extra_aliases
+    )
     if not name:
         return "用法：ark肉鸽关卡 关名 [N难度] [紧急]（如 ark肉鸽关卡 拆东补西 N15）"
 
@@ -602,7 +624,8 @@ async def send_rogue_stage(bot: Bot, ev: Event) -> None:
     query = ev.text.strip().strip("：:").strip()
     if not query:
         return await _send_text(bot, ev, "用法：ark肉鸽关卡 关名 [N难度] [紧急]（如 ark肉鸽关卡 拆东补西 N15）")
-    result = await _build_rogue_stage_context(query)
+    aliases = await _load_user_theme_aliases(ev.bot_id, ev.user_id)
+    result = await _build_rogue_stage_context(query, aliases)
     if isinstance(result, str):
         return await _send_text(bot, ev, result)
 
@@ -649,7 +672,8 @@ async def send_rogue_enemy(bot: Bot, ev: Event) -> None:
     query = ev.text.strip().strip("：:").strip()
     if not query:
         return await _send_text(bot, ev, "用法：ark肉鸽敌人 名字 [期名] [N难度] [关名] [紧急]（如 ark肉鸽敌人 歌利亚 萨卡兹 N12）")
-    result = await _build_rogue_enemy_context(query)
+    aliases = await _load_user_theme_aliases(ev.bot_id, ev.user_id)
+    result = await _build_rogue_enemy_context(query, aliases)
     if isinstance(result, str):
         return await _send_text(bot, ev, result)
 
@@ -698,3 +722,130 @@ async def send_rogue_info(bot: Bot, ev: Event) -> None:
             return await bot.send(img, at_sender=bool(ev.group_id))
 
     await _send_text(bot, ev, _format_rogue(response))
+
+
+# ---------------------------------------------------------------------------
+# 用户自定义肉鸽期名（ark肉鸽别名）：对 肉鸽敌人/肉鸽关卡 的期名解析生效，
+# 优先级高于内建期别名（THEME_ALIASES）。存储复用 ArkAlias 表，
+# target 以 "rogue:" 前缀与干员别名区分（同一别名后写覆盖先写，与干员别名同键）。
+# rogue_alias_sv 的创建见文件顶部（必须先于 rogue_sv，否则被「肉鸽」遮蔽）。
+# ---------------------------------------------------------------------------
+_ROGUE_ALIAS_PREFIX = "rogue:"
+
+
+async def _load_user_theme_aliases(bot_id: str, user_id: str) -> dict[str, str]:
+    """该用户的自定义期别名（{alias: theme_dir}；DB 异常静默为空，不阻断查询）。"""
+    try:
+        from ..utils.database.models import ArkAlias
+
+        rows = await ArkAlias.list_aliases(bot_id=bot_id, user_id=user_id)
+        return {
+            row.alias: row.target[len(_ROGUE_ALIAS_PREFIX):]
+            for row in rows or []
+            if str(row.target or "").startswith(_ROGUE_ALIAS_PREFIX)
+        }
+    except Exception:
+        return {}
+
+
+def _parse_alias_pair(text: str) -> tuple[str, str] | None:
+    """「别名 目标」「别名=目标」「别名 → 目标」→ (alias, target)。"""
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    for sep in ("=", "＝", "→", "->"):
+        if sep in raw:
+            left, _, right = raw.partition(sep)
+            alias, target = left.strip(), right.strip()
+            if alias and target:
+                return alias, target
+    parts = raw.split()
+    if len(parts) == 2:
+        return parts[0].strip(), parts[1].strip()
+    return None
+
+
+@rogue_alias_sv.on_fullmatch(("肉鸽别名列表", "我的肉鸽别名"), block=True)
+async def list_rogue_theme_alias(bot: Bot, ev: Event) -> None:
+    aliases = await _load_user_theme_aliases(ev.bot_id, ev.user_id)
+    if not aliases:
+        return await _send_text(
+            bot, ev,
+            "你还没有设置肉鸽期名。用法：ark肉鸽别名 树海=沉沦者的黑流树海",
+        )
+    from ..utils.gamedata.rogue_enemy import THEME_DIRS
+
+    lines = ["「明日方舟」你的肉鸽期名："]
+    lines.extend(
+        f"- {alias} → {THEME_DIRS.get(theme_dir, theme_dir)}"
+        for alias, theme_dir in aliases.items()
+    )
+    await _send_text(bot, ev, "\n".join(lines))
+
+
+# 注册顺序约束：列表/删除必须先于「肉鸽别名」（core startswith 匹配，
+# 否则「ark肉鸽别名列表」会被短词「肉鸽别名」抢走）
+@rogue_alias_sv.on_command(("肉鸽别名删除", "删除肉鸽别名"), block=True)
+async def delete_rogue_theme_alias(bot: Bot, ev: Event) -> None:
+    alias = (ev.text or "").strip().lower()
+    if not alias:
+        return await _send_text(bot, ev, "用法：ark肉鸽别名删除 树海")
+    from ..utils.database.models import ArkAlias
+
+    target = await ArkAlias.resolve_alias(
+        bot_id=ev.bot_id, user_id=ev.user_id, alias=alias
+    )
+    if target and not str(target).startswith(_ROGUE_ALIAS_PREFIX):
+        return await _send_text(
+            bot, ev, f"「{alias}」是干员别名，请用 ark别名删除。"
+        )
+    if await ArkAlias.delete_alias(
+        bot_id=ev.bot_id, user_id=ev.user_id, alias=alias
+    ):
+        await _send_text(bot, ev, f"已删除肉鸽期名：{alias}")
+    else:
+        await _send_text(bot, ev, f"没有这个肉鸽期名：{alias}")
+
+
+@rogue_alias_sv.on_command(("肉鸽别名",), block=True)
+async def set_rogue_theme_alias(bot: Bot, ev: Event) -> None:
+    parsed = _parse_alias_pair(ev.text)
+    if not parsed:
+        return await _send_text(
+            bot, ev,
+            "用法：ark肉鸽别名 <别名>=<期名>（如 ark肉鸽别名 树海=沉沦者的黑流树海）；"
+            "ark肉鸽别名列表 查看；ark肉鸽别名删除 <别名> 删除。",
+        )
+    alias, target_text = parsed
+
+    from ..utils.gamedata.rogue_enemy import (
+        THEME_ALIASES,
+        THEME_DIRS,
+        resolve_theme_dir,
+    )
+
+    if alias in THEME_ALIASES:
+        return await _send_text(
+            bot, ev, f"「{alias}」已是内建期名，无需设置。"
+        )
+    theme_dir = resolve_theme_dir(target_text)
+    if not theme_dir:
+        names = "、".join(THEME_DIRS.values())
+        return await _send_text(
+            bot, ev,
+            f"无法识别的期名「{target_text}」。可用：{names}（或 black/sui 等目录名）。",
+        )
+
+    from ..utils.database.models import ArkAlias
+
+    await ArkAlias.set_alias(
+        bot_id=ev.bot_id,
+        user_id=ev.user_id,
+        alias=alias.lower(),
+        target=f"{_ROGUE_ALIAS_PREFIX}{theme_dir}",
+    )
+    await _send_text(
+        bot, ev,
+        f"已设置肉鸽期名：{alias} → {THEME_DIRS.get(theme_dir, theme_dir)}"
+        "（ark肉鸽敌人 / ark肉鸽关卡 的期名参数生效）",
+    )

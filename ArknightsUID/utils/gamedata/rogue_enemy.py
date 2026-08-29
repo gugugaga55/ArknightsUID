@@ -79,6 +79,24 @@ _TYPE_THEME_HINTS = {
     "mutant": "sami",
 }
 
+
+def resolve_theme_dir(name: str) -> str | None:
+    """期名（内建别名 / 主题显示名 / 期目录本身）→ 期目录；不可解析返回 None。
+
+    供用户自定义期别名命令校验目标用（ark肉鸽别名 X=<期名>）。
+    """
+    text = (name or "").strip()
+    if not text:
+        return None
+    if text in THEME_DIRS:
+        return text
+    if text in THEME_ALIASES:
+        return THEME_ALIASES[text]
+    for theme_dir, display in THEME_DIRS.items():
+        if text == display:
+            return theme_dir
+    return None
+
 # 面板数值字段（参与难度折算表）；aspd/ms/range 等次级属性走形态行 extras
 PANEL_STATS = ("hp", "atk", "def", "res")
 STAT_LABELS = {"hp": "HP", "atk": "攻", "def": "防", "res": "抗"}

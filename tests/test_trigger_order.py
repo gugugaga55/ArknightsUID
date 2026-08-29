@@ -99,6 +99,8 @@ class TriggerOrderInvariantTest(unittest.TestCase):
             ("ark刷图", "ark刷图计划"),
             ("ark合成", "ark合成树"),
             ("ark活动", "ark活动列表"),
+            ("ark肉鸽", "ark肉鸽别名"),
+            ("ark肉鸽", "ark肉鸽别名删除"),
         ]
         for short, long in cases:
             with self.subTest(pair=f"{short} < {long}"):
