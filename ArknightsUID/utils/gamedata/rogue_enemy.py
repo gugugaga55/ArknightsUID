@@ -297,7 +297,8 @@ def form_mechanisms(entry: dict, skill_dict: dict[str, list[str]]) -> list[list[
 # ---- 出没关卡索引（ro_stage_data：每关固定出怪表 + 紧急作战差异） ----
 
 # 期目录 → tomimi stages/ro{N}.json 编号（游戏主题表编号，傀影起编）。
-# 实测 2026-08：ro1-4（傀影/水月/萨米/萨卡兹）有出怪数据，ro5/6（岁/黑流）为空壳。
+# 实测 2026-08 更新：ro1-6 均有出怪数据；ro5/6（岁/黑流）文件多一层
+# {"name","data":[...]} 包装（_load_stage_file 已归一化）。
 _THEME_ROGUE_NUM = {
     "phantom": 1, "mizuki": 2, "sami": 3, "sarkaz": 4, "sui": 5, "black": 6,
 }
@@ -344,11 +345,19 @@ async def _load_stage_meta(theme_dir: str) -> dict[str, dict]:
 
 
 async def _load_stage_file(level_id: str) -> dict:
-    """单关出怪表（enemies/floors/数量）；失败或缺数据返回 {}。"""
+    """单关出怪表（enemies/floors/数量）；失败或缺数据返回 {}。
+
+    ro5/ro6（岁/黑流）文件多一层包装：{"name", "data": [<关卡 dict>]}，
+    归一化为关卡 dict 本身（data 恒为单元素，变体关是独立 level_id 文件）。
+    """
     data = await _fetch_url_json_cached(
         f"{_STAGES_BASE}/ro_stage_data/{level_id}.json",
         _STAGE_CACHE_DIR / f"{level_id}.json",
     )
+    if isinstance(data, dict) and not data.get("enemies"):
+        inner = data.get("data")
+        if isinstance(inner, list) and inner and isinstance(inner[0], dict):
+            return inner[0]
     return data if isinstance(data, dict) else {}
 
 
