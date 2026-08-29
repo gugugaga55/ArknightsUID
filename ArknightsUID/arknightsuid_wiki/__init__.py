@@ -1641,7 +1641,11 @@ async def send_enemy_page(bot: Bot, ev: Event) -> None:
         return await _send_text(bot, ev, "用法：ark敌人 敌人名")
     enemy = await query_enemy(query)
     if not enemy:
-        return await _send_text(bot, ev, f"未找到敌人词条：{query}")
+        return await _send_text(
+            bot, ev,
+            f"未找到敌人词条：{query}"
+            "（若为肉鸽主题敌人，试试 ark肉鸽敌人 " + query + "）",
+        )
     context = await _build_enemy_context(enemy)
     await _render_or_text(
         bot, ev, "ark_wiki_enemy.html", context, _format_enemy(enemy)
@@ -1822,8 +1826,8 @@ async def send_recruit_recommend(bot: Bot, ev: Event) -> None:
             f"池{row['pool_count']}人）：{names}{more}"
         )
     lines.append(
-        "勾选高资/资深标签并拉满 9 小时：标签不划、必得 5★/6★ 档；"
-        "6★ 仅经高级资深干员追加（名单以游戏内为准）。"
+        "勾选高资/资深标签并拉满 9 小时：标签不划、必得 6★/5★；"
+        "池与标签口径 PRTS 公开招募页同步。"
     )
     await _render_or_text(
         bot, ev, "ark_recruit_plan.html", context, "\n".join(lines)

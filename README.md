@@ -87,7 +87,7 @@ git clone https://github.com/gugugaga55/ArknightsUID.git
   <img src="docs/design/previews/ark_rogue.jpg" width="55%">
   
   </details>
-- <details><summary><code>ark肉鸽敌人 &lt;名字&gt;</code>：肉鸽专用敌人 buff 面板——基础形态数值 + 所属期难度档累积加成（含新手档削减；数据 tomimi.dev 游戏解包，支持精确/前缀/子串匹配；层数增益与交互式全 buff 模拟见 tomimi.dev）</summary>
+- <details><summary><code>ark肉鸽敌人 &lt;名字&gt;</code>：肉鸽专用敌人 buff 面板——基础形态数值 + 所属期难度档累积加成（含新手档削减；数据 tomimi.dev 游戏解包，支持精确/前缀/子串匹配；期名支持简称与「X肉鸽」叫法：水月/萨米/萨卡兹/界园/树海等，如 <code>ark肉鸽敌人 汉科 树海 N15</code>；层数增益与交互式全 buff 模拟见 tomimi.dev）</summary>
   
   <img src="docs/design/previews/ark_rogue_enemy.jpg" width="55%">
   
@@ -186,7 +186,7 @@ git clone https://github.com/gugugaga55/ArknightsUID.git
   <img src="docs/design/previews/ark_recruit.jpg" width="55%">
   
   </details>
-- <details><summary><code>ark公招推荐 标签…</code>：公招组合推荐——把界面看到的标签全部输入，枚举 1-3 标签组合按价值排行（6★ 机会 / 5★ 保底 / 4★ 保底），高资组合提示拉满 9 小时；稀有度标签按阈值匹配（资深=4★+、高级资深=5★+，PRTS 实证口径）</summary>
+- <details><summary><code>ark公招推荐 标签…</code>：公招组合推荐——把界面看到的标签全部输入，枚举 1-3 标签组合按价值排行（6★ 保底 / 5★ 保底 / 4★ 保底），高资组合提示拉满 9 小时；池与标签口径 PRTS 公开招募页同步（资深=5★ 池、高级资深=6★ 池，未选高资时 6★ 不入池）</summary>
   
   <img src="docs/design/previews/ark_recruit_plan.jpg" width="55%">
   

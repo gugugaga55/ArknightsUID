@@ -241,6 +241,10 @@ def _format_rogue_enemy(context: dict) -> str:
         lines.append(
             f"出没·{group['theme_name']}：{'、'.join(group['stages'])}{more}"
         )
+    # 口径区分：本面板是肉鸽解包数据，主线/活动出没与通用数值走 PRTS
+    lines.append(
+        f"（出没为集成战略口径；主线/活动出没与通用数值见 ark敌人 {context['name']}）"
+    )
     focus = context.get("focus")
     if focus:
         where = context["theme_name"]

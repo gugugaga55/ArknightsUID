@@ -9,9 +9,15 @@ P0 升级要点：
    它实际是 channelMasterId（官服渠道 ID），不是"游戏 ID"——这个命名误导
    在 EndUID 注释"为啥到这就是1了"里有同样的困惑。
 
-token 管理（v2）：
-- refresh 成功后回写 ArkUser 并缓存（cred → token，TTL 25 分钟），
-  存储里的旧 token 过期后不再每条命令重复 3 个往返
+token 管理（v3，对齐 EndUID）：
+- 本插件常与 EndUID 共存且共用同一 cred；Skland 的 refresh 会吊销旧
+  token，EndUID 每 3 分钟主动刷新。沿用旧的 25 分钟缓存会让本插件
+  长期持有已被吊销的 token：首请求必 220，重试刷新又反杀 EndUID
+  刚拿到的新 token，两边互相打死。
+- 因此对齐 EndUID（requests.py:refresh_token）的策略：token 新鲜度
+  窗口 180 秒，请求前不新鲜就刷新并回写 ArkUser（token + 时间戳）；
+  游戏请求返回 220/10002 时仍强制刷新重试一次（EndUID 没有的兜底）；
+  refresh 被拒（10001/220/10002）说明 cred 本身失效，标记账号无效。
 - 同一 cred 的 refresh 持进程锁（推送任务与用户命令并发时只刷一次）
 """
 from __future__ import annotations
@@ -72,9 +78,26 @@ ARKNIGHTS_GAME_ID = ARKNIGHTS_CHANNEL_OFFICIAL
 # 拿到这些 code 表示 token 失效，需要 refresh 后重试一次
 TOKEN_INVALID_CODES = {int(RespCode.TOKEN_INVALID), int(RespCode.LOGIN_EXPIRED)}
 
+# refresh 接口返回这些 code 表示 cred 本身失效（对齐 EndUID 的判定），
+# 不再重试，调用方应把账号标记为无效
+CRED_INVALID_REFRESH_CODES = {
+    int(RespCode.CRED_INVALID),
+    int(RespCode.TOKEN_INVALID),
+    int(RespCode.LOGIN_EXPIRED),
+}
+
+
+class CredentialInvalidError(Exception):
+    """凭证失效（refresh 被 10001/220/10002 拒绝）。调用方应标记账号无效。"""
+
+
 # === token 管理：进程内缓存 + per-cred refresh 锁 ===
-# 服务端 token 是短期凭据（约 30 分钟），缓存 25 分钟
-_TOKEN_CACHE_TTL = 25 * 60
+# 新鲜度窗口 180 秒，对齐 EndUID（token 实际寿命更长，但共用 cred 的
+# 任何一方 refresh 都会吊销旧 token，窗口必须压到 EndUID 同量级）
+_TOKEN_CACHE_TTL = 180
+# refresh 网络/未知错误重试（对齐 EndUID：最多 3 次，间隔 1 秒）
+_REFRESH_MAX_ATTEMPTS = 3
+_REFRESH_RETRY_DELAY = 1.0
 _token_cache: dict[str, tuple[str, float]] = {}
 _refresh_locks: dict[str, asyncio.Lock] = {}
 _UNSAFE_QUERY_RE = re.compile(r"[^0-9A-Za-z_.\-]")
@@ -137,7 +160,11 @@ def _query_string(params: dict[str, Any] | None) -> str:
     pairs: list[str] = []
     for key, value in sorted(params.items()):
         pair = f"{key}={value}"
-        if _UNSAFE_QUERY_RE.search(pair):
+        # '=' 是键值分隔符不属于参数内容，需对 key/value 分别校验；
+        # 对拼接串整体匹配会把每个请求都误报（'gameId=1' 事件）
+        if _UNSAFE_QUERY_RE.search(str(key)) or _UNSAFE_QUERY_RE.search(
+            str(value)
+        ):
             logger.warning(
                 "[ArknightsUID] Skland 签名参数含特殊字符，签名可能失效: "
                 f"{pair!r}"
@@ -179,7 +206,12 @@ def _base_headers(
 
 
 async def refresh_token(cred: str) -> str:
-    """刷新 Skland token（纯网络操作，无缓存）。失败返回空字符串。"""
+    """刷新 Skland token（纯网络操作，无缓存）。
+
+    对齐 EndUID：网络/未知错误最多重试 3 次；返回 10001/220/10002 说明
+    cred 本身已失效，不重试、抛 CredentialInvalidError（调用方应标记账号
+    无效）。其余失败重试耗尽后返回空字符串。
+    """
     if not cred:
         return ""
     headers = {
@@ -188,65 +220,112 @@ async def refresh_token(cred: str) -> str:
         "Content-Type": "application/json",
     }
     client = await get_client()
-    try:
-        response = await client.get(
-            REFRESH_TOKEN_URL, headers=headers, timeout=20.0
-        )
-    except Exception as exc:
+    for attempt in range(1, _REFRESH_MAX_ATTEMPTS + 1):
+        is_last = attempt == _REFRESH_MAX_ATTEMPTS
+        try:
+            response = await client.get(
+                REFRESH_TOKEN_URL, headers=headers, timeout=20.0
+            )
+        except Exception as exc:
+            if not is_last:
+                logger.debug(
+                    "[ArknightsUID] Skland token refresh 网络异常，重试 "
+                    f"{attempt}/{_REFRESH_MAX_ATTEMPTS - 1}: "
+                    f"{_safe_error(exc, cred)}"
+                )
+                await asyncio.sleep(_REFRESH_RETRY_DELAY)
+                continue
+            logger.warning(
+                "[ArknightsUID] Skland token refresh request failed: "
+                f"{_safe_error(exc, cred)}"
+            )
+            return ""
+
+        if response.status_code != 200:
+            if not is_last:
+                await asyncio.sleep(_REFRESH_RETRY_DELAY)
+                continue
+            logger.warning(
+                "[ArknightsUID] Skland token refresh failed: "
+                f"HTTP {response.status_code}"
+            )
+            return ""
+
+        try:
+            data = response.json()
+        except Exception as exc:
+            # 解析类异常的 message 无法穷举脱敏（可能携带任意响应片段）：
+            # warning 只打类名，脱敏详情放 debug
+            if not is_last:
+                await asyncio.sleep(_REFRESH_RETRY_DELAY)
+                continue
+            logger.warning(
+                "[ArknightsUID] Skland token refresh non-json response: "
+                f"HTTP {response.status_code} ({exc.__class__.__name__})"
+            )
+            logger.debug(
+                "[ArknightsUID] Skland token refresh non-json detail: "
+                f"{_safe_error(exc, cred)}"
+            )
+            return ""
+
+        code = data.get("code")
+        if code == int(RespCode.OK):
+            token = (data.get("data") or {}).get("token")
+            if token:
+                return str(token)
+            # code=0 但缺 token：当未知错误继续重试
+        elif code in CRED_INVALID_REFRESH_CODES:
+            logger.warning(
+                "[ArknightsUID] Skland token refresh 被拒（cred 失效 "
+                f"code={code}）"
+            )
+            raise CredentialInvalidError(f"cred 失效 code={code}")
+
+        if not is_last:
+            await asyncio.sleep(_REFRESH_RETRY_DELAY)
+            continue
         logger.warning(
-            "[ArknightsUID] Skland token refresh request failed: "
-            f"{_safe_error(exc, cred)}"
+            "[ArknightsUID] Skland token refresh returned non-ok code: "
+            f"{data.get('code')}"
         )
         return ""
-
-    if response.status_code != 200:
-        logger.warning(
-            "[ArknightsUID] Skland token refresh failed: "
-            f"HTTP {response.status_code}"
-        )
-        return ""
-
-    try:
-        data = response.json()
-    except Exception as exc:
-        # 解析类异常的 message 无法穷举脱敏（可能携带任意响应片段）：
-        # warning 只打类名，脱敏详情放 debug
-        logger.warning(
-            "[ArknightsUID] Skland token refresh non-json response: "
-            f"HTTP {response.status_code} ({exc.__class__.__name__})"
-        )
-        logger.debug(
-            "[ArknightsUID] Skland token refresh non-json detail: "
-            f"{_safe_error(exc, cred)}"
-        )
-        return ""
-
-    if data.get("code") == int(RespCode.OK):
-        token = (data.get("data") or {}).get("token")
-        if token:
-            return str(token)
-    logger.warning(
-        "[ArknightsUID] Skland token refresh returned non-ok code: "
-        f"{data.get('code')}"
-    )
     return ""
 
 
 async def _persist_token(cred: str, token: str) -> None:
-    """refresh 产物回写 ArkUser；失败仅 debug（不影响请求主流程）。"""
+    """refresh 产物回写 ArkUser（token + last_cred_request_time）；失败仅 debug。"""
     try:
         from ..database.models import ArkUser
 
-        await ArkUser.update_token_by_cred(cred, token)
+        await ArkUser.update_token_by_cred(cred, token, cred_time=int(time.time()))
     except Exception as exc:
         logger.debug(
             f"[ArknightsUID] token 回写失败（不影响本次请求）: {describe_error(exc)}"
         )
 
 
-async def _token_for_cred(cred: str, *, force: bool = False, stale: str = "") -> str:
-    """取该 cred 的有效 token：缓存命中直接返回，否则持锁 refresh 一次。
+async def _mark_invalid(cred: str) -> None:
+    """cred 被 refresh 拒绝 → 标记 ArkUser 行 cookie_status=无效。
 
+    EndUID 回退账号没有本地行，无行可标时静默（EndUID 侧自会标记）；
+    后续命令走 adapter.usable 判定，提示重新登录而不是反复撞 refresh。
+    """
+    try:
+        from ..database.models import ArkUser
+
+        await ArkUser.mark_invalid_by_cred(cred)
+    except Exception as exc:
+        logger.debug(
+            f"[ArknightsUID] 标记凭证无效失败（不影响本次请求）: {describe_error(exc)}"
+        )
+
+
+async def _token_for_cred(cred: str, *, force: bool = False, stale: str = "") -> str:
+    """取该 cred 的新鲜 token：窗口内缓存命中直接返回，否则持锁 refresh 一次。
+
+    对齐 EndUID refresh_token 的新鲜度语义（180 秒窗口）；refresh 被拒时
+    CredentialInvalidError 原样上抛，由调用方标记账号无效。
     并发调用（推送任务 + 用户命令同时踩到 token 过期）只会产生一次网络
     refresh（per-cred 锁 + 双检）；成功后写进程缓存并回写数据库。
     force=True 表示缓存里的 token 刚被服务端判失效（220），跳过缓存强制刷新；
@@ -307,22 +386,22 @@ async def _signed_request(
 ) -> dict[str, Any] | None:
     """签名请求主流程。
 
-    token 失效（220/10002）会自动 refresh + 重试一次（比 EndUID 的 request()
-    更积极，EndUID 依赖 3 分钟缓存过期触发 refresh）。
+    token 获取对齐 EndUID：只信 180 秒窗口内的缓存，窗口外一律 refresh；
+    不再直接使用调用方快照里的 credential.token——与 EndUID 共用 cred 时，
+    那个 token 大概率已被 EndUID 的 refresh 吊销，用它首发必 220。
+    游戏请求返回 220/10002 仍强制 refresh + 重试一次（EndUID 没有的兜底）。
+    refresh 被拒（cred 失效）→ 标记账号无效并中止本次请求。
 
     Args:
         use_device_id: True 时为本次请求生成真实 dId（高敏感接口建议开启）。
                       False 时 dId 留空（普通查询足够，且省一次加密开销）。
     """
-    # 进程缓存优先（refresh 后的 token 只在缓存里，DB 回写是异步兜底）：
-    # 否则存储里的旧 token 会让每条命令都先失败一次再 refresh
-    cached = _token_cache.get(credential.cred)
-    if cached and time.time() - cached[1] < _TOKEN_CACHE_TTL:
-        token = cached[0]
-    else:
-        token = credential.token or ""
-    if not token:
+    try:
         token = await _token_for_cred(credential.cred)
+    except CredentialInvalidError:
+        logger.warning("[ArknightsUID] Skland 凭证失效，请求中止")
+        await _mark_invalid(credential.cred)
+        return None
     if not token:
         return None
 
@@ -408,9 +487,14 @@ async def _signed_request(
 
     result = await do_request(token)
     if isinstance(result, dict) and result.get("code") in TOKEN_INVALID_CODES:
-        fresh_token = await _token_for_cred(
-            credential.cred, force=True, stale=token
-        )
+        try:
+            fresh_token = await _token_for_cred(
+                credential.cred, force=True, stale=token
+            )
+        except CredentialInvalidError:
+            logger.warning("[ArknightsUID] Skland 凭证失效，请求中止")
+            await _mark_invalid(credential.cred)
+            return None
         if fresh_token:
             result = await do_request(fresh_token)
     return result

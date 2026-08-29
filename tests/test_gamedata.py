@@ -10,53 +10,64 @@ from ArknightsUID.utils.gamedata import recruit
 
 
 class RecruitLogicTest(unittest.TestCase):
-    def test_build_recruit_data_filters_and_maps(self) -> None:
-        char_table = {
-            "char_a": {  # 可公招 5 星术师
-                "name": "测试A", "rarity": "TIER_5", "profession": "CASTER",
-                "position": "RANGED", "tagList": ["输出"], "itemObtainApproach": "招募寻访",
-            },
-            "char_b": {  # 6 星（TIER_6）→ 排除（不在公招池）
-                "name": "测试B", "rarity": "TIER_6", "profession": "WARRIOR",
-                "position": "MELEE", "tagList": [], "itemObtainApproach": "招募寻访",
-            },
-            "char_c": {  # NPC（approach 空）→ 排除
-                "name": "NPC", "rarity": "TIER_3", "profession": "PIONEER",
-                "position": "MELEE", "tagList": [], "itemObtainApproach": "",
-            },
-            "char_d": {  # 活动获得 → 排除
-                "name": "活动干员", "rarity": "TIER_5", "profession": "MEDIC",
-                "position": "RANGED", "tagList": [], "itemObtainApproach": "活动获得",
-            },
+    def test_entries_from_smw_maps_and_splits_tags(self) -> None:
+        results = {
+            "测试A": {"printouts": {  # 5★ 术师 → 资深干员
+                "稀有度": ["4"], "职业": ["术师"], "位置": ["远程位"],
+                "标签": ["输出 群攻"],
+            }},
+            "测试B": {"printouts": {  # 6★ 近卫 → 高级资深干员
+                "稀有度": ["5"], "职业": ["近卫"], "位置": ["近战位"],
+                "标签": [],
+            }},
+            "测试C": {"printouts": {  # 1★ 小车 → 支援机械
+                "稀有度": ["0"], "职业": ["先锋"], "位置": ["近战位"],
+                "标签": ["支援机械 控场"],
+            }},
+            "坏条目": {"printouts": {"稀有度": ["?"], "职业": [], "位置": [], "标签": []}},
         }
-        data = recruit.build_recruit_data(char_table)
+        data = {e["name"]: e for e in recruit.entries_from_smw(results)}
 
-        self.assertEqual(len(data), 1)
-        entry = data[0]
-        self.assertEqual(entry["name"], "测试A")
-        # TIER_5 = 5 星（character_table 的 TIER_x = x 星）
-        self.assertEqual(entry["rarity"], 5)
-        self.assertEqual(entry["profession"], "术师")
-        self.assertEqual(entry["position"], "远程位")
-        # 5 星自动获得"高级资深干员"标签（阈值语义：4★+ 资深 / 5★+ 高级资深）
-        self.assertIn("高级资深干员", entry["all_tags"])
-        self.assertIn("资深干员", entry["all_tags"])
-        self.assertIn("输出", entry["all_tags"])
-        self.assertIn("术师", entry["all_tags"])
+        self.assertNotIn("坏条目", data)
+        # PRTS 稀有度 0-5 → 展示 1-6 星
+        self.assertEqual(data["测试A"]["rarity"], 5)
+        self.assertEqual(data["测试B"]["rarity"], 6)
+        self.assertEqual(data["测试C"]["rarity"], 1)
+        # 5★ → 资深（不含高资）；6★ → 高资（不含资深）
+        self.assertIn("资深干员", data["测试A"]["all_tags"])
+        self.assertNotIn("高级资深干员", data["测试A"]["all_tags"])
+        self.assertIn("高级资深干员", data["测试B"]["all_tags"])
+        self.assertNotIn("资深干员", data["测试B"]["all_tags"])
+        # 能力标签长串按空格拆开 + 职业/位置挂载
+        self.assertEqual(data["测试A"]["tags"], ["输出", "群攻"])
+        self.assertIn("术师", data["测试A"]["all_tags"])
+        self.assertIn("支援机械", data["测试C"]["all_tags"])
+        self.assertIn("控场", data["测试C"]["all_tags"])
 
-    def test_build_recruit_data_rarity_tag_thresholds(self) -> None:
-        # 4 星 → 资深干员；3 星 → 无稀有度标签
-        char_table = {
-            "c4": {"name": "四星", "rarity": "TIER_4", "profession": "SNIPER",
-                   "position": "RANGED", "tagList": [], "itemObtainApproach": "招募寻访"},
-            "c3": {"name": "三星", "rarity": "TIER_3", "profession": "PIONEER",
-                   "position": "MELEE", "tagList": [], "itemObtainApproach": "招募寻访"},
-        }
-        data = {e["name"]: e for e in recruit.build_recruit_data(char_table)}
-        self.assertIn("资深干员", data["四星"]["all_tags"])
-        self.assertNotIn("高级资深干员", data["四星"]["all_tags"])
-        self.assertNotIn("资深干员", data["三星"]["all_tags"])
-        self.assertNotIn("高级资深干员", data["三星"]["all_tags"])
+    def test_match_recruit_rarity_tag_semantics(self) -> None:
+        data = recruit.entries_from_smw({
+            "六星术师": {"printouts": {
+                "稀有度": ["5"], "职业": ["术师"], "位置": ["远程位"], "标签": ["输出"]}},
+            "五星术师": {"printouts": {
+                "稀有度": ["4"], "职业": ["术师"], "位置": ["远程位"], "标签": ["输出"]}},
+            "四星近卫": {"printouts": {
+                "稀有度": ["3"], "职业": ["近卫"], "位置": ["近战位"], "标签": []}},
+        })
+        # 高级资深池 = 6★ only；资深池 = 5★ only
+        self.assertEqual(
+            [m["name"] for m in recruit.match_recruit(["高级资深干员"], data)],
+            ["六星术师"],
+        )
+        self.assertEqual(
+            [m["name"] for m in recruit.match_recruit(["资深干员"], data)],
+            ["五星术师"],
+        )
+        # 高资+术师 → 六星术师；资深+近卫 → 空（交集不存在）
+        self.assertEqual(
+            [m["name"] for m in recruit.match_recruit(["高级资深干员", "术师"], data)],
+            ["六星术师"],
+        )
+        self.assertEqual(recruit.match_recruit(["资深干员", "近卫"], data), [])
 
     def test_match_recruit_returns_tag_superset_sorted(self) -> None:
         data = [
