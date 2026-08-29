@@ -490,7 +490,7 @@ async def _build_rogue_stage_context(query: str) -> dict | str:
             )
             return f"找到 {len(candidates)} 个候选关卡：{shown}（请用完整关名）"
         else:
-            return f"未找到关卡：{name}（岁/黑流两期关卡数据 tomimi 暂未收录）"
+            return f"未找到关卡：{name}（六期关卡名均无匹配，请检查关名）"
 
     stage_data = await load_stage_data(stage["level_id"])
     db = await load_enemy_db()
