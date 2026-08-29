@@ -35,7 +35,11 @@ from ArknightsUID.utils.skland import client as skland_client  # noqa: E402
 
 async def _smoke(cred: str) -> None:
     print("=== 1. refresh_token 验证 cred ===")
-    token = await skland_client.refresh_token(cred)
+    try:
+        token = await skland_client.refresh_token(cred)
+    except skland_client.CredentialInvalidError as exc:
+        print(f"  FAIL —— cred 已失效（{exc}）")
+        return
     print(f"  token: {'OK (len=%d)' % len(token) if token else 'FAIL —— cred 可能无效'}")
     if not token:
         return

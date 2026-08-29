@@ -54,14 +54,21 @@ THEME_DIRS = {
     "black": "沉沦者的黑流树海",
 }
 
-# 查询用的期别名（用户输入 → 期目录；含显示名前缀与常用简称）
+# 查询用的期别名（用户输入 → 期目录；含显示名、常用简称与「X肉鸽」叫法，
+# 多数用户记不住主题全称，短名/肉鸽后缀都叫得出来）
 THEME_ALIASES: dict[str, str] = {
     "傀影": "phantom", "猩红": "phantom", "傀影与猩红孤钻": "phantom",
+    "傀影肉鸽": "phantom", "猩红肉鸽": "phantom",
     "水月": "mizuki", "深蓝": "mizuki", "水月与深蓝之树": "mizuki",
+    "水月肉鸽": "mizuki",
     "萨米": "sami", "银凇": "sami", "萨米的腐朽安眠": "sami",
+    "萨米肉鸽": "sami",
     "萨卡兹": "sarkaz", "无终奇语": "sarkaz", "萨卡兹的无终奇语": "sarkaz",
-    "岁": "sui", "界园": "sui", "岁的界园志异": "sui",
-    "黑流": "black", "沉沦者": "black", "沉沦者的黑流树海": "black",
+    "萨卡兹肉鸽": "sarkaz",
+    "岁": "sui", "界园": "sui", "岁的界园志异": "sui", "界园肉鸽": "sui",
+    "黑流": "black", "树海": "black", "沉沦者": "black",
+    "沉沦者的黑流树海": "black", "黑流树海": "black",
+    "树海肉鸽": "black", "黑流肉鸽": "black",
 }
 
 # enemy.type 标签 → 期目录（归属启发式；权威判定是难度效果里的显式 targets）

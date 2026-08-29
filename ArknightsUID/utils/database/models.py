@@ -113,11 +113,12 @@ class ArkUser(User, table=True):
         cred: str,
         token: str,
         game_id: Optional[int] = ARKNIGHTS_CHANNEL_OFFICIAL,
+        cred_time: Optional[int] = None,
     ) -> int:
         """按 cred 更新 token（refresh 回写）。返回更新行数。
 
-        token 是短期凭据：请求链路 refresh 成功后回写，避免后续每条命令
-        都重复「旧 token 请求 → 220 → refresh → 重试」三个往返。
+        token 是短期凭据：请求链路 refresh 成功后回写；cred_time 一并写入
+        last_cred_request_time（对齐 EndUID，作为 token 新鲜度记录）。
         cookie 密文落库 → 同 select_data_by_cred，Python 侧解密比对。
         """
         filters = []
@@ -130,6 +131,33 @@ class ArkUser(User, table=True):
             if not cred_equals(row.cookie, cred):
                 continue
             row.token = encrypt_secret(token)
+            if cred_time is not None:
+                row.last_cred_request_time = cred_time
+            matched += 1
+        return matched
+
+    @classmethod
+    @with_session
+    async def mark_invalid_by_cred(
+        cls,
+        session: AsyncSession,
+        cred: str,
+        game_id: Optional[int] = ARKNIGHTS_CHANNEL_OFFICIAL,
+    ) -> int:
+        """按 cred 标记 cookie_status=无效（refresh 被拒 = cred 已死）。
+
+        返回更新行数（EndUID 回退账号无本地行时为 0，静默即可）。
+        """
+        filters = []
+        if game_id is not None:
+            filters.append(cls.game_id == game_id)
+        result = await session.execute(select(cls).where(*filters))
+        rows = result.scalars().all()
+        matched = 0
+        for row in rows:
+            if not cred_equals(row.cookie, cred):
+                continue
+            row.cookie_status = "无效"
             matched += 1
         return matched
 
