@@ -662,13 +662,25 @@ MOCK_CONTEXTS = {
     "ark_rogue.html": {
         "name": "刀客塔不吃香菜",
         "uid": "12****89",
-        "total_clears": 52,
-        "total_relics": 618,
+        "total_clears": 48,
+        "total_relics": 371,
         "records": [
+            {
+                "rogue_id": "rogue_7",
+                "name": "沉沦者的黑流树海",
+                "latest": True,
+                "clear_time": 9,
+                "bp_level": 65,
+                "relic_cnt": 88,
+                "bank_current": 1200,
+                "bank_record": 4500,
+                "medal_current": 22,
+                "medal_total": 110,
+            },
             {
                 "rogue_id": "rogue_6",
                 "name": "岁的界园志异",
-                "latest": True,
+                "latest": False,
                 "clear_time": 27,
                 "bp_level": 155,
                 "relic_cnt": 186,
