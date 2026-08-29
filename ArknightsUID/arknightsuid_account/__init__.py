@@ -470,7 +470,10 @@ async def _load_player_data(credential: ArkCredential) -> PlayerData | str:
         return response
     data = parse_player_info(response)
     if data is None:
-        return "森空岛玩家数据解析失败（接口返回异常），请稍后重试。"
+        # code 打进文案：220=token 失效 / 10001=设备信息无效 / 10000=签名异常，
+        # 下次报错即知根因（详细 message 见 player service 日志）
+        code = response.get("code") if isinstance(response, dict) else "?"
+        return f"森空岛玩家数据解析失败（接口返回 code={code}），请稍后重试。"
     return data
 
 
@@ -1032,6 +1035,55 @@ async def show_ark_building(bot: Bot, ev: Event) -> None:
     await send_card_or_text(
         bot, ev, "ark_building.html", context or {},
         _format_building(credential, data, building, uid_display=shown),
+    )
+
+
+@account_sv.on_command(("训练室", "训练进度"), block=True)
+async def show_ark_training(bot: Bot, ev: Event) -> None:
+    """ark训练室：训练室专精进度卡（受训干员/剩余时间/预计完成时刻）。"""
+    uid = _extract_uid(ev.text)
+    index = _extract_index(ev.text)
+    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
+    if isinstance(credential, str):
+        return await _send_text(bot, ev, credential)
+
+    loaded = await _load_player_data(credential)
+    if isinstance(loaded, str):
+        return await _send_text(bot, ev, loaded)
+    data = loaded
+
+    building = parse_building(data)
+    if building is None:
+        return await _send_text(
+            bot, ev, "未识别到基建数据（森空岛返回缺失 building 字段）。"
+        )
+    shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
+
+    try:
+        from ..utils.player.context import build_training_context
+    except ModuleNotFoundError:
+        from ArknightsUID.utils.player.context import build_training_context
+
+    context = await build_training_context(
+        data, building, ArknightsUID_version, shown
+    )
+    lines = [f"「明日方舟」训练室（UID：{shown}）"]
+    if context and context.get("trainee"):
+        lines.append(f"受训干员：{context['trainee']}（{context['state']}）")
+        if context.get("remain_text"):
+            tail = (
+                f"，预计 {context['finish_at']} 完成"
+                if context.get("finish_at")
+                else ""
+            )
+            lines.append(f"剩余时间：{context['remain_text']}{tail}")
+        if context.get("pct") is not None:
+            lines.append(f"进度：约 {context['pct']}%（24h 基准估算）")
+        lines.append("ark订阅训练：完成前 1 小时预警 + 完成提醒。")
+    else:
+        lines.append("训练室空闲——当前没有干员在受训。")
+    await send_card_or_text(
+        bot, ev, "ark_training.html", context or {}, "\n".join(lines)
     )
 
 

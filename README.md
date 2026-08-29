@@ -65,6 +65,11 @@ git clone https://github.com/gugugaga55/ArknightsUID.git
   <img src="docs/design/previews/ark_building.jpg" width="55%">
   
   </details>
+- <details><summary><code>ark训练室</code>：训练室专精进度卡——受训干员立绘/剩余时间/预计完成时刻/估算进度（24h 基准，接口无目标档位字段）</summary>
+  
+  <img src="docs/design/previews/ark_training.jpg" width="55%">
+  
+  </details>
 - <details><summary><code>ark练度统计</code>：全干员练度统计卡（按职业分组的持有/精二/满级）</summary>
   
   <img src="docs/design/previews/ark_char_stat.jpg" width="55%">

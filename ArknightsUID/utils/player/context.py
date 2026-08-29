@@ -444,6 +444,60 @@ async def build_building_context(
     }
 
 
+async def build_training_context(
+    data: PlayerData,
+    building: "BuildingData",
+    version: str,
+    uid_masked: str = "",
+) -> dict[str, Any] | None:
+    """ark_training.html（训练室专精进度卡）。building 不可用返回 None。
+
+    接口只有受训干员 + 剩余秒 + 速度加成（无目标技能/档位字段），
+    进度为 24h 基准估算（training_progress_pct 口径，统一带「约」）。
+    """
+    if not building.available:
+        return None
+    trainee_id = building.training_trainee_id
+    remaining = training_remaining_secs(building)
+    # 受训干员稀有度（立绘 E2 档位判定用）：玩家 chars 反查，缺失按初始立绘
+    rarity = 0
+    if trainee_id:
+        hit = next((c for c in data.chars if c.char_id == trainee_id), None)
+        if hit is not None:
+            rarity = hit.rarity_display
+    portrait = await char_portrait_b64(trainee_id, rarity) if trainee_id else ""
+    avatar = await char_avatar_b64(trainee_id) if trainee_id else ""
+    finish_at = ""
+    if remaining > 0:
+        finish_at = datetime.fromtimestamp(
+            time.time() + remaining
+        ).strftime("%m-%d %H:%M")
+    if not trainee_id:
+        state, state_en = "空闲", "IDLE"
+    elif remaining == 0:
+        state, state_en = "已完成", "DONE"
+    else:
+        state, state_en = "受训中", "TRAINING"
+    return {
+        "name": data.name or "博士",
+        "uid": uid_masked or data.uid,
+        "trainee": building.training_trainee,
+        "portrait": portrait,
+        "avatar": avatar,
+        "state": state,
+        "state_en": state_en,
+        "remain_text": (
+            format_training_remaining(remaining)
+            if trainee_id and remaining >= 0
+            else ""
+        ),
+        "finish_at": finish_at,
+        "pct": training_progress_pct(building) if trainee_id else None,
+        "speed": building.training_speed,
+        "version": version,
+    }
+
+
 async def build_char_card_context(
     entry: CharEntry, version: str, skill_effects: dict[str, dict] | None = None
 ) -> dict[str, Any]:
