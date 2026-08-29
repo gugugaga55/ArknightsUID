@@ -4,8 +4,9 @@
   上下文（由 arknightsuid_wiki.send_recruit_query 组装）：
     tags: str               查询标签串（如 "高级资深干员 + 术师"）
     total: int              匹配总数（截断前）
-    rows: [{rarity: int, name: str, profession: str, tags: str}]
-        匹配干员（rarity 1-6 人读值；tags 为 "/" 分隔的前 3 个标签，可空）
+    rows: [{rarity: int, name: str, profession: str, tags: str, avatar: str}]
+        匹配干员头像行（前 12 名；rarity 1-6 人读值；tags 为 "/" 分隔的前 3 个标签，可空）
+    rest: [{rarity: int, name: str}]   第 13 名起的完整名单（紧凑文字流，可空）
     truncated: bool         是否有更多未显示
     version: str
 -->
@@ -41,8 +42,10 @@
             </div>
             {% endfor %}
         </div>
-        {% if truncated %}
-        <div class="prose">结果过多，仅显示前 {{ rows | length }} 名，共 {{ total }} 名。</div>
+        {% if rest %}
+        <div class="prose" style="line-height: 1.9;">
+            其余 {{ rest | length }} 名：{% for r in rest %}<span class="mono" style="color: {{ rcolor.get(r.rarity, '#a6abb5') }}; font-weight: 600;">{{ r.name }}</span>{% if not loop.last %}、{% endif %}{% endfor %}
+        </div>
         {% endif %}
 
         <div class="foot">

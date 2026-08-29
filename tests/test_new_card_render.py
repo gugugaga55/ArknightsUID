@@ -292,9 +292,17 @@ class RecruitAccountsCardContractTest(unittest.TestCase):
             "rows": [
                 {"rarity": 4, "name": "清道夫", "profession": "先锋", "tags": "输出"},
             ],
+            # 头像行之后的完整名单（截断展示 → 紧凑文字流）
+            "rest": [
+                {"rarity": 4, "name": "克洛丝"},
+                {"rarity": 3, "name": "芬"},
+            ],
             "truncated": True,
         })
-        self.assertIn("共 35 名", html)
+        # total 数值渲染 + rest 全名单（大池不再丢人头）
+        self.assertIn("35 名", html)
+        self.assertIn("其余 2 名", html)
+        self.assertIn("克洛丝", html)
 
     def test_accounts_card(self) -> None:
         html = _render("ark_accounts.html", {

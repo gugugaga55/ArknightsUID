@@ -853,16 +853,34 @@ MOCK_CONTEXTS = {
         "version": VERSION,
     },
     "ark_recruit.html": {
-        "tags": "高级资深干员 + 术师",
-        "total": 5,
+        # 大池样例（资深干员 55 人）：头像前 12 + 其余全名单 rest（生产同构）
+        "tags": "资深干员",
+        "total": 55,
         "rows": [
-            {"rarity": 6, "name": "伊芙利特", "profession": "术师", "tags": "群攻/削弱"},
-            {"rarity": 6, "name": "刻俄柏", "profession": "术师", "tags": "输出"},
-            {"rarity": 6, "name": "卡涅利安", "profession": "术师", "tags": "群攻/防护"},
-            {"rarity": 6, "name": "异客", "profession": "术师", "tags": "输出"},
-            {"rarity": 6, "name": "莫斯提马", "profession": "术师", "tags": "群攻/减速"},
+            {"rarity": 5, "name": "临光", "profession": "重装", "tags": "防护/治疗", "avatar": ""},
+            {"rarity": 5, "name": "乌有", "profession": "特种", "tags": "输出/快速复活", "avatar": ""},
+            {"rarity": 5, "name": "凛冬", "profession": "先锋", "tags": "费用回复/支援", "avatar": ""},
+            {"rarity": 5, "name": "初雪", "profession": "辅助", "tags": "削弱", "avatar": ""},
+            {"rarity": 5, "name": "华法琳", "profession": "医疗", "tags": "支援/治疗", "avatar": ""},
+            {"rarity": 5, "name": "卡夫卡", "profession": "特种", "tags": "控场/输出", "avatar": ""},
+            {"rarity": 5, "name": "红", "profession": "特种", "tags": "控场/快速复活/输出", "avatar": ""},
+            {"rarity": 5, "name": "白面鸮", "profession": "医疗", "tags": "支援/治疗", "avatar": ""},
+            {"rarity": 5, "name": "蓝毒", "profession": "狙击", "tags": "输出", "avatar": ""},
+            {"rarity": 5, "name": "白金", "profession": "狙击", "tags": "输出", "avatar": ""},
+            {"rarity": 5, "name": "雷蛇", "profession": "重装", "tags": "输出/防护", "avatar": ""},
+            {"rarity": 5, "name": "赫默", "profession": "医疗", "tags": "治疗", "avatar": ""},
         ],
-        "truncated": False,
+        "rest": [
+            {"rarity": 5, "name": n}
+            for n in [
+                "德克萨斯", "守林人", "普罗旺斯", "火神", "诗怀雅", "食铁兽",
+                "槐琥", "狮蝎", "崖心", "绮良", "梅尔", "格劳克斯", "送葬人", "灰喉",
+                "布洛卡", "星极", "因陀罗", "月禾", "极境", "巫恋", "夜魔", "惊蛰",
+                "爱丽丝", "贾维", "苇草", "断崖", "奥斯塔", "四月", "安哲拉", "孑",
+                "陨星", "慑砂", "星熊", "可颂", "吽", "石棉", "洋灰",
+            ]
+        ],
+        "truncated": True,
         "version": VERSION,
     },
     "ark_accounts.html": {
