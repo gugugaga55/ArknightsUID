@@ -873,6 +873,13 @@ MOCK_CONTEXTS = {
         "orphan_uids": [],
         "version": VERSION,
     },
+    "ark_login.html": {
+        "roles": [
+            {"index": 1, "nickname": "刀客塔不吃香菜", "uid": "12****89", "is_default": True},
+            {"index": 2, "nickname": "小号只抽限定", "uid": "34****56", "is_default": False},
+        ],
+        "version": VERSION,
+    },
     "ark_skin.html": {
         "name": "刀客塔不吃香菜",
         "uid": "12****89",
