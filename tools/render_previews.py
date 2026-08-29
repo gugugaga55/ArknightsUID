@@ -1030,11 +1030,18 @@ MOCK_CONTEXTS = {
         "trainee": "史尔特尔",
         "portrait": "",
         "avatar": "",
+        "skill_name": "黄昏",
+        "skill_label": "3技能",
+        "mastery_from": 2,
+        "mastery_to": 3,
+        "trainer": "阿",
+        "trainer_avatar": "",
         "state": "受训中",
         "state_en": "TRAINING",
         "remain_text": "约2小时15分",
         "finish_at": "08-30 02:15",
-        "pct": 62,
+        "pct": 88,
+        "base_exact": True,
         "speed": 1.3,
         "version": VERSION,
     },
@@ -1491,7 +1498,7 @@ async def _enrich_icons(name: str, context: dict) -> None:
                 m["avatar"] = await char_avatar_b64(hit) if hit else ""
 
     if name == "ark_training.html":
-        # 受训干员立绘/头像：干员名反查 charId（与生产 build_training_context 同口径）
+        # 受训干员立绘/头像 + 协助干员头像：干员名反查 charId（生产同口径）
         from ArknightsUID.utils.gamedata.charinfo import load_char_index
         from ArknightsUID.utils.player.context import (
             char_avatar_b64,
@@ -1499,15 +1506,22 @@ async def _enrich_icons(name: str, context: dict) -> None:
         )
 
         char_index = await load_char_index()
-        hit = next(
-            (cid for cid, info in char_index.items()
-             if info.get("name") == context.get("trainee")),
-            "",
-        )
+
+        def _cid_of(char_name: str) -> str:
+            return next(
+                (cid for cid, info in char_index.items()
+                 if info.get("name") == char_name),
+                "",
+            )
+
+        hit = _cid_of(str(context.get("trainee") or ""))
         if hit:
             rarity = int(char_index[hit].get("rarity") or 0)
             context["portrait"] = await char_portrait_b64(hit, rarity)
             context["avatar"] = await char_avatar_b64(hit)
+        trainer_hit = _cid_of(str(context.get("trainer") or ""))
+        if trainer_hit:
+            context["trainer_avatar"] = await char_avatar_b64(trainer_hit)
 
 
 async def main() -> int:

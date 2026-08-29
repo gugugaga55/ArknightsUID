@@ -17,6 +17,7 @@ from gsuid_core.logger import logger
 
 from .building import (
     TRADING_STRATEGY_NAMES,
+    TRAINING_BASE_HOURS_BY_LEVEL,
     BuildingData,
     format_training_remaining,
     training_progress_pct,
@@ -337,6 +338,24 @@ def equip_display_name(equip_id: str) -> str:
     return equip_id
 
 
+def _mastery_target(
+    data: PlayerData, building: "BuildingData"
+) -> tuple[CharEntry | None, int, int]:
+    """受训干员与专精目标档（接口 targetSkill=技能序号；目标档=当前专精+1）。
+
+    返回 (char_entry|None, mastery_from, mastery_to)；推不出 → (char|None, 0, 0)。
+    """
+    char = next(
+        (c for c in data.chars if c.char_id == building.training_trainee_id),
+        None,
+    )
+    idx = building.training_target_skill
+    if char is not None and 0 <= idx < len(char.skills):
+        cur = char.skills[idx].specialize_level
+        return char, cur, min(3, cur + 1)
+    return char, 0, 0
+
+
 async def build_building_context(
     data: PlayerData,
     building: "BuildingData",
@@ -431,7 +450,12 @@ async def build_building_context(
         "training_remain": training_status_text(
             training_remaining_secs(building)
         ),
-        "training_pct": training_progress_pct(building),
+        "training_pct": training_progress_pct(
+            building,
+            base_hours=TRAINING_BASE_HOURS_BY_LEVEL.get(
+                _mastery_target(data, building)[2] or 0
+            ),
+        ),
         "recruit_total": len(data.recruit_slots),
         "recruit_done": recruit_done,
         # 最早一个未完成槽位的剩余文案（全部空闲/已完成为空串）
@@ -452,39 +476,60 @@ async def build_training_context(
 ) -> dict[str, Any] | None:
     """ark_training.html（训练室专精进度卡）。building 不可用返回 None。
 
-    接口只有受训干员 + 剩余秒 + 速度加成（无目标技能/档位字段），
-    进度为 24h 基准估算（training_progress_pct 口径，统一带「约」）。
+    目标档位链：接口 trainee.targetSkill（技能序号）+ 玩家 chars 该技能
+    当前专精 +1 = 目标专精档，基准时长按档取 8/16/24h（游戏机制）；
+    技能名经 load_skill_names 反查，任一环节缺失即留空降级（不臆造）。
     """
     if not building.available:
         return None
     trainee_id = building.training_trainee_id
     remaining = training_remaining_secs(building)
-    # 受训干员稀有度（立绘 E2 档位判定用）：玩家 chars 反查，缺失按初始立绘
-    rarity = 0
-    if trainee_id:
-        hit = next((c for c in data.chars if c.char_id == trainee_id), None)
-        if hit is not None:
-            rarity = hit.rarity_display
+    char, mastery_from, mastery_to = _mastery_target(data, building)
+    rarity = char.rarity_display if char is not None else 0
+    target_idx = building.training_target_skill
+    skill_label = f"{target_idx + 1}技能" if 0 <= target_idx <= 2 else ""
+    skill_name = ""
+    if char is not None and 0 <= target_idx < len(char.skills):
+        try:
+            from ..gamedata.charinfo import load_skill_names
+
+            skill_name = (await load_skill_names()).get(
+                char.skills[target_idx].skill_id, ""
+            )
+        except Exception:
+            skill_name = ""
+    base_hours = TRAINING_BASE_HOURS_BY_LEVEL.get(mastery_to or 0)
     portrait = await char_portrait_b64(trainee_id, rarity) if trainee_id else ""
     avatar = await char_avatar_b64(trainee_id) if trainee_id else ""
+    trainer_avatar = (
+        await char_avatar_b64(building.training_trainer_id)
+        if building.training_trainer_id
+        else ""
+    )
     finish_at = ""
     if remaining > 0:
         finish_at = datetime.fromtimestamp(
             time.time() + remaining
         ).strftime("%m-%d %H:%M")
     if not trainee_id:
-        state, state_en = "空闲", "IDLE"
+        state2, state_en = "空闲", "IDLE"
     elif remaining == 0:
-        state, state_en = "已完成", "DONE"
+        state2, state_en = "已完成", "DONE"
     else:
-        state, state_en = "受训中", "TRAINING"
+        state2, state_en = "受训中", "TRAINING"
     return {
         "name": data.name or "博士",
         "uid": uid_masked or data.uid,
         "trainee": building.training_trainee,
         "portrait": portrait,
         "avatar": avatar,
-        "state": state,
+        "skill_name": skill_name,
+        "skill_label": skill_label,
+        "mastery_from": mastery_from,
+        "mastery_to": mastery_to,
+        "trainer": building.training_trainer,
+        "trainer_avatar": trainer_avatar,
+        "state": state2,
         "state_en": state_en,
         "remain_text": (
             format_training_remaining(remaining)
@@ -492,7 +537,12 @@ async def build_training_context(
             else ""
         ),
         "finish_at": finish_at,
-        "pct": training_progress_pct(building) if trainee_id else None,
+        "pct": (
+            training_progress_pct(building, base_hours=base_hours)
+            if trainee_id
+            else None
+        ),
+        "base_exact": base_hours is not None,
         "speed": building.training_speed,
         "version": version,
     }

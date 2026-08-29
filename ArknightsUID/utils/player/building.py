@@ -132,23 +132,29 @@ def training_status_text(remaining: int) -> str:
     return f"剩{format_training_remaining(remaining)}"
 
 
-# 训练进度百分比：接口没有「专精目标等级/总时长」字段（dump 训练中样本
-# 缺失，training.level 是训练室房间等级而非目标专精档），任何总时长都只能
-# 估算——按专精档基准时长（0→1: 8h / 1→2: 16h / 2→3: 24h，接口不区分档位，
-# 默认按 24h 口径）除以 speed 加成得总时长，剩余秒由接口给出。
-# 展示口径统一带「约」，误差以真实样本校准为准。
+# 训练进度百分比：基准时长按专精档（游戏机制，专精一 8h / 专精二 16h /
+# 专精三 24h）除以 speed 加成得总时长，剩余秒由接口给出；目标档由
+# trainee.targetSkill + 玩家 chars 该技能当前专精+1 推得（见
+# build_training_context），推不出时按最长档 24h 保守口径。
+TRAINING_BASE_HOURS_BY_LEVEL = {1: 8.0, 2: 16.0, 3: 24.0}
 TRAINING_BASE_HOURS = 24.0
 
 
 def training_progress_pct(
-    building: BuildingData, now: int | None = None
+    building: BuildingData,
+    now: int | None = None,
+    base_hours: float | None = None,
 ) -> int | None:
-    """训练进度估算（0-100，约值）；未在训/未知返回 None。"""
+    """训练进度估算（0-100，约值）；未在训/未知返回 None。
+
+    base_hours 传目标档基准时长（8/16/24）则按真实档算；缺省按 24h 口径。
+    """
     remaining = training_remaining_secs(building, now)
     if remaining < 0 or not building.training_trainee_id:
         return None
     speed = building.training_speed if building.training_speed > 0 else 1.0
-    total_secs = TRAINING_BASE_HOURS * 3600 / speed
+    base = base_hours if base_hours and base_hours > 0 else TRAINING_BASE_HOURS
+    total_secs = base * 3600 / speed
     if total_secs <= 0:
         return None
     pct = (1 - remaining / total_secs) * 100
@@ -221,6 +227,9 @@ class BuildingData:
     training_speed: float = 0.0
     training_trainee: str = ""  # 训练中干员名（空 = 未在训练）
     training_trainee_id: str = ""  # 在训干员 charId（干员查询匹配用）
+    training_target_skill: int = -1  # 目标技能序号 0/1/2（-1 = 空闲/未知）
+    training_trainer: str = ""  # 协助干员名（空 = 无/未知）
+    training_trainer_id: str = ""  # 协助干员 charId
     training_remain_secs: int = -1  # 快照时刻剩余秒（dump 空闲态 -1）
     training_last_update: int = 0  # 快照时刻（unix 秒；0 = 缺失）
     tired_chars: list[TiredChar] = field(default_factory=list)
@@ -339,8 +348,9 @@ def parse_building(data: "PlayerData") -> BuildingData | None:
 
     training = building.get("training")
     if isinstance(training, dict):
-        # training.level 是训练室房间等级（基建升级），不是专精目标等级，
-        # 不做展示/推算用途（见上方训练进度移除注释）
+        # training.level 是训练室房间等级（基建升级），不是专精目标等级；
+        # 专精目标取 trainee.targetSkill（技能序号 0/1/2，-1=空闲，森空岛
+        # building.training 一手字段，目标档位由玩家 chars 该技能当前专精+1 推得）
         result.training_speed = _as_float(training.get("speed"))
         result.training_remain_secs = _as_int(training.get("remainSecs"), -1)
         result.training_last_update = _as_int(training.get("lastUpdateTime"))
@@ -352,6 +362,17 @@ def parse_building(data: "PlayerData") -> BuildingData | None:
             result.training_trainee = (
                 str(path(info, "name") or "") if isinstance(info, dict) else ""
             ) or trainee_id
+            result.training_target_skill = _as_int(
+                path(trainee, "targetSkill"), -1
+            )
+        trainer = training.get("trainer")
+        trainer_id = str(path(trainer, "charId") or "") if isinstance(trainer, dict) else ""
+        if trainer_id:
+            result.training_trainer_id = trainer_id
+            tinfo = info_map.get(trainer_id)
+            result.training_trainer = (
+                str(path(tinfo, "name") or "") if isinstance(tinfo, dict) else ""
+            ) or trainer_id
 
     # 低心情干员：从工作房间聚合（宿舍休息不计），按心情升序
     tired: list[TiredChar] = []

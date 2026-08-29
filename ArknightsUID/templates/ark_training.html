@@ -8,7 +8,11 @@
     state/state_en: str   受训中 TRAINING / 已完成 DONE / 空闲 IDLE
     remain_text: str      剩余时长文案（约X小时Y分；已完成="已完成"，未知/空闲=空）
     finish_at: str        预计完成时刻（MM-dd HH:mm；未知/空闲=空）
-    pct: int|None         进度估算（24h 基准，约值；空闲/未知 None）
+    skill_name/skill_label: str   在训技能名 / "N技能"（接口 targetSkill 反查，可空）
+    mastery_from/mastery_to: int  专精目标档（当前+1；0 = 未知）
+    trainer/trainer_avatar: str   协助干员名/头像（可空）
+    pct: int|None         进度估算（按目标档基准 8/16/24h；空闲/未知 None）
+    base_exact: bool      目标档是否识别（False = 按 24h 兜底口径）
     speed: float          速度加成（1.0 = 无加成）
     version: str
 -->
@@ -56,12 +60,28 @@
         </div>
         {% endif %}
         <div class="rows" style="margin-top: var(--space-3); border-top: 0;">
+            {% if skill_name or mastery_to %}
+            <div class="row">
+                <span class="row-label">在训技能 SKILL</span>
+                <span class="row-value" style="font-size: 13px;">{{ skill_name or skill_label }}{% if mastery_to %}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 6px;">专精{{ mastery_from }} → 专精{{ mastery_to }}</span>{% endif %}</span>
+            </div>
+            {% endif %}
+            {% if trainer %}
+            <div class="row">
+                <span class="row-label">协助干员 TRAINER</span>
+                <span class="row-value" style="font-size: 13px;">{% if trainer_avatar %}<img src="{{ trainer_avatar }}" alt="" style="width: 18px; height: 18px; object-fit: cover; vertical-align: -4px; margin-right: 5px; border: 1px solid var(--hairline);">{% endif %}{{ trainer }}</span>
+            </div>
+            {% endif %}
             <div class="row">
                 <span class="row-label">速度加成 SPEED</span>
                 <span class="bar-num">{{ speed }}x{% if speed <= 1.0 %}（无加成）{% endif %}</span>
             </div>
         </div>
-        <div class="prose">进度按专精 24h 基准估算（接口无目标档位字段），带约值误差；ark订阅训练 可在完成前 1 小时预警并提醒完成。</div>
+        {% if base_exact %}
+        <div class="prose">进度按目标专精档基准（专精一 8h / 二 16h / 三 24h）÷速度加成估算，带约值误差；ark订阅训练 可在完成前 1 小时预警并提醒完成。</div>
+        {% else %}
+        <div class="prose">目标专精档未识别，进度按 24h 档保守估算；ark订阅训练 可在完成前 1 小时预警并提醒完成。</div>
+        {% endif %}
         {% else %}
         <div class="rows" style="margin-top: var(--space-5);">
             <div class="row">
