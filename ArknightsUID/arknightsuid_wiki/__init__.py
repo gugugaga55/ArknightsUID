@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import re
 import time
+import unicodedata
 from datetime import datetime, timedelta, timezone
 
 from jinja2.exceptions import TemplateNotFound
@@ -1163,7 +1164,7 @@ _RE_POT = re.compile(r"^(?:潜(\d)|满潜)$")
 _RE_SKILL = re.compile(r"^(?:技能([123])|([一二三])技能)$")
 _RE_MASTERY = re.compile(r"^专([123])$")
 _RE_SKILL_LV = re.compile(r"^([1-7])级$")
-_RE_MODULE_TYPE = re.compile(r"^([XYxｙy])模组?$")
+_RE_MODULE_TYPE = re.compile(r"^([XYxyＸＹｘｙ])模组?$")
 _RE_MODULE_LV = re.compile(r"^模组?([123])$")
 _CN_NUM = {"一": 1, "二": 2, "三": 3}
 
@@ -1215,7 +1216,11 @@ def _parse_panel_query(text: str) -> dict:
             config["mastery"] = int(m.group(1))
             skill_context = False
         elif m := _RE_MODULE_TYPE.match(token):
-            config["module_type"] = m.group(1).upper()
+            # 全角 Ｘ/Ｙ 先 NFKC 归一半角再大写，否则 'Ｙ' != 'Y'
+            # 永不命中模组类型，静默回退 X 模
+            config["module_type"] = unicodedata.normalize(
+                "NFKC", m.group(1)
+            ).upper()
         elif _RE_MODULE_LV.match(token):
             config["module_level"] = int(_RE_MODULE_LV.match(token).group(1))
         elif token in ("无模", "无模组"):
@@ -1851,14 +1856,14 @@ async def send_recruit_query(bot: Bot, ev: Event) -> None:
     if not matched:
         return await _send_text(bot, ev, f"标签 {' + '.join(tags)} 无匹配的可公招干员")
     lines = [f"「明日方舟」公招：{' + '.join(tags)}（{len(matched)} 名）"]
-    for entry in matched[:30]:
+    for entry in matched[:80]:
         tag_str = "/".join(entry["tags"][:3]) if entry["tags"] else ""
         suffix = f" {tag_str}" if tag_str else ""
         lines.append(
             f"  {entry['rarity']}★ {entry['name']} [{entry['profession']}]{suffix}"
         )
-    if len(matched) > 30:
-        lines.append(f"  ...共 {len(matched)} 名，已显示前 30")
+    if len(matched) > 80:
+        lines.append(f"  ...共 {len(matched)} 名，已显示前 80")
     _append_source(lines, "https://prts.wiki/w/公开招募")
 
     context = {
@@ -1873,9 +1878,14 @@ async def send_recruit_query(bot: Bot, ev: Event) -> None:
                 "tags": "/".join(entry["tags"][:3]) if entry["tags"] else "",
                 "avatar": await char_avatar_b64(str(entry.get("id", ""))),
             }
-            for entry in matched[:20]
+            for entry in matched[:12]
         ],
-        "truncated": len(matched) > 20,
+        # 第 13 名起的完整名单（大池不再截断丢人头：资深 55/输出 56 人全展示）
+        "rest": [
+            {"rarity": int(entry["rarity"]), "name": entry["name"]}
+            for entry in matched[12:]
+        ],
+        "truncated": len(matched) > 12,
     }
     await _render_or_text(bot, ev, "ark_recruit.html", context, "\n".join(lines))
 
@@ -2068,7 +2078,7 @@ async def send_crisis_info(bot: Bot, ev: Event) -> None:
                     "end": season["end"],
                 }
             )
-        lines.append("词条检索：ark危机合约 <关键词>（如 ark危机合约 攻击速度）")
+        # 词条检索数据源暂不可达（见函数头注释），不再提示不存在的功能
         return await _render_or_text(
             bot, ev,
             "ark_crisis.html",
