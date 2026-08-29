@@ -448,6 +448,57 @@ class TrainingContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(ctx["pct"])
         self.assertEqual(ctx["portrait"], "")
 
+    async def test_target_skill_and_trainer(self) -> None:
+        """targetSkill + chars 当前专精 → 目标档；基准时长按档取（专精二 16h）。"""
+        import time as time_mod
+        from unittest import mock
+
+        now = int(time_mod.time())
+        payload = self._payload_with_training({
+            "level": 3, "speed": 1.0, "remainSecs": 8100,
+            "lastUpdateTime": now,
+            "trainee": {"charId": "char_002_amiya", "targetSkill": 1},
+            "trainer": {"charId": "char_1024_hbisc2"},
+        })
+        payload["data"]["chars"] = [{
+            "charId": "char_002_amiya",
+            "skills": [
+                {"id": "skcom_amiya_1", "specializeLevel": 3},
+                {"id": "skchr_amiya_2", "specializeLevel": 1},
+                {"id": "skchr_amiya_3", "specializeLevel": 0},
+            ],
+        }]
+        with mock.patch(
+            "ArknightsUID.utils.gamedata.charinfo.load_skill_names",
+            new=mock.AsyncMock(return_value={"skchr_amiya_2": "精神爆发"}),
+        ):
+            ctx = await self._context(payload)
+        assert ctx is not None
+        self.assertEqual(ctx["skill_label"], "2技能")
+        self.assertEqual(ctx["skill_name"], "精神爆发")
+        self.assertEqual((ctx["mastery_from"], ctx["mastery_to"]), (1, 2))
+        self.assertTrue(ctx["base_exact"])
+        # 16h 基准：total=57600，pct=(1-8100/57600)*100≈86
+        self.assertEqual(ctx["pct"], 86)
+        self.assertEqual(ctx["trainer"], "濯尘芙蓉")
+        self.assertEqual(ctx["trainer_avatar"], "A")
+
+    async def test_target_skill_without_chars_falls_back(self) -> None:
+        """chars 缺失推不出目标档：base_exact=False 按 24h 兜底，不臆造。"""
+        import time as time_mod
+
+        now = int(time_mod.time())
+        ctx = await self._context(self._payload_with_training({
+            "level": 3, "speed": 1.0, "remainSecs": 8100,
+            "lastUpdateTime": now,
+            "trainee": {"charId": "char_002_amiya", "targetSkill": 1},
+        }))
+        assert ctx is not None
+        self.assertEqual(ctx["skill_label"], "2技能")
+        self.assertEqual(ctx["skill_name"], "")
+        self.assertEqual(ctx["mastery_to"], 0)
+        self.assertFalse(ctx["base_exact"])
+
     async def test_template_renders(self) -> None:
         """模板契约：三态上下文都能被 jinja 渲染（漏键/类型错误会抛错）。"""
         import time as time_mod

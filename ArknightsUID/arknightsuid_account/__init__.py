@@ -1070,6 +1070,17 @@ async def show_ark_training(bot: Bot, ev: Event) -> None:
     lines = [f"「明日方舟」训练室（UID：{shown}）"]
     if context and context.get("trainee"):
         lines.append(f"受训干员：{context['trainee']}（{context['state']}）")
+        if context.get("skill_name") or context.get("mastery_to"):
+            lines.append(
+                f"在训技能：{context['skill_name'] or context['skill_label']}"
+                + (
+                    f"（专精{context['mastery_from']} → 专精{context['mastery_to']}）"
+                    if context.get("mastery_to")
+                    else ""
+                )
+            )
+        if context.get("trainer"):
+            lines.append(f"协助干员：{context['trainer']}")
         if context.get("remain_text"):
             tail = (
                 f"，预计 {context['finish_at']} 完成"
@@ -1078,7 +1089,12 @@ async def show_ark_training(bot: Bot, ev: Event) -> None:
             )
             lines.append(f"剩余时间：{context['remain_text']}{tail}")
         if context.get("pct") is not None:
-            lines.append(f"进度：约 {context['pct']}%（24h 基准估算）")
+            basis = (
+                "目标档基准"
+                if context.get("base_exact")
+                else "24h 档兜底估算"
+            )
+            lines.append(f"进度：约 {context['pct']}%（{basis}）")
         lines.append("ark订阅训练：完成前 1 小时预警 + 完成提醒。")
     else:
         lines.append("训练室空闲——当前没有干员在受训。")
