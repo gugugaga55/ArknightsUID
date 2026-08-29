@@ -1,0 +1,53 @@
+<!--
+  ark_login.html —— 登录成功回执卡（#32）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_bind._send_login_success 组装）：
+    roles: [{index: int, nickname: str, uid: str, is_default: bool}]
+        本次登录写入的方舟账号（uid 已脱敏；is_default = 当前默认查询账号）
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="LOGIN">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 登录成功 LOGIN</em></span>
+            <span class="mast-meta"><span class="idx">32</span>SKLAND</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">森空岛 · 账号写入成功</div>
+                <h1 class="title">登录<em>成功</em></h1>
+                <div class="title-rule"><span class="en">LOGIN SUCCESS</span></div>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_accounts.b64" %}" alt="">
+        </div>
+
+        <div class="sect">
+            <span class="sect-label">已写入账号</span>
+            <span class="sect-en">ACCOUNTS // {{ roles | length }}</span>
+        </div>
+        <div class="rows">
+            {% for r in roles %}
+            <div class="row">
+                <span class="row-value" style="font-size: 13px;"><span class="idx idx--ghost" style="margin-right: var(--space-2);">{{ "%02d" | format(r.index) }}</span>{{ r.nickname }}<span class="u-mute mono" style="font-size: 10px; font-weight: 400; margin-left: 8px;">UID {{ r.uid }}</span></span>
+                {% if r.is_default %}<span class="chip chip--yellow">默认</span>{% endif %}
+                <span class="chip">已写入</span>
+            </div>
+            {% endfor %}
+        </div>
+        <div class="prose">可使用 ark理智 / ark每日 / ark肉鸽 等命令；多账号用 ark切换 序号 设置默认账号。</div>
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 登录</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// LOGIN SUCCESS // SKLAND</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

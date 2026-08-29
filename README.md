@@ -26,6 +26,11 @@ git clone https://github.com/gugugaga55/ArknightsUID.git
 - `ark扫码登录`: 森空岛 APP 扫码登录（100 秒内有效）。
 - `ark删除登录 [UID]`: 删除本地登录（不指定 UID 则全部删除）。
 - `ark查看绑定`: 查看本地绑定的明日方舟账号。
+- <details><summary>登录成功回执：账号写入卡（ark绑定 / ark扫码登录 通用，标注默认账号）</summary>
+  
+  <img src="docs/design/previews/ark_login.jpg" width="55%">
+  
+  </details>
 
 </details>
 

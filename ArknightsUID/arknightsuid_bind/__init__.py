@@ -8,14 +8,20 @@ from gsuid_core.sv import SV
 from gsuid_core.utils.cookie_manager.qrlogin import get_qrcode_base64
 
 try:
-    from ArknightsUID.ArknightsUID.utils.account_switch import clear_default_uid
+    from ArknightsUID.ArknightsUID.utils.account_switch import (
+        clear_default_uid,
+        get_default_uid,
+    )
     from ArknightsUID.ArknightsUID.utils.arg_utils import extract_uid
     from ArknightsUID.ArknightsUID.utils.enduid.adapter import hide_uid
     from ArknightsUID.ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
     from ArknightsUID.ArknightsUID.utils.skland import auth as ark_auth
     from ArknightsUID.ArknightsUID.utils.skland import store as ark_store
 except ModuleNotFoundError:
-    from ArknightsUID.utils.account_switch import clear_default_uid
+    from ArknightsUID.utils.account_switch import (
+        clear_default_uid,
+        get_default_uid,
+    )
     from ArknightsUID.utils.arg_utils import extract_uid
     from ArknightsUID.utils.enduid.adapter import hide_uid
     from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
@@ -39,6 +45,33 @@ def _format_bind_success(roles: list[dict]) -> str:
         lines.append(f"- {role['nickname']}（UID {hide_uid(role['role_id'])}）")
     lines.append("现在可使用 ark理智 / ark每日 / ark肉鸽 等命令。")
     return "\n".join(lines)
+
+
+async def _send_login_success(bot: Bot, ev: Event, roles: list[dict]) -> None:
+    """登录成功回执：ark_login.html 卡片图；渲染失败回退纯文本清单。"""
+    try:
+        from ArknightsUID.ArknightsUID.utils.card import send_card_or_text
+        from ArknightsUID.ArknightsUID.version import ArknightsUID_version
+    except ModuleNotFoundError:
+        from ArknightsUID.utils.card import send_card_or_text
+        from ArknightsUID.version import ArknightsUID_version
+
+    default_uid = get_default_uid(ev.bot_id, ev.user_id)
+    context = {
+        "version": ArknightsUID_version,
+        "roles": [
+            {
+                "index": index,
+                "nickname": role.get("nickname") or "未记录昵称",
+                "uid": hide_uid(str(role.get("role_id") or "")),
+                "is_default": str(role.get("role_id") or "") == default_uid,
+            }
+            for index, role in enumerate(roles, start=1)
+        ],
+    }
+    await send_card_or_text(
+        bot, ev, "ark_login.html", context, _format_bind_success(roles)
+    )
 
 
 @bind_sv.on_command(("绑定登录", "绑定"), block=True)
@@ -74,7 +107,7 @@ async def bind_credential(bot: Bot, ev: Event) -> None:
     )
     if err:
         return await _send_text(bot, ev, err)
-    await _send_text(bot, ev, _format_bind_success(roles or []))
+    await _send_login_success(bot, ev, roles or [])
 
 
 @bind_sv.on_fullmatch(("扫码登录", "扫码登陆"), block=True)
@@ -126,7 +159,7 @@ async def scan_login(bot: Bot, ev: Event) -> None:
     )
     if err:
         return await _send_text(bot, ev, err)
-    await _send_text(bot, ev, _format_bind_success(roles or []))
+    await _send_login_success(bot, ev, roles or [])
 
 
 @bind_sv.on_command(("删除登录", "解除绑定"), block=True)
