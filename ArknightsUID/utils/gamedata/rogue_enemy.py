@@ -374,10 +374,16 @@ async def _load_stage_file(level_id: str) -> dict:
 
     ro5/ro6（岁/黑流）文件多一层包装：{"name", "data": [<关卡 dict>]}，
     归一化为关卡 dict 本身（data 恒为单元素，变体关是独立 level_id 文件）。
+
+    levelId 来自外部表（可能被污染）：先过 safe_cache_stem，URL 与缓存
+    路径用同一安全名，杜绝 "../" 逃出缓存目录。
     """
+    from .path_safety import resolve_inside, safe_cache_stem
+
+    stem = safe_cache_stem(level_id)
     data = await _fetch_url_json_cached(
-        f"{_STAGES_BASE}/ro_stage_data/{level_id}.json",
-        _STAGE_CACHE_DIR / f"{level_id}.json",
+        f"{_STAGES_BASE}/ro_stage_data/{stem}.json",
+        resolve_inside(_STAGE_CACHE_DIR, f"{stem}.json"),
     )
     if isinstance(data, dict) and not data.get("enemies"):
         inner = data.get("data")
@@ -508,22 +514,31 @@ def stages_for_enemy(
 
 
 async def find_stage(name: str) -> dict | None:
-    """关卡名 → {theme, level_id, code, name}；精确匹配，四期关卡名零重复。
+    """关卡名 → {theme, level_id, code, name, variants}；精确匹配。
 
-    找不到返回 None（调用方再走 search_stages 模糊候选）。
+    ro5/6 存在同期同名分支变体（level_id 带 -b/-c/_dlc1 后缀，实测
+    ro5 有 17 个重名关），此时返回字典序第一个变体，variants 给出
+    同名变体总数（调用方可提示用户）。找不到返回 None（再走
+    search_stages 模糊候选）。
     """
     metas = await asyncio.gather(
         *(_load_stage_meta(t) for t in _THEME_ROGUE_NUM)
     )
     for theme_dir, meta in zip(_THEME_ROGUE_NUM, metas):
-        for level_id, m in meta.items():
-            if m.get("name") == name:
-                return {
-                    "theme": theme_dir,
-                    "level_id": level_id,
-                    "code": m.get("code") or "",
-                    "name": name,
-                }
+        hits = [
+            (level_id, m)
+            for level_id, m in meta.items()
+            if m.get("name") == name
+        ]
+        if hits:
+            level_id, m = sorted(hits)[0]
+            return {
+                "theme": theme_dir,
+                "level_id": level_id,
+                "code": m.get("code") or "",
+                "name": name,
+                "variants": len(hits),
+            }
     return None
 
 
@@ -632,6 +647,9 @@ def stage_panel_rows(
 _ATK_TYPE_NAMES = {
     "melee": "近战", "ranged": "远程",
     "phys": "物理", "arts": "法术", "real": "真实",
+    # 线上数据实际值域（真实伤害有 true/raw 两种键、无 real）：
+    # true×5 / raw×29 / no_attack×248 / heal×2，缺映射会裸显英文
+    "true": "真实", "raw": "真实", "no_attack": "不攻击", "heal": "治疗",
 }
 _CLASS_NAMES = {"BOSS": "领袖", "ELITE": "精英", "NORMAL": "普通"}
 
@@ -797,17 +815,40 @@ def detect_theme(
 
 
 def _mods_apply(base: float, mods: list[dict]) -> float:
-    """tomimi 乘数语义：initial delta 相加、final 乘数连乘。"""
-    init_delta = 0.0
+    """tomimi getModdedStat 同源语义：mods 累积折算单个属性。
+
+    - mul + initial：乘数**增量**累加（init_mul = 1 + Σvalue，tomimi 为
+      `initialMul += value`，不是连乘）
+    - mul + final：乘数连乘
+    - add + initial：基底平加；add + final：initial 段之后平加
+    - 结果 = (base + init_add) * init_mul + final_add) * final_mul
+
+    此前只处理 mul（add 全部丢弃），水月 N3+ 法抗 +10 等修正被漏算。
+    """
+    init_add = 0.0
+    init_mul = 1.0
+    final_add = 0.0
     final_mul = 1.0
     for mod in mods:
-        if mod.get("mode") != "mul":
+        mode = mod.get("mode")
+        if mode not in ("mul", "add"):
             continue
-        if mod.get("order") == "initial":
-            init_delta += float(mod.get("value") or 0)
+        try:
+            value = float(mod.get("value") or 0)
+        except (TypeError, ValueError):
+            continue
+        initial = mod.get("order") == "initial"
+        if mode == "mul":
+            if initial:
+                init_mul += value
+            else:
+                final_mul *= value
         else:
-            final_mul *= float(mod.get("value") or 1)
-    return base * (1 + init_delta) * final_mul
+            if initial:
+                init_add += value
+            else:
+                final_add += value
+    return ((base + init_add) * init_mul + final_add) * final_mul
 
 
 def _effects_mods_for(
@@ -853,6 +894,9 @@ def _stats_with_mods(
     for stat_key in PANEL_STATS:
         base = float(base_block.get(stat_key) or 0)
         value = _mods_apply(base, stat_mods.get(stat_key, []))
+        if stat_key in ("res", "weight"):
+            # tomimi calculateModdedStat 对 res/weight 钳 [0,100]
+            value = min(100.0, max(0.0, value))
         if noob and stat_key == "hp":
             value *= noob
         stats[stat_key] = round(value)
@@ -902,6 +946,10 @@ def build_diff_panels(
         for stat_key in PANEL_STATS:
             base = float(base_block.get(stat_key) or 0)
             value = _mods_apply(base, stat_mods.get(stat_key, []))
+            if stat_key in ("res", "weight"):
+                # tomimi calculateModdedStat 对 res/weight 钳 [0,100]
+                # （与 _stats_with_mods 同口径）
+                value = min(100.0, max(0.0, value))
             if noob and stat_key == "hp":
                 value *= noob
             stats[stat_key] = round(value)
@@ -997,14 +1045,21 @@ def class_labels(entry: dict) -> list[str]:
 
 
 async def enemy_icon_b64(enemy_key: str) -> str:
-    """敌人头像（tomimi enemy_icons/{key}.webp，自下载 + 负缓存）。"""
+    """敌人头像（tomimi enemy_icons/{key}.webp，自下载 + 负缓存）。
+
+    key 可能来自远端 Wiki 页名：过 safe_cache_stem 清洗后再拼 URL/路径，
+    防数据源污染时的路径逃逸（正常 ascii key 文件名不变，缓存兼容）。
+    """
     import base64
+
+    from .path_safety import safe_cache_stem
 
     enemy_key = (enemy_key or "").strip()
     if not enemy_key:
         return ""
+    stem = safe_cache_stem(enemy_key)
     cache_dir = Path(IS_ENEMY_CACHE_DIR) / "icons"
-    filename = f"{enemy_key}.webp"
+    filename = f"{stem}.webp"
     local_path = cache_dir / filename
     miss_path = cache_dir / f"{filename}.miss"
     try:

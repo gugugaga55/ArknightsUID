@@ -15,6 +15,7 @@ spm 为一图流口径的关卡效率值（样本 >300 的关卡才收录），�
 from __future__ import annotations
 
 import json
+import math
 import time
 from pathlib import Path
 from typing import Any
@@ -74,14 +75,34 @@ async def fetch_stage_info(force: bool = False) -> list[dict[str, Any]] | None:
     return payload if isinstance(payload, list) else None
 
 
+def _num(value: Any) -> float:
+    """外部字段的数值安全解析：非有限数值一律 0（审计 #26d）。
+
+    一图流接口偶发返回 "N/A"/null/对象等异常形态，裸 float() 会让
+    刷图推荐命令整体失败。
+    """
+    if isinstance(value, bool) or value is None:
+        return 0.0
+    if isinstance(value, (int, float)):
+        number = float(value)
+    elif isinstance(value, str) and value.strip():
+        try:
+            number = float(value.strip())
+        except ValueError:
+            return 0.0
+    else:
+        return 0.0
+    return number if math.isfinite(number) else 0.0
+
+
 def _is_open(record: dict[str, Any], now: float | None = None) -> bool:
     """限时活动按时间窗过滤；永久类型恒开放。"""
     if record.get("stageType") != "ACT":
         return True
     now = time.time() if now is None else now
     # start/end 为毫秒时间戳（0/缺失视为不限）
-    start = float(record.get("start") or 0)
-    end = float(record.get("end") or 0)
+    start = _num(record.get("start"))
+    end = _num(record.get("end"))
     if start and now < start / 1000:
         return False
     if end and now > end / 1000:
@@ -106,12 +127,12 @@ def rank_stages(
         record
         for record in records
         if record.get("stageType") == stage_type
-        and float(record.get("spm") or 0) > 0
+        and _num(record.get("spm")) > 0
         and _is_open(record, now)
     ]
     rows.sort(
         key=lambda r: (
-            -float(r.get("spm") or 0),
+            -_num(r.get("spm")),
             str(r.get("stageCode", "")),
         )
     )

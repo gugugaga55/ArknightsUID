@@ -377,3 +377,33 @@ class PlanCommandUidExtractionTest(unittest.IsolatedAsyncioTestCase):
         ):
             await plan_gacha_draws(bot, ev)
         self.assertEqual(captured["index"], 2)
+
+
+class PlanArgHardeningTest(unittest.TestCase):
+    """审计 #23/#28：UID token 不当抽数；nan/inf/超范围拒绝。"""
+
+    def test_long_digits_not_target_draws(self) -> None:
+        from ArknightsUID.utils.gacha_plan import parse_plan_args
+
+        args = parse_plan_args("149809765")
+        self.assertIsNone(args.target_draws)  # 5+ 位纯数字 = UID 候选
+        self.assertEqual(args.pool_keyword, "")
+        args = parse_plan_args("300")
+        self.assertEqual(args.target_draws, 300)  # 1-4 位仍是抽数
+
+    def test_non_finite_and_overflow_rejected(self) -> None:
+        from ArknightsUID.utils.gacha_plan import parse_plan_args
+
+        for bad in ("玉:inf", "玉:nan", "刀:nan", "目标:1e309", "玉:-5"):
+            args = parse_plan_args(bad)
+            self.assertTrue(args.errors, bad)
+        # 合理值照常通过
+        args = parse_plan_args("玉:60000 刀:30 目标:300")
+        self.assertEqual(args.errors, [])
+        self.assertEqual(args.orundum, 60000)
+
+    def test_absurd_magnitude_rejected(self) -> None:
+        from ArknightsUID.utils.gacha_plan import parse_plan_args
+
+        args = parse_plan_args("刀:99999")
+        self.assertTrue(args.errors)  # 超出 pity 合理上限

@@ -183,7 +183,7 @@ class RogueCardUpgradeTest(unittest.TestCase):
     def test_context_orders_latest_with_totals(self) -> None:
         from ArknightsUID.arknightsuid_rogue import _build_rogue_context
 
-        context = _build_rogue_context(self._response())
+        context = _build_rogue_context(self._response(), shown_uid="1**3")
         assert context is not None
         # 最新期（rogue_6）在前并标记；主题名按推位规律映射（玩家 rogue_6 = 岁的界园志异）
         self.assertEqual(context["records"][0]["rogue_id"], "rogue_6")
@@ -192,6 +192,35 @@ class RogueCardUpgradeTest(unittest.TestCase):
         self.assertFalse(context["records"][1]["latest"])
         self.assertEqual(context["total_clears"], 72)
         self.assertEqual(context["total_relics"], 269)
+
+    def test_context_uid_is_caller_masked_not_raw(self) -> None:
+        """审计 #3：卡片 UID 必须用调用方 hide_uid_for 的结果，不吃接口原始值。"""
+        from ArknightsUID.arknightsuid_rogue import _build_rogue_context
+
+        context = _build_rogue_context(self._response(), shown_uid="1**3")
+        assert context is not None
+        self.assertEqual(context["uid"], "1**3")
+        self.assertNotIn("123", context["uid"])
+
+    def test_context_prefers_status_name_over_nick_name(self) -> None:
+        """真实接口字段是 status.name；nickName 仅为旧字段兜底（审计 #3）。"""
+        from ArknightsUID.arknightsuid_rogue import _build_rogue_context
+
+        response = self._response()
+        response["data"]["status"]["name"] = "刀客塔不吃香菜"
+        context = _build_rogue_context(response, shown_uid="1**3")
+        assert context is not None
+        self.assertEqual(context["name"], "刀客塔不吃香菜")
+
+        # 无 name 时回退 nickName，再回退"博士"
+        response["data"]["status"].pop("name")
+        self.assertEqual(
+            _build_rogue_context(response, shown_uid="")["name"], "刀客塔"
+        )
+        response["data"]["status"].pop("nickName")
+        self.assertEqual(
+            _build_rogue_context(response, shown_uid="")["name"], "博士"
+        )
 
     def test_text_lists_theme_names_with_total(self) -> None:
         from ArknightsUID.arknightsuid_rogue import _format_rogue

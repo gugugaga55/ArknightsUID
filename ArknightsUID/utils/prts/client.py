@@ -465,6 +465,55 @@ def rogue_map_preview_urls(level_id: str) -> list[str]:
     return [f"https://torappu.prts.wiki/assets/map_preview/ro{k}_{part}.png"]
 
 
+async def all_image_titles(prefix: str, max_titles: int = 4000) -> list[str]:
+    """按文件名前缀枚举 media 文件标题（list=allimages，分页续传）。
+
+    供「ark下载资源」枚举 PRTS 现存的 道具_带框_* / 头像_敌人_* 图标全集：
+    按实际存在的文件枚举，避免按名字构造 URL 打出成片 404。
+    匿名会话 ailimit 上限 500，继续用 continue 的 aicontinue 游标。
+    """
+    titles: list[str] = []
+    continue_params: dict[str, Any] = {}
+    last_cursor: str | None = None
+    prev_count = -1
+    while len(titles) < max_titles:
+        data = await _api(
+            {
+                "action": "query",
+                "list": "allimages",
+                "aiprefix": prefix,
+                "ailimit": 500,
+                "aiprop": "url",
+                **continue_params,
+            }
+        )
+        if not isinstance(data, dict):
+            break
+        query = data.get("query")
+        images = query.get("allimages") if isinstance(query, dict) else None
+        for image in images or []:
+            if isinstance(image, dict):
+                name = str(image.get("name") or "")
+                if name and name not in titles:
+                    titles.append(name)
+        cont = data.get("continue")
+        if not isinstance(cont, dict) or not cont.get("aicontinue"):
+            break
+        cursor = str(cont.get("aicontinue"))
+        # 审计 #14：游标不推进（缓存命中的重复响应/异常信封）或结果
+        # 零增长时继续请求只会无限空转——熔断退出
+        if cursor == last_cursor or len(titles) == prev_count:
+            logger.warning(
+                "[ArknightsUID] PRTS allimages 分页游标未推进，提前结束 "
+                f"（prefix={prefix}, got={len(titles)}）"
+            )
+            break
+        last_cursor = cursor
+        prev_count = len(titles)
+        continue_params = dict(cont)
+    return titles
+
+
 def _cache_file(params: dict[str, Any]) -> Path:
     raw = json.dumps(params, sort_keys=True, ensure_ascii=False)
     digest = hashlib.sha1(raw.encode("utf-8")).hexdigest()
@@ -534,6 +583,15 @@ async def _api(
         )
         response.raise_for_status()
         payload = response.json()
+        if isinstance(payload, dict) and "error" in payload:
+            # MediaWiki 限流/只读库时返回 HTTP 200 + error 信封
+            # （审计 #30）：绝不能写缓存（TTL 最长 30 天内持续命中错误），
+            # 尝试用旧成功缓存兜底
+            logger.warning(
+                "[ArknightsUID] PRTS API 错误信封: "
+                f"{str(payload.get('error'))[:60]}"
+            )
+            return await _load_stale_cache(cache_path)
         await cache_write(cache_path, payload)
         _cleanup_stale_cache()
         return payload
@@ -690,6 +748,11 @@ def _collapse_inline_template(match: re.Match[str]) -> str:
     parts = match.group(1).split("|")
     name = parts[0].strip()
     args = [p.strip() for p in parts[1:]]
+    if name == "DrName":
+        # PRTS 干员称谓模板，渲染为默认玩家称呼；{{DrName|前缀=Dr.}}
+        # （凯尔希页真实用法）保留前缀
+        prefix = next((a for a in args if a.startswith("前缀=")), "")
+        return prefix[3:] + "博士"
     if name == "变动数值":
         value = args[0] if args else ""
         mark = args[1] if len(args) > 1 else ""
@@ -1769,7 +1832,11 @@ async def query_activities(limit: int = 15, now_ts: float | None = None) -> list
     data = await _smw_ask(query)
     if not data:
         return []
-    results = (data.get("query") or {}).get("results") or {}
+    query = data.get("query") if isinstance(data, dict) else None
+    query = query if isinstance(query, dict) else {}
+    results = query.get("results")
+    # v3 响应的 results 可能是 list（异常/改版），.items() 会崩（审计 #26g）
+    results = results if isinstance(results, dict) else {}
     now_ts = now_ts if now_ts is not None else time.time()
     activities: list[ActivityInfo] = []
     for title, info in results.items():
@@ -1812,7 +1879,11 @@ async def query_gacha_pools(
     data = await _smw_ask(query)
     if not data:
         return []
-    results = (data.get("query") or {}).get("results") or {}
+    query = data.get("query") if isinstance(data, dict) else None
+    query = query if isinstance(query, dict) else {}
+    results = query.get("results")
+    # v3 响应的 results 可能是 list（异常/改版），.items() 会崩（审计 #26g）
+    results = results if isinstance(results, dict) else {}
     now_ts = now_ts if now_ts is not None else time.time()
     pools: list[ActivityInfo] = []
     for title, info in results.items():
@@ -1937,24 +2008,48 @@ async def query_game_info() -> dict[str, str]:
 
 # 语音页模板参数：|标题N=交谈1 |台词N={{VoiceData/word|中文|……}}（多语言并列）
 _VOICE_TITLE_RE = re.compile(r"\|\s*标题(\d+)\s*=\s*([^\n|]+)")
-_VOICE_CN_RE = re.compile(
-    r"\|\s*台词(\d+)\s*=\s*.*?\{\{VoiceData/word\|中文\|([^{}]*)\}\}",
-    re.DOTALL,
-)
+_VOICE_LINE_RE = re.compile(r"\|\s*台词(\d+)\s*=\s*")
+_VOICE_CN_HEAD = "{{VoiceData/word|中文|"
+
+
+def _voice_cn_text(segment: str) -> str:
+    """单条台词参数段内的中文文本：定位 {{VoiceData/word|中文| 后做
+    花括号配平扫描。台词里常嵌 {{DrName}} 等模板，非贪婪正则会跨条
+    错位配对（上一条标题配下一条文本），必须按深度配平。
+    """
+    head = segment.find(_VOICE_CN_HEAD)
+    if head < 0:
+        return ""
+    pos = head + len(_VOICE_CN_HEAD)
+    depth = 1
+    while pos < len(segment) and depth > 0:
+        if segment.startswith("{{", pos):
+            depth += 1
+            pos += 2
+        elif segment.startswith("}}", pos):
+            depth -= 1
+            pos += 2
+        else:
+            pos += 1
+    if depth != 0:
+        return ""
+    return segment[head + len(_VOICE_CN_HEAD) : pos - 2]
 
 
 def parse_voice_lines(wikitext: str) -> list[dict[str, str]]:
     """语音记录 wikitext → [{title, text}]（只取中文台词）。
 
-    台词多语言并列在同一个参数值里，中文块用非贪婪配平花括号；
-    标题与台词按下标配对，缺失任一侧即丢弃该条。
+    按 `|台词N=` 参数切段（段 = 本参数到下一条台词参数之间），段内
+    配平提取中文块，天然杜绝跨条错位；标题与台词按下标配对，缺失
+    任一侧即丢弃该条。
     """
     titles = {m.group(1): m.group(2).strip() for m in _VOICE_TITLE_RE.finditer(wikitext)}
+    lines = list(_VOICE_LINE_RE.finditer(wikitext))
     result: list[dict[str, str]] = []
-    for m in _VOICE_CN_RE.finditer(wikitext):
-        idx = m.group(1)
-        title = titles.get(idx, "")
-        text = html.unescape(m.group(2)).strip()
+    for i, m in enumerate(lines):
+        seg_end = lines[i + 1].start() if i + 1 < len(lines) else len(wikitext)
+        text = _clean_wiki_value(_voice_cn_text(wikitext[m.end():seg_end]))
+        title = titles.get(m.group(1), "")
         if title and text:
             result.append({"title": title, "text": text})
     return result

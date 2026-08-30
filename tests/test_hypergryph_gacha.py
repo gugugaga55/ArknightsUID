@@ -5,6 +5,7 @@ httpx 全 mock（替换 client._request，与 test_skland_auth 同模式）；
 """
 from __future__ import annotations
 
+import asyncio
 import tempfile
 import unittest
 from pathlib import Path
@@ -183,6 +184,14 @@ def _rec(
         "gacha_ts": ts,
         "pos": pos,
         "pool_name": pool,
+    }
+
+
+def _raw(ts_ms: int, pos: int, name: str, rarity: int) -> dict[str, Any]:
+    """官方接口原始条目（gachaTs 毫秒）。"""
+    return {
+        "charId": f"char_{name}", "charName": name, "rarity": rarity,
+        "isNew": False, "gachaTs": ts_ms, "pos": pos, "poolName": "限定寻访",
     }
 
 
@@ -372,3 +381,146 @@ class SyncGachaTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SyncIntegrityTest(unittest.IsolatedAsyncioTestCase):
+    """审计 #11/#12/#13/#27：同 UID 单飞、分页中断不推检查点、量纲持久化、脏文件。"""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self._orig_path = gacha_svc._logs_path
+        gacha_svc._logs_path = lambda uid: Path(self._tmp.name) / f"{uid}.json"  # type: ignore[assignment]
+        self._orig_login = hg.login_gacha_chain
+        self._orig_cate = hg.get_gacha_categories
+        self._orig_page = hg.get_gacha_history_page
+        hg.login_gacha_chain = self._fake_login  # type: ignore[assignment]
+
+    def tearDown(self) -> None:
+        gacha_svc._logs_path = self._orig_path  # type: ignore[assignment]
+        hg.login_gacha_chain = self._orig_login  # type: ignore[assignment]
+        hg.get_gacha_categories = self._orig_cate  # type: ignore[assignment]
+        hg.get_gacha_history_page = self._orig_page  # type: ignore[assignment]
+        self._tmp.cleanup()
+
+    @staticmethod
+    async def _fake_login(credential: Any) -> Any:
+        return hg.ArkGachaAuth("T" * 24, "U8", "CK")
+
+    def _patch(self, page_side_effect) -> None:
+        async def fake_cate(credential: Any, auth: Any) -> list[dict[str, Any]]:
+            return [{"id": 1, "name": "限定寻访"}]
+
+        async def fake_page(
+            credential: Any, auth: Any, category: str,
+            gacha_ts: int | None = None, pos: int | None = None,
+        ) -> Any:
+            return page_side_effect()
+
+        hg.get_gacha_categories = fake_cate  # type: ignore[assignment]
+        hg.get_gacha_history_page = fake_page  # type: ignore[assignment]
+
+    async def test_mid_page_failure_discards_partial_batch(self) -> None:
+        """第一页成功、第二页失败：部分批次丢弃，检查点不推进，下轮可补。"""
+        await gacha_svc.save_local_logs(
+            "123456789", [_rec(100, 1, 5, "本地六")]
+        )
+        calls = {"n": 0}
+
+        def pages():
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return {
+                    "list": [_raw(1700000200000, 2, "新六", 5)],
+                    "hasMore": True,
+                }
+            return None  # 第二页请求失败
+
+        self._patch(pages)
+        records, warning = await gacha_svc.sync_gacha_logs(_cred())
+        # 第一页的"新六"不得入库（保存会把检查点推进到断层位置）
+        self.assertEqual([r["name"] for r in records], ["本地六"])
+        self.assertIn("中断", warning)
+
+    async def test_first_page_failure_warns_with_local_fallback(self) -> None:
+        """首页即失败：类别进警告（此前只有拉到部分记录才报），
+        本地兜底数据照常返回。"""
+        await gacha_svc.save_local_logs(
+            "123456789", [_rec(100, 1, 5, "本地六")]
+        )
+
+        def pages():
+            return None  # 首页请求失败
+
+        self._patch(pages)
+        records, warning = await gacha_svc.sync_gacha_logs(_cred())
+        self.assertEqual([r["name"] for r in records], ["本地六"])
+        self.assertIn("中断", warning)
+
+    async def test_first_page_failure_without_local_is_pull_error(self) -> None:
+        """首页失败且无本地记录：报拉取故障，而不是误导性的"无记录"。"""
+        def pages():
+            return None
+
+        self._patch(pages)
+        records, warning = await gacha_svc.sync_gacha_logs(_cred())
+        self.assertEqual(records, [])
+        self.assertIn("拉取失败", warning)
+        self.assertNotIn("无记录", warning)
+
+    async def test_concurrent_sync_serializes_per_uid(self) -> None:
+        """审计 #11：两个同步并发跑，后写者不得覆盖先写者。"""
+        counter = {"n": 0}
+
+        def pages():
+            counter["n"] += 1
+            return {
+                "list": [_raw(1700000000000 + counter["n"] * 1000, counter["n"],
+                              f"并发{counter['n']}", 4)],
+                "hasMore": False,
+            }
+
+        self._patch(pages)
+        await asyncio.gather(
+            gacha_svc.sync_gacha_logs(_cred()),
+            gacha_svc.sync_gacha_logs(_cred()),
+        )
+        final = await gacha_svc.load_local_logs("123456789")
+        names = {r["name"] for r in final}
+        # 无锁时两协程基于同一份空本地日志各写各的，先写者被覆盖
+        self.assertEqual(names, {"并发1", "并发2"}, f"并发同步丢记录: {names}")
+
+    def test_mixed_basis_rarity_normalized_per_record(self) -> None:
+        """审计 #13：0 基与 1 基记录混存时六星逐条判定。"""
+        records = [
+            {"category": "1", "gacha_ts": 3, "pos": 1, "rarity": 5,
+             "basis": "0", "name": "零基六"},      # 0 基六星
+            {"category": "1", "gacha_ts": 2, "pos": 1, "rarity": 6,
+             "basis": "1", "name": "壹基六"},      # 1 基六星
+            {"category": "1", "gacha_ts": 1, "pos": 1, "rarity": 5,
+             "basis": "1", "name": "壹基五"},      # 1 基五星
+        ]
+        stats = gacha_svc.analyze_gacha(records)
+        self.assertEqual(stats["six_count"], 2)
+        self.assertEqual(stats["total"], 3)
+
+    def test_legacy_records_keep_old_threshold_semantics(self) -> None:
+        """无 basis 存量记录：判定与旧版全局阈值完全一致。"""
+        zero_based = [
+            {"category": "1", "gacha_ts": 2, "pos": 1, "rarity": 5},  # 0基六星
+            {"category": "1", "gacha_ts": 1, "pos": 1, "rarity": 4},
+        ]
+        self.assertEqual(gacha_svc.analyze_gacha(zero_based)["six_count"], 1)
+        one_based = [
+            {"category": "1", "gacha_ts": 3, "pos": 1, "rarity": 6},  # 1基六星
+            {"category": "1", "gacha_ts": 2, "pos": 1, "rarity": 5},  # 1基五星
+            {"category": "1", "gacha_ts": 1, "pos": 1, "rarity": 4},
+        ]
+        self.assertEqual(gacha_svc.analyze_gacha(one_based)["six_count"], 1)
+
+    async def test_corrupt_local_elements_filtered(self) -> None:
+        """审计 #27：[null, "bad"] 不再让命令抛异常。"""
+        import json as _json
+
+        path = gacha_svc._logs_path("123456789")
+        path.write_text(_json.dumps([None, "bad record"]), encoding="utf-8")
+        self.assertEqual(await gacha_svc.load_local_logs("123456789"), [])

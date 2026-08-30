@@ -39,7 +39,7 @@
                     <span class="bar-num">{{ daily_done }} / {{ daily_total }}</span>
                 </div>
                 <div class="bar">
-                    <i style="width: {{ (daily_done * 100 / daily_total) | round | int }}%;"></i>
+                    <i style="width: {{ (daily_done * 100 / (daily_total or 1)) | round | int }}%;"></i>
                 </div>
             </div>
             <div class="row" style="display: block;">
@@ -49,7 +49,7 @@
                     <span class="bar-num">{{ weekly_done }} / {{ weekly_total }}</span>
                 </div>
                 <div class="bar">
-                    <i style="width: {{ (weekly_done * 100 / weekly_total) | round | int }}%;"></i>
+                    <i style="width: {{ (weekly_done * 100 / (weekly_total or 1)) | round | int }}%;"></i>
                 </div>
             </div>
             <div class="row" style="display: block;">
@@ -59,7 +59,7 @@
                     <span class="bar-num">{{ campaign_current }} / {{ campaign_total }}</span>
                 </div>
                 <div class="bar is-yellow">
-                    <i style="width: {{ (campaign_current * 100 / campaign_total) | round | int }}%;"></i>
+                    <i style="width: {{ (campaign_current * 100 / (campaign_total or 1)) | round | int }}%;"></i>
                 </div>
             </div>
         </div>
