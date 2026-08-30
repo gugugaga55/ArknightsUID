@@ -4,8 +4,9 @@
 - `ark取消订阅理智 [序号|UID]`：取消（不带参数取消全部）
 - 定时轮询（10 分钟）：逐订阅账号拉 player_info（带 5 分钟磁盘缓存），
   推算当前理智，回满即推送一次；用后（理智降回上限以下）自动重新武装
-- `ark订阅训练 [序号|UID]` / `ark取消订阅训练`：专精训练完成提醒（30 分钟
-  轮询训练室 remainSecs，归零推送一次；换干员开新一轮后自动重新武装）
+- `ark订阅训练 [序号|UID] [提前量]` / `ark取消订阅训练`：专精训练剩余时间
+  预警 + 完成提醒。提前量如「5小时」「90分」「2小时30分」控制预警提前多久
+  触发（默认 1 小时）；订阅回执即时播报当前在训干员与剩余时间
 
 推送状态（notified 标记）落 MAIN_PATH/sanity_push_state.json 与
 training_push_state.json，键为 f"{bot_id}|{user_id}|{uid}"。订阅本身存
@@ -75,15 +76,78 @@ POLL_MINUTES = 10
 
 TRAIN_TASK_NAME = "订阅训练推送"
 _TRAIN_STATE_PATH: Path = MAIN_PATH / "training_push_state.json"
-# 专精剩余时间预警窗口：进入最后一小时提醒一次「还差多久完成」
+# 专精剩余时间预警默认窗口：进入最后一小时提醒一次「还差多久完成」；
+# 订阅命令可带提前量覆盖（如 ark订阅训练 5小时），存训练状态 warn_window
 TRAIN_WARN_WINDOW_SECS = 3600
+# 提前量合法范围：1 分钟 ~ 7 天（专精最长 24h，留调度余量）
+TRAIN_LEAD_MIN_SECS = 60
+TRAIN_LEAD_MAX_SECS = 7 * 86400
+# 提前量时间词：「5小时」「5.5小时」「300分」「2小时30分」「1天2小时」；
+# 所有匹配片段求和并从原文移除，剩余文本继续走账号定位（序号|UID）解析
+_LEAD_SPEC_RE = re.compile(
+    r"(\d+(?:\.\d+)?)\s*(天|小时|時|时|h|H|分钟|分鐘|分|m|M)"
+)
+_LEAD_UNIT_SECS = {
+    "天": 86400,
+    "小时": 3600, "時": 3600, "时": 3600, "h": 3600, "H": 3600,
+    "分钟": 60, "分鐘": 60, "分": 60, "m": 60, "M": 60,
+}
 # 专精完成推送 + 剩余时间预警共用轮询：10 分钟粒度让「剩约X分钟」有读数
 # 意义（player_info 磁盘缓存 5 分钟，与其他任务错峰命中）
 TRAIN_POLL_MINUTES = 10
 
 
+def parse_training_lead(text: str) -> tuple[int | None, str]:
+    """订阅命令文本 → (提前量秒数, 抽掉时间词后的文本)。
+
+    无时间词或越界（<1 分钟 / >7 天）返回 (None, 原文)，调用方回落默认
+    窗口；时间词从文本移除后继续按「序号|UID」规则定位账号。
+    """
+    query = text or ""
+    matched = _LEAD_SPEC_RE.findall(query)
+    if not matched:
+        return None, query
+    total = sum(
+        float(value) * _LEAD_UNIT_SECS[unit] for value, unit in matched
+    )
+    total = int(round(total))
+    if not TRAIN_LEAD_MIN_SECS <= total <= TRAIN_LEAD_MAX_SECS:
+        return None, query
+    return total, _LEAD_SPEC_RE.sub(" ", query).strip()
+
+
+def format_lead_secs(secs: int) -> str:
+    """提前量秒 → 简洁文案（5小时 / 1小时30分钟 / 45分钟）。"""
+    minutes = max(0, int(secs)) // 60
+    days, rest = divmod(minutes, 1440)
+    hours, mins = divmod(rest, 60)
+    parts = []
+    if days:
+        parts.append(f"{days}天")
+    if hours:
+        parts.append(f"{hours}小时")
+    if mins:
+        parts.append(f"{mins}分钟")
+    return "".join(parts) or "0分钟"
+
+
 def _state_key(bot_id: str, user_id: str, uid: str) -> str:
     return f"{bot_id}|{user_id}|{uid}"
+
+
+async def _alive_state_keys(task_name: str) -> set[str]:
+    """当前订阅关系对应的存活状态键集合（轮询末尾落盘前重读）。
+
+    轮询在网络 await 期间，用户可能执行退订（pop 状态键）：落盘时
+    不在磁盘态也不在此集合里的键不写回，避免孤儿键/覆盖新订阅的
+    复位态（三条推送链共用口径）。
+    """
+    alive: set[str] = set()
+    for sub in await gs_subscribe.get_subscribe(task_name) or []:
+        uid = str(sub.uid or "")
+        if uid:
+            alive.add(_state_key(sub.bot_id, sub.user_id, uid))
+    return alive
 
 
 def evaluate_sanity(ap: int, ap_max: int, notified: bool) -> tuple[bool, bool]:
@@ -189,14 +253,36 @@ async def maybe_warn_credential(subscribe, uid: str, error: str) -> None:
     _save_cred_warn_state(state)
 
 
-def _write_state_atomic(path: Path, state: dict) -> None:
-    """临时文件 + os.replace 原子落盘：写一半崩溃不至于把状态文件写坏
-    （坏文件会被当空态，导致全部订阅重复推送一次）。"""
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(
-        json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-    os.replace(tmp, path)
+def _write_state_atomic(path: Path, state: dict, merge_from=None) -> None:
+    """跨进程文件锁 + 唯一 tmp + os.replace 原子落盘（审计 #10）。
+
+    merge_from 传入读函数时执行"锁内重读 → 键级合并 → 写"：轮询任务
+    在网络 await 期间，其他进程/命令写入的键不会被本进程的旧快照覆盖
+    （退订复活/丢键）；写一半崩溃也不至于把状态文件写坏（坏文件会被
+    当空态，导致全部订阅重复推送一次）。
+    """
+    from ..utils.file_lock import file_locked, unique_tmp
+
+    with file_locked(path):
+        if merge_from is not None:
+            try:
+                fresh = merge_from()
+            except Exception as exc:
+                # 合并基底读取失败时放弃本轮写入：硬写会把磁盘上未涉及
+                # 的键（含窗口内其他写者的更新）整批丢掉，下轮重试即可
+                logger.warning(
+                    f"[ArknightsUID·推送] 状态合并失败，本轮不落盘: "
+                    f"{exc.__class__.__name__}"
+                )
+                return
+            if isinstance(fresh, dict):
+                fresh.update(state)
+                state = fresh
+        tmp = unique_tmp(path)
+        tmp.write_text(
+            json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        os.replace(tmp, path)
 
 
 def load_push_state() -> dict[str, dict]:
@@ -209,10 +295,16 @@ def load_push_state() -> dict[str, dict]:
     return {}
 
 
-def save_push_state(state: dict[str, dict]) -> None:
+def save_push_state(state: dict[str, dict], merge_from=None) -> None:
+    """落盘理智订阅状态。
+
+    merge_from 传入读函数时走"锁内重读 → 键级合并 → 写"（轮询任务用：
+    网络 await 期间其他写者的键不被旧快照覆盖）；默认整写（退订命令
+    需要 pop 键的删除语义，不能合并）。
+    """
     try:
         _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _write_state_atomic(_STATE_PATH, state)
+        _write_state_atomic(_STATE_PATH, state, merge_from=merge_from)
     except Exception as exc:
         logger.warning(
             f"[ArknightsUID·理智推送] 状态写入失败: {exc.__class__.__name__}"
@@ -311,6 +403,7 @@ def format_push_message(name: str, ap_max: int, uid_masked: str) -> str:
 @scheduler.scheduled_job("interval", minutes=POLL_MINUTES, id="ark_sanity_push")
 async def check_sanity_push() -> None:
     """定时检查各订阅账号理智，回满推送一次。"""
+    _t0 = time.monotonic()
     datas = await gs_subscribe.get_subscribe(TASK_NAME)
     if not datas:
         return
@@ -326,6 +419,7 @@ async def check_sanity_push() -> None:
         prev = load_push_state().get(key, {})
         notified = bool(prev.get("notified"))
         warned = bool(prev.get("warned"))
+        prev_notified, prev_warned = notified, warned
 
         credential = await resolve_credential(
             subscribe.user_id, subscribe.bot_id, uid=uid
@@ -350,12 +444,18 @@ async def check_sanity_push() -> None:
         ap = effective_ap(data)
         is_full, should_push = evaluate_sanity(ap, data.ap_max, notified)
         should_warn, new_warned = evaluate_sanity_warn(ap, data.ap_max, warned)
+        # 发送失败的标志不落盘（下轮重试），与训练/基建推送口径一致；
+        # 否则回满当轮 bot 掉线 → notified=True 落盘 → 该周期永久漏发。
+        # 另一标志与本轮发送成败无关，照常推进（否则预警轮不复位
+        # notified，下轮回满会被误判"已通知过"而漏发）。
         if should_push:
             message = format_push_message(
                 data.name or credential.nickname, data.ap_max, hide_uid(uid)
             )
+            warned = new_warned
             try:
                 await subscribe.send(message)
+                notified = is_full
                 logger.info(
                     f"[ArknightsUID·理智推送] 已推送 user={subscribe.user_id} "
                     f"uid={hide_uid(uid)} {ap}/{data.ap_max}"
@@ -368,8 +468,10 @@ async def check_sanity_push() -> None:
             message = format_sanity_warn_message(
                 data.name or credential.nickname, ap, data.ap_max, hide_uid(uid)
             )
+            notified = is_full
             try:
                 await subscribe.send(message)
+                warned = new_warned
                 logger.info(
                     f"[ArknightsUID·理智预警] 已推送 user={subscribe.user_id} "
                     f"uid={hide_uid(uid)} {ap}/{data.ap_max}"
@@ -378,15 +480,46 @@ async def check_sanity_push() -> None:
                 logger.warning(
                     f"[ArknightsUID·理智预警] 推送失败: {exc.__class__.__name__}"
                 )
-        if bool(is_full) != notified or new_warned != warned:
-            # 整键覆盖：带上 prev 保住未变化的标志位（changes 在轮询末合并落盘）
-            changes[key] = {**prev, "notified": is_full, "warned": new_warned}
+        else:
+            notified = is_full
+            warned = new_warned
+        # 与**进入本轮时**的快照比较（notified/warned 已被更新为最新值，
+        # 直接比会永相等导致落盘被跳过）；changes 只记本轮变化的两字段，
+        # 基底 prev 单独存（轮末做字段级合并）
+        if notified != prev_notified or warned != prev_warned:
+            changes[key] = (
+                {"notified": notified, "warned": warned},
+                prev,
+            )
         await asyncio.sleep(random.uniform(1, 2))
 
     if changes:
-        fresh = load_push_state()
-        fresh.update(changes)
-        save_push_state(fresh)
+        # 退订不复活：落盘前重读订阅列表，窗口内被退订命令 pop 掉的键
+        # 不再写回（否则留下孤儿键/覆盖新订阅的复位态）。
+        # 过滤与字段级合并都在 merge 回调里——它在 _write_state_atomic 的
+        # 跨进程锁内对**最新磁盘态**执行，窗口外的并发写入不丢（审计 #10）
+        alive = await _alive_state_keys(TASK_NAME)
+
+        def _merge_sanity() -> dict:
+            fresh = load_push_state()
+            for key, (patch, prev_base) in changes.items():
+                if key in fresh:
+                    # 字段级合并：整键覆盖会把窗口内其他写者写入同键的
+                    # 字段（如剿灭 campaign_week）抹掉
+                    fresh[key] = {**fresh[key], **patch}
+                elif key in alive:
+                    fresh[key] = {**prev_base, **patch}
+            return fresh
+
+        save_push_state({}, merge_from=_merge_sanity)
+    _elapsed = time.monotonic() - _t0
+    if _elapsed > 480:
+        # 超过轮询间隔(10min)的 80%：下一轮会被调度器 max_instances=1
+        # skip（漏检一轮）——账号过多或凭据异常时在此留痕
+        logger.warning(
+            f"[ArknightsUID·理智推送] 单轮耗时 {_elapsed:.0f}s，接近轮询间隔，"
+            "下一轮可能被跳过（账号过多/凭据异常）"
+        )
 
 
 # ==================== 专精训练完成推送 ====================
@@ -412,16 +545,23 @@ def evaluate_training(
 
 
 def evaluate_training_warn(
-    trainee_id: str, remaining: int, warned: bool, prev_trainee: str
+    trainee_id: str,
+    remaining: int,
+    warned: bool,
+    prev_trainee: str,
+    window_secs: int = TRAIN_WARN_WINDOW_SECS,
 ) -> tuple[bool, bool]:
-    """专精剩余时间预警状态机：进入最后一小时提醒一次「还差多久完成」。
+    """专精剩余时间预警状态机：进入提前量窗口提醒一次「还差多久完成」。
 
+    window_secs 为该订阅的自定义提前量（默认最后 1 小时）。
     返回 (should_warn, new_warned)：
     - 未在训/剩余未知/剩余超过窗口：不提醒，warned 复位（新一轮重新武装）
     - 在窗口内且本轮未预警过：提醒一次
     - warned 换训干员自动失效（与完成推送同款的新一轮判定）
     """
-    if not trainee_id or remaining < 0 or remaining > TRAIN_WARN_WINDOW_SECS:
+    if window_secs <= 0:
+        window_secs = TRAIN_WARN_WINDOW_SECS
+    if not trainee_id or remaining < 0 or remaining > window_secs:
         return False, False
     armed = warned and prev_trainee == trainee_id
     return (not armed), True
@@ -431,7 +571,7 @@ def format_training_warn_message(
     name: str, trainee_name: str, remaining: int, uid_masked: str
 ) -> str:
     return (
-        "「明日方舟」专精训练即将完成\n"
+        "「明日方舟」专精训练剩余时间提醒\n"
         f"{name or '博士'}（UID {uid_masked}）训练室的 "
         f"{trainee_name or '干员'} 还剩{format_training_remaining(remaining)}完成\n"
         "可以准备上号领取，安排下一位了～"
@@ -467,7 +607,8 @@ def _save_train_state(state: dict[str, dict]) -> None:
     block=True,
 )
 async def subscribe_training_push(bot: Bot, ev: Event) -> None:
-    uid, index = _extract_target(ev.text)
+    lead_secs, target_text = parse_training_lead(ev.text)
+    uid, index = _extract_target(target_text)
     credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
     if isinstance(credential, str):
         return await _send_text(bot, ev, credential)
@@ -475,15 +616,68 @@ async def subscribe_training_push(bot: Bot, ev: Event) -> None:
     await gs_subscribe.add_subscribe(
         "single", task_name=TRAIN_TASK_NAME, event=ev, uid=credential.uid
     )
+    window = lead_secs or TRAIN_WARN_WINDOW_SECS
+    lead_note = ""
+    if lead_secs is None and _LEAD_SPEC_RE.search(ev.text or ""):
+        # 用户确实写了时间词但越界（<1 分钟 / >7 天）：静默回落默认
+        # 会误导（以为 8 天生效了），回执里明确告知
+        lead_note = (
+            f"\n⚠️ 提前量需在 1 分钟~7 天之间，已按默认 "
+            f"{format_lead_secs(TRAIN_WARN_WINDOW_SECS)} 处理。"
+        )
+
+    # 订阅即播报当前训练室状态（还剩多久/何时到点）；回执已说过的信息
+    # 不再让预警重复一遍——剩余已进窗口时直接把 warned 置位
+    status_line = "训练室状态未知（稍后轮询会自动补上）。"
+    state_value: dict = {
+        "notified": False, "trainee": "", "warn_window": window,
+    }
+    try:
+        response = await fetch_cached_player_info(credential)
+        if not isinstance(response, str):
+            data = parse_player_info(response)
+            building = parse_building(data) if data is not None else None
+            if building is not None:
+                remaining = training_remaining_secs(building)
+                if building.training_trainee_id and remaining > 0:
+                    from datetime import datetime
+
+                    finish_at = datetime.fromtimestamp(
+                        time.time() + remaining
+                    ).strftime("%m-%d %H:%M")
+                    status_line = (
+                        f"当前在训：{building.training_trainee}，"
+                        f"剩{format_training_remaining(remaining)}完成"
+                        f"（预计 {finish_at} 到点）"
+                    )
+                    state_value["trainee"] = building.training_trainee_id
+                    state_value["warned"] = remaining <= window
+                elif building.training_trainee_id and remaining == 0:
+                    status_line = (
+                        f"当前在训：{building.training_trainee}，"
+                        "专精已完成，可上号领取"
+                    )
+                    state_value["trainee"] = building.training_trainee_id
+                else:
+                    status_line = "训练室当前空闲，开训后自动开始提醒。"
+    except Exception as exc:
+        logger.warning(
+            f"[ArknightsUID·训练推送] 订阅时查询训练室失败: "
+            f"{exc.__class__.__name__}"
+        )
+
     state = _load_train_state()
-    state.pop(_state_key(ev.bot_id, ev.user_id, credential.uid), None)
+    state[_state_key(ev.bot_id, ev.user_id, credential.uid)] = state_value
     _save_train_state(state)
 
     shown = credential.nickname or hide_uid(credential.uid)
     await _send_text(
         bot, ev,
-        f"已订阅专精训练完成推送：{shown}\n"
-        f"训练完成会在这里提醒一次；换干员开新一轮后自动恢复提醒。\n"
+        f"已订阅专精训练推送：{shown}\n"
+        f"{status_line}\n"
+        f"剩余不足{format_lead_secs(window)}时提醒一次，完成时再提醒一次"
+        "（换干员自动恢复）。"
+        f"{lead_note}\n"
         f"取消：ark取消订阅训练",
     )
 
@@ -537,6 +731,7 @@ def format_training_push_message(
     "interval", minutes=TRAIN_POLL_MINUTES, id="ark_training_push"
 )
 async def check_training_push() -> None:
+    _t0 = time.monotonic()
     """定时检查各订阅账号训练室，完成推送一次（换训干员后重新武装）。"""
     datas = await gs_subscribe.get_subscribe(TRAIN_TASK_NAME)
     if not datas:
@@ -554,6 +749,7 @@ async def check_training_push() -> None:
         prev_notified = bool(prev.get("notified"))
         prev_trainee = str(prev.get("trainee") or "")
         prev_warned = bool(prev.get("warned"))
+        warn_window = int(prev.get("warn_window") or 0) or TRAIN_WARN_WINDOW_SECS
 
         credential = await resolve_credential(
             subscribe.user_id, subscribe.bot_id, uid=uid
@@ -588,8 +784,10 @@ async def check_training_push() -> None:
             remaining,
             prev_warned,
             prev_trainee,
+            window_secs=warn_window,
         )
         new_state["warned"] = new_warned
+        new_state["warn_window"] = warn_window
         if should_push:
             message = format_training_push_message(
                 (data.name if data else "") or credential.nickname,
@@ -607,7 +805,10 @@ async def check_training_push() -> None:
                     f"[ArknightsUID·训练推送] 推送失败: {exc.__class__.__name__}"
                 )
                 # 发送失败不落 notified，下轮重试
-                new_state = {"notified": False, "trainee": prev_trainee, "warned": False}
+                new_state = {
+                    "notified": False, "trainee": prev_trainee,
+                    "warned": False, "warn_window": warn_window,
+                }
         elif should_warn:
             message = format_training_warn_message(
                 (data.name if data else "") or credential.nickname,
@@ -631,9 +832,27 @@ async def check_training_push() -> None:
         await asyncio.sleep(random.uniform(1, 2))
 
     if changes:
-        fresh = _load_train_state()
-        fresh.update(changes)
-        _save_train_state(fresh)
+        # 跨进程锁内重读合并 + 退订不复活（审计 #10，对齐理智推送）：
+        # merge 回调在文件锁内对最新磁盘态过滤——轮询 await 期间被
+        # 退订命令 pop 掉的键不写回（否则留下孤儿键/覆盖新订阅的复位态）
+        alive = await _alive_state_keys(TRAIN_TASK_NAME)
+
+        def _merge_train() -> dict:
+            fresh = _load_train_state()
+            for key, new_state in changes.items():
+                if key in fresh:
+                    fresh[key] = {**fresh[key], **new_state}
+                elif key in alive:
+                    fresh[key] = new_state
+            return fresh
+
+        _write_state_atomic(_TRAIN_STATE_PATH, {}, merge_from=_merge_train)
+    _elapsed = time.monotonic() - _t0
+    if _elapsed > 480:
+        logger.warning(
+            f"[ArknightsUID·训练推送] 单轮耗时 {_elapsed:.0f}s，接近轮询间隔，"
+            "下一轮可能被跳过（账号过多/凭据异常）"
+        )
 
 
 # ==================== 剿灭周提醒（周五晚未完成 → 提醒一次） ====================
@@ -933,6 +1152,7 @@ async def unsubscribe_building_push(bot: Bot, ev: Event) -> None:
     "interval", minutes=BUILDING_POLL_MINUTES, id="ark_building_push"
 )
 async def check_building_push() -> None:
+    _t0 = time.monotonic()
     """定时检查各订阅账号基建：无人机/贸易/换班/公招四类事件各推一次。"""
     datas = await gs_subscribe.get_subscribe(BUILDING_TASK_NAME)
     if not datas:
@@ -1079,9 +1299,25 @@ async def check_building_push() -> None:
         await asyncio.sleep(random.uniform(1, 2))
 
     if changes:
-        fresh = _load_building_state()
-        fresh.update(changes)
-        _save_building_state(fresh)
+        # 跨进程锁内重读合并 + 退订不复活（审计 #10，同训练推送）
+        alive = await _alive_state_keys(BUILDING_TASK_NAME)
+
+        def _merge_building() -> dict:
+            fresh = _load_building_state()
+            for key, new_state in changes.items():
+                if key in fresh:
+                    fresh[key] = {**fresh[key], **new_state}
+                elif key in alive:
+                    fresh[key] = new_state
+            return fresh
+
+        _write_state_atomic(_BUILDING_STATE_PATH, {}, merge_from=_merge_building)
+    _elapsed = time.monotonic() - _t0
+    if _elapsed > 720:  # 轮询间隔 15min 的 80%
+        logger.warning(
+            f"[ArknightsUID·基建推送] 单轮耗时 {_elapsed:.0f}s，接近轮询间隔，"
+            "下一轮可能被跳过（账号过多/凭据异常）"
+        )
 
 
 # ==================== 自动签到订阅（每日 08:05） ====================
@@ -1326,11 +1562,14 @@ async def sign_all_accounts(bot: Bot, ev: Event) -> None:
         if isinstance(response, str):
             failed += 1
             continue
-        code = response.get("code") if isinstance(response, dict) else None
-        if code == 0:
+        # 10001 既可能是"今日已签"也可能是 cred 失效（request_util 注释
+        # 自证歧义，审计 #31）：按 message 区分，失效账号计入失败而不是
+        # 被全绿统计掩盖
+        outcome = evaluate_sign_result(response)
+        if outcome == "success":
             ok += 1
-        elif code == 10001:
-            skipped += 1  # 今日已签
+        elif outcome == "already":
+            skipped += 1
         else:
             failed += 1
         await asyncio.sleep(random.uniform(1.0, 2.0))
