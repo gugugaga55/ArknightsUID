@@ -19,9 +19,13 @@ token / hg_token 以密文落库，拿到数据库文件不再等于拿到全部
 解密失败（换密钥/损坏）返回空串，下游视为凭据失效引导用户重新登录，
 重新登录后自愈为新密钥下的密文。
 
-失败语义：加密侧出错（无可用密钥等）记 warning 后**回退明文**存储，
-保证功能可用；解密侧出错返回空串（宁可失效不可错配）。
+失败语义：加密侧出错（无可用密钥等）抛 ``EncryptionUnavailableError``，
+调用方必须转为可读错误并**拒绝落库**——静默明文降级会让 cred/token 直接
+写进数据库文件，破坏本模块的威胁模型；解密侧出错返回空串（宁可失效不可
+错配）。
 """
+
+
 from __future__ import annotations
 
 import os
@@ -35,6 +39,13 @@ from .path import MAIN_PATH
 
 ENV_KEY_NAME = "ARK_UID_ENC_KEY"
 ENC_PREFIX = "enc:v1:"
+
+
+class EncryptionUnavailableError(RuntimeError):
+    """凭据加密不可用（密钥缺失/初始化失败/加密异常）。
+
+    调用方应中止本次凭据落库并提示用户检查密钥，而不是明文存储。
+    """
 
 _lock = threading.Lock()
 _fernet = None
@@ -114,7 +125,7 @@ def _get_fernet():
         except Exception as exc:
             _fernet_failed = True
             logger.warning(
-                "[ArknightsUID·加密] 凭据加密初始化失败，凭据将明文存储"
+                "[ArknightsUID·加密] 凭据加密初始化失败，登录/凭据回写将被拒绝"
                 f"（检查 {ENV_KEY_NAME} 或 {_key_file()} 可写性）: "
                 f"{exc.__class__.__name__}"
             )
@@ -130,20 +141,26 @@ def _reset_cache() -> None:
 
 
 def encrypt_secret(value: str) -> str:
-    """加密敏感字段；空串原样返回，失败回退明文（记 warning）。"""
+    """加密敏感字段；空串与已加密值原样返回。
+
+    加密不可用（无密钥/初始化失败/加密异常）时抛 EncryptionUnavailableError，
+    由调用方拒绝落库——明文降级会把 cred/token 直接写进数据库文件，
+    破坏本模块的威胁模型（见文件头）。
+    """
     text = value or ""
     if not text or text.startswith(ENC_PREFIX):
         return text
     fernet = _get_fernet()
     if fernet is None:
-        return text
+        raise EncryptionUnavailableError(
+            f"凭据加密不可用（检查 {ENV_KEY_NAME} 或 {_key_file()} 可写性）"
+        )
     try:
         return ENC_PREFIX + fernet.encrypt(text.encode("utf-8")).decode("ascii")
     except Exception as exc:
-        logger.warning(
-            f"[ArknightsUID·加密] 加密失败，本次明文存储: {exc.__class__.__name__}"
-        )
-        return text
+        raise EncryptionUnavailableError(
+            f"加密失败: {exc.__class__.__name__}"
+        ) from exc
 
 
 def decrypt_secret(value: str | None) -> str:

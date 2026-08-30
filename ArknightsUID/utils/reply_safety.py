@@ -14,12 +14,17 @@ _sensitive_fields = (
     r"|access[_ ]?token|refresh[_ ]?token"
     r"|secret|password|passwd"
 )
+# 字段边界用 ASCII 词边界断言而非 \b：Python re 的 \w 在 Unicode 模式下
+# 包含汉字，字段名紧贴中文（"获取token=xxx失败"）时两侧都是 \w，\b 不
+# 成立导致整条漏脱敏。这里要求字段名两侧不是 ASCII 字母数字/下划线，
+# 汉字与标点都视为合法边界。
+_FIELD_EDGE = r"(?<![A-Za-z0-9_])(?:{})(?![A-Za-z0-9_])"
 _SENSITIVE_ASSIGNMENT_RE = re.compile(
-    rf"(?i)\b(?:{_sensitive_fields})\b\s*[:=]\s*"
+    rf"(?i){_FIELD_EDGE.format(_sensitive_fields)}\s*[:=]\s*"
     rf"(?:\"[^\"]*\"|'[^']*'|[^,，;；\s]+)"
 )
-_SENSITIVE_FIELD_RE = re.compile(rf"(?i)\b(?:{_sensitive_fields})\b")
-_SENTINEL_VALUE_RE = re.compile(r"(?i)\bSENTINEL_[A-Z0-9_]*\b")
+_SENSITIVE_FIELD_RE = re.compile(rf"(?i){_FIELD_EDGE.format(_sensitive_fields)}")
+_SENTINEL_VALUE_RE = re.compile(r"(?i)(?<![A-Za-z0-9_])SENTINEL_[A-Z0-9_]*(?![A-Za-z0-9_])")
 
 _REDACTED = "已隐藏敏感内容"
 

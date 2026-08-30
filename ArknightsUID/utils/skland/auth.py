@@ -42,9 +42,19 @@ async def _request(
     headers: dict[str, str] | None = None,
     body: dict[str, Any] | None = None,
 ) -> tuple[int, dict[str, Any] | None]:
-    """通用请求，返回 (status_code, json_or_None)。异常/非 json 返回 (status, None)。"""
+    """通用请求，返回 (status_code, json_or_None)。异常/非 json 返回 (status, None)。
+
+    登录链请求携带 token/cred 等凭据（header 或 body），禁用自动重定向：
+    跨域 307/308 会把自定义头与请求体原样重放给新 Origin，等于把凭据
+    交给重定向目标。as.hypergryph.com / zonai.skland.com 正常响应均无重定向。
+    """
     result = await request_json(
-        method, url, headers=headers, json_body=body, timeout=25.0
+        method,
+        url,
+        headers=headers,
+        json_body=body,
+        timeout=25.0,
+        follow_redirects=False,
     )
     data = result.data if isinstance(result.data, dict) else None
     return result.status, data
@@ -78,7 +88,9 @@ async def get_scan_id() -> str | None:
         return None
     if data.get("status") != 0 or data.get("msg") != "OK":
         return None
-    return data["data"]["scanId"]
+    payload = data.get("data")
+    scan_id = payload.get("scanId") if isinstance(payload, dict) else None
+    return str(scan_id) if scan_id else None
 
 
 async def get_scan_status(scan_id: str) -> str | None:
@@ -90,7 +102,9 @@ async def get_scan_status(scan_id: str) -> str | None:
     # 未扫码时会返回 status != 0，属正常
     if data.get("status") != 0:
         return None
-    return data["data"]["scanCode"]
+    payload = data.get("data")
+    code = payload.get("scanCode") if isinstance(payload, dict) else None
+    return str(code) if code else None
 
 
 async def get_token_by_scan_code(scan_code: str) -> dict[str, str] | None:

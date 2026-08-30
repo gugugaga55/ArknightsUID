@@ -14,7 +14,10 @@
 from __future__ import annotations
 
 import asyncio
+import ipaddress
+import socket
 from typing import Any, NamedTuple, Optional
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -23,8 +26,17 @@ from gsuid_core.logger import logger
 # 默认请求超时（秒）；个别慢接口（gamedata 全量表 / 外置渲染）按调用方覆盖
 DEFAULT_TIMEOUT = 25.0
 
+# ── 用户可控 URL 的安全下载边界（OCR 截图等）───────────────────────
+SAFE_DOWNLOAD_MAX_BYTES = 8 * 1024 * 1024   # 单文件 8MB（截图远小于此）
+SAFE_DOWNLOAD_MAX_REDIRECTS = 3
+SAFE_DOWNLOAD_TIMEOUT = 15.0
+
 _client: Optional[httpx.AsyncClient] = None
 _client_lock = asyncio.Lock()
+
+
+class UnsafeUrlError(ValueError):
+    """URL 未通过安全校验（非 http(s) / 主机解析到非公网地址等）。"""
 
 
 class ApiError(Exception):
@@ -219,3 +231,117 @@ async def download_bytes_status(
         )
         return resp.status_code, None
     return resp.status_code, resp.content
+
+
+async def assert_public_http_url(url: str) -> str:
+    """校验 http(s) URL 的主机解析到公网地址；不合规抛 UnsafeUrlError。
+
+    拒绝回环/私网/链路本地（含云元数据 169.254.169.254）/多播/保留地址
+    ——SSRF 防护。getaddrinfo 下放线程，全部解析结果都要求 is_global。
+    注意解析与实际连接之间存在 DNS 重绑定 TOCTOU 窗口，由调用方
+    （safe_download_bytes）的"逐跳校验 + 禁自动重定向"收窄。
+    """
+    parts = urlsplit(url)
+    if parts.scheme not in ("http", "https"):
+        raise UnsafeUrlError(f"scheme not allowed: {parts.scheme!r}")
+    host = parts.hostname or ""
+    if not host:
+        raise UnsafeUrlError("missing host")
+    try:
+        infos = await asyncio.to_thread(socket.getaddrinfo, host, None)
+    except OSError as exc:
+        raise UnsafeUrlError(f"DNS resolve failed: {exc.__class__.__name__}")
+    for info in infos:
+        addr = info[4][0]
+        try:
+            ip = ipaddress.ip_address(addr.split("%")[0])
+        except ValueError:
+            raise UnsafeUrlError(f"unparseable address: {addr!r}")
+        # is_global 不含多播/保留段的判定（224.0.0.1 等 is_global=True），显式拒绝
+        if (
+            not ip.is_global
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            raise UnsafeUrlError(f"non-public address: {ip}")
+    return url
+
+
+async def safe_download_bytes(
+    url: str,
+    *,
+    max_bytes: int = SAFE_DOWNLOAD_MAX_BYTES,
+    timeout: float = SAFE_DOWNLOAD_TIMEOUT,
+    max_redirects: int = SAFE_DOWNLOAD_MAX_REDIRECTS,
+) -> bytes | None:
+    """用户可控 URL 的受限下载（OCR 截图等）。
+
+    与 download_bytes 的差异（SSRF / 资源耗尽边界）：
+    - 仅 http(s)，且主机必须解析为公网地址（assert_public_http_url）
+    - 不自动跟随重定向：逐跳重新校验目标，最多 max_redirects 跳
+    - 流式读取并强制 max_bytes 上限（超出立即中止，不整读进内存）
+
+    校验不通过/网络失败/超限：打 warning 返回 None（不抛，便于多图循环降级）。
+    """
+    client = await get_client()
+    current = url
+    for _hop in range(max_redirects + 1):
+        try:
+            await assert_public_http_url(current)
+        except UnsafeUrlError as exc:
+            logger.warning(f"[ArknightsUID·http] 拒绝不安全 URL {url}: {exc}")
+            return None
+        try:
+            async with client.stream(
+                "GET", current, timeout=timeout, follow_redirects=False
+            ) as resp:
+                if resp.status_code in (301, 302, 303, 307, 308):
+                    location = resp.headers.get("location", "")
+                    if not location:
+                        logger.warning(
+                            f"[ArknightsUID·http] 重定向缺 Location: {current}"
+                        )
+                        return None
+                    current = str(httpx.URL(current).join(location))
+                    continue
+                resp.raise_for_status()
+                buf = bytearray()
+                async for chunk in resp.aiter_bytes(64 * 1024):
+                    buf.extend(chunk)
+                    if len(buf) > max_bytes:
+                        logger.warning(
+                            f"[ArknightsUID·http] 响应超过 {max_bytes} 字节上限: {current}"
+                        )
+                        return None
+                return bytes(buf)
+        except Exception as exc:
+            logger.warning(
+                f"[ArknightsUID·http] 安全下载失败 {current}: {describe_error(exc)}"
+            )
+            return None
+    logger.warning(f"[ArknightsUID·http] 重定向超过 {max_redirects} 跳: {url}")
+    return None
+
+
+def register_shutdown_hook() -> None:
+    """注册进程退出钩子关闭共享 client（连接池/socket 不依赖 GC 兜底）。
+
+    热重载（reload_plugin）不走 shutdown 钩子：旧 client 由
+    `is_closed` 自检重建逻辑兜底（get_client 检测到已关闭即重建），
+    这里只保证正常停机时干净释放（审计 #34）。
+    """
+    try:
+        from gsuid_core.server import on_core_shutdown
+
+        @on_core_shutdown
+        async def _ark_http_close() -> None:  # pragma: no cover - 退出路径
+            try:
+                await aclose()
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
+register_shutdown_hook()
