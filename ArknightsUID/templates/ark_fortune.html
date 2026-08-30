@@ -1,0 +1,91 @@
+<!--
+  ark_fortune.html —— 每日抽签运势卡（#34）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（arknightsuid_help.send_daily_fortune 组装）：
+    date: str                         日期（YYYY-MM-DD，签名按 用户+日期 确定）
+    level: str                        运势等级（大吉/中吉/小吉/平/小凶/凶）
+    tone: str                         good=吉 / plain=平 / bad=凶（驱动主色）
+    char: str                         今日同行干员名
+    avatar: str                       干员初始头像 b64（索引不可用/下载失败时为空，整格隐藏）
+    rarity: int                       干员稀有度 1-6（0=未知，星条隐藏）
+    profession: str                   职业英文（索引值，可空）
+    good: [str]                       宜 ×3
+    bad: [str]                        忌 ×2
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    {% set tone_color = {'good': '#e0a800', 'plain': '#0098dc', 'bad': '#d9362b'} %}
+    {% set tone_en = {'good': 'LUCKY', 'plain': 'NEUTRAL', 'bad': 'UNLUCKY'} %}
+    <div class="container" data-ghost="FORTUNE">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 每日抽签 FORTUNE</em></span>
+            <span class="mast-meta"><span class="idx">34</span>{{ date }}</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">今日运势 · 同一人一天内结果固定</div>
+                <h1 class="title">每日<em>抽签</em></h1>
+                <div class="title-rule"><span class="en">DAILY FORTUNE</span></div>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_gacha.b64" %}" alt="">
+        </div>
+
+        <div class="hero">
+            <div class="bignum" style="color: {{ tone_color.get(tone, '#16181d') }};">{{ level }}<span class="unit"> / FORTUNE</span></div>
+            <span class="chip chip--ink">{{ tone_en.get(tone, 'DAILY') }}</span>
+        </div>
+
+        <div class="sect">
+            <span class="sect-label bk">今日同行干员</span>
+            <span class="sect-en">COMPANION</span>
+        </div>
+        <div class="rows">
+            <div class="row row--active">
+                <span class="row-value" style="display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px;">
+                    {% if avatar %}<span class="aicon aicon--md"><img src="{{ avatar }}" alt=""></span>{% endif %}
+                    {{ char }}
+                    {% if profession %}<span class="u-mute" style="font-size: 10px; font-weight: 400;">{{ profession }}</span>{% endif %}
+                </span>
+                {% if rarity %}
+                <span class="stars">{% for i in range(6) %}<i class="{% if i < rarity %}on{% endif %}"></i>{% endfor %}</span>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="sect">
+            <span class="sect-label bk">宜</span>
+            <span class="sect-en">RECOMMENDED</span>
+        </div>
+        <div class="chip-flow">
+            {% for item in good %}
+            <span class="chip"><span class="st"></span>{{ item }}</span>
+            {% endfor %}
+        </div>
+
+        <div class="sect">
+            <span class="sect-label bk">忌</span>
+            <span class="sect-en">AVOID</span>
+        </div>
+        <div class="chip-flow">
+            {% for item in bad %}
+            <span class="chip"><span class="st is-red"></span>{{ item }}</span>
+            {% endfor %}
+        </div>
+
+        <div class="prose">签文由本地种子（博士 × 日期）生成，同一人一天内结果固定；纯属娱乐，与真实卡池概率无关。</div>
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 每日抽签</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// DAILY FORTUNE // FOR FUN</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

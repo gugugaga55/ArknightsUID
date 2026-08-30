@@ -81,14 +81,18 @@ except ModuleNotFoundError:
 
 try:
     from ArknightsUID.ArknightsUID.utils.gamedata.recruit import (
+        build_tag_universe,
         load_recruit_data,
         match_recruit,
     )
+    from ArknightsUID.ArknightsUID.utils.recruit_ocr import extract_recruit_tags
 except ModuleNotFoundError:
     from ArknightsUID.utils.gamedata.recruit import (
+        build_tag_universe,
         load_recruit_data,
         match_recruit,
     )
+    from ArknightsUID.utils.recruit_ocr import extract_recruit_tags
 
 wiki_sv = SV("ArknightsUID资料", priority=5)
 
@@ -174,7 +178,10 @@ async def _build_owner_context(op: OperatorInfo, ev: Event) -> dict | None:
     降级为通用 PRTS 展示，不向用户报账号侧错误。
     """
     try:
-        from ..utils.enduid.adapter import hide_uid, resolve_credential
+        from ..utils.enduid.adapter import (
+            hide_uid_for,
+            resolve_credential,
+        )
         from ..utils.gamedata.charinfo import (
             load_char_index,
             load_skill_names,
@@ -218,7 +225,7 @@ async def _build_owner_context(op: OperatorInfo, ev: Event) -> dict | None:
                 training_remaining_secs(building)
             )
         return {
-            "uid": hide_uid(credential.uid),
+            "uid": await hide_uid_for(credential.uid, ev.user_id, ev.bot_id),
             "main_skill_lvl": entry.main_skill_lvl,
             "skills": skills,
             "training_remain": training_remain,
@@ -1090,31 +1097,73 @@ async def _get_stage_map_b64(code: str, name: str) -> str:
         return ""
 
     def _url_miss(url: str) -> Path:
-        return cache / (url.rsplit("/", 1)[-1] + ".miss")
+        from ..utils.gamedata.path_safety import safe_url_basename
+
+        # 与 bulk_download 的地图 miss marker 同名（安全 basename）
+        return cache / (safe_url_basename(url) + ".miss")
+
+    async def _fetch_map_b64(url: str) -> str:
+        """下载地图 → b64；只把**确认的 404** 当"地图不存在"写负缓存。
+
+        审计 #18：此前任何失败（CDN 超时/网络抖动/图片损坏/fallback API
+        挂掉）都写 7 天负缓存——一次瞬时故障让本来存在的地图 7 天不出图。
+        网络类失败不写标记，下轮查询即自愈。
+        """
+        from ..utils.http import download_bytes_status
+
+        status, content = await download_bytes_status(url, timeout=25.0)
+        if status == 404:
+            try:
+                cache.mkdir(parents=True, exist_ok=True)
+                _url_miss(url).touch()
+            except OSError:
+                pass
+            return ""
+        if status != 200 or not content:
+            return ""  # 网络失败/5xx：不写负缓存
+        # 200：落盘复用 bulk 的校验规则（非图片内容拒绝，防污染），
+        # 随后走缓存读取路径出 b64（含烘焙/格式分支，零重复下载）
+        from ..utils.gamedata.path_safety import safe_url_basename
+        from ..utils.resource.bulk_download import _save_image_sync
+
+        url_last = safe_url_basename(url)
+        if not url_last:
+            return ""
+        try:
+            import asyncio as _asyncio
+
+            cache.mkdir(parents=True, exist_ok=True)
+            await _asyncio.to_thread(_save_image_sync, cache, url_last, content)
+        except (OSError, ValueError):
+            return ""  # 坏内容/写失败：不写负缓存
+        return await get_image_b64_with_cache(url, cache)
 
     for title in map_candidate_titles(code, name):
         url = map_file_url(title)
         marker = _url_miss(url)
         if marker.exists() and time.time() - marker.stat().st_mtime < _MAP_MISS_TTL:
             continue
-        b64 = await get_image_b64_with_cache(url, cache)
+        b64 = await _fetch_map_b64(url)
         if b64:
             return b64
-        try:
-            cache.mkdir(parents=True, exist_ok=True)
-            marker.touch()
-        except OSError:
-            pass
     fallback_url = await resolve_map_file_url(code, name)
     if fallback_url:
-        b64 = await get_image_b64_with_cache(fallback_url, cache)
+        b64 = await _fetch_map_b64(fallback_url)
         if b64:
             return b64
-    try:
-        cache.mkdir(parents=True, exist_ok=True)
-        miss.touch()
-    except OSError:
-        pass
+    # 关卡级 nomap 标记：仅在 PRTS 明确无该文件（所有候选 URL 均 404）
+    # 时才写——fallback 解析失败（网络）不写，下轮重试
+    all_confirmed_missing = all(
+        _url_miss(map_file_url(title)).exists()
+        for title in map_candidate_titles(code, name)
+        if map_file_url(title)
+    )
+    if all_confirmed_missing:
+        try:
+            cache.mkdir(parents=True, exist_ok=True)
+            miss.touch()
+        except OSError:
+            pass
     return ""
 
 
@@ -1353,11 +1402,16 @@ async def _build_op_panel_context(query: str, ev: Event) -> dict | str:
         level = max_level
     level = max(1, min(level, max_level))
     max_potential = int(char_entry.get("maxPotentialLevel") or 0)
-    potential = config["potential"] if config["potential"] is not None else (
-        (owner or {}).get("potential", 0)
-    )
-    if potential == -1:
-        potential = max_potential
+    if config["potential"] is not None:
+        # 「潜N」是 UI 口径（1=本体无加成 … 6=满潜），而 potentialRanks/
+        # 玩家数据 potentialRank 是 0 基档位：生效档 = N-1（此前直接把 N
+        # 当档位用，潜1-潜5 全部多吃一档潜能加成）
+        potential = (
+            max_potential if config["potential"] == -1
+            else config["potential"] - 1
+        )
+    else:
+        potential = (owner or {}).get("potential", 0)
     potential = max(0, min(potential, max_potential))
     favor = config["favor"] if config["favor"] is not None else (
         (owner or {}).get("favor", 0)
@@ -1757,23 +1811,48 @@ async def send_stage_page(bot: Bot, ev: Event) -> None:
 async def send_recruit_recommend(bot: Bot, ev: Event) -> None:
     """ark公招推荐 标签…（把界面看到的标签全输入）→ 1-3 标签最优组合排行。
 
+    也支持不带标签、直接发公招界面截图：本地 rapidocr（可选依赖）识别
+    标签后走同一套推荐逻辑；带文字参数时以文字为准（忽略截图）。
+
     机制口径（PRTS 公开招募页实证）：资深干员=4★+、高级资深干员=5★+
     （9 小时招募标签不划、必得 5★/6★ 档）；6★ 仅经高资标签追加，
     具体名单为服务端数据，本工具不列 6★ 名单。
     """
     raw = _clean_query(ev.text)
-    if not raw:
+    image_sources = [
+        s
+        for s in (ev.image_list or ([ev.image] if ev.image else []))
+        if isinstance(s, str) and s.strip()
+    ]
+    if not raw and not image_sources:
         return await _send_text(
             bot, ev,
             "用法：ark公招推荐 标签1 标签2 …（把公招界面看到的标签全部输入，"
-            "如 ark公招推荐 高级资深干员 术师 输出 远程位 生存）",
+            "如 ark公招推荐 高级资深干员 术师 输出 远程位 生存），"
+            "或直接发送公招界面截图自动识别标签",
         )
-    tags = [t.strip() for t in re.split(r"[\s,，、+]+", raw) if t.strip()]
     data = await load_recruit_data()
     if not data:
         return await _send_text(
             bot, ev, "公招数据加载失败（首次需下载约 15MB 游戏数据），请稍后重试"
         )
+    via_ocr = False
+    if not raw and image_sources:
+        ocr = await extract_recruit_tags(image_sources, build_tag_universe(data))
+        if ocr.error:
+            return await _send_text(bot, ev, ocr.error)
+        if not ocr.tags:
+            shown = "、".join(ocr.raw_texts[:6]) or "无"
+            return await _send_text(
+                bot, ev,
+                f"截图里没识别到公招标签（读到的文字：{shown}）。"
+                "请截取包含标签区域的公招界面，"
+                "或文字输入 ark公招推荐 标签…",
+            )
+        tags = ocr.tags
+        via_ocr = True
+    else:
+        tags = [t.strip() for t in re.split(r"[\s,，、+]+", raw) if t.strip()]
     try:
         from ..utils.gamedata.recruit import recommend_combos
     except ImportError:
@@ -1815,14 +1894,17 @@ async def send_recruit_recommend(bot: Bot, ev: Event) -> None:
 
     context = {
         "version": ArknightsUID_version,
-        "input_tags": " / ".join(tags),
+        "input_tags": " / ".join(tags) + ("（截图识别）" if via_ocr else ""),
         "unknown_tags": "、".join(result["unknown"]),
         "rows": rows,
         "best": rows[0]["tags"] if rows else "",
     }
-    lines = [f"「明日方舟」公招组合推荐（输入：{' / '.join(tags)}）"]
+    source_label = "截图识别" if via_ocr else "输入"
+    lines = [f"「明日方舟」公招组合推荐（{source_label}：{' / '.join(tags)}）"]
     if result["unknown"]:
         lines.append(f"⚠️ 未识别标签：{'、'.join(result['unknown'])}（已忽略）")
+    if via_ocr:
+        lines.append("📸 标签来自截图识别，有误可文字输入 ark公招推荐 标签… 修正")
     for row in rows:
         names = "、".join(row["names"])
         more = f" 等{row['pool_count']}人" if row["more"] > 0 else ""

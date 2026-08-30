@@ -55,6 +55,7 @@ HELP_GROUPS = [
             {"cmd": "ark肉鸽", "desc": "集成战略进度卡", "eg": "ark肉鸽"},
             {"cmd": "ark肉鸽敌人 <名字> [期名] [N难度] [关名] [紧急]", "desc": "肉鸽敌人面板：机制/免疫/难度 buff（期名支持 水月/界园/树海 等简称）", "eg": "ark肉鸽敌人 汉科 树海 N15"},
             {"cmd": "ark肉鸽关卡 <关名> [N难度] [紧急]", "desc": "肉鸽关卡出怪面板：该难度下全体敌人折算数值 + 紧急作战", "eg": "ark肉鸽关卡 拆东补西 N15 紧急"},
+            {"cmd": "ark肉鸽结局 [期名/结局名/藏品名]", "desc": "各期肉鸽结局前置条件：解锁链/关键藏品/最终BOSS（支持按关键藏品名反查）", "eg": "ark肉鸽结局 萨卡兹"},
             {"cmd": "ark签到", "desc": "森空岛每日签到", "eg": "ark签到 2"},
         ],
     },
@@ -83,7 +84,7 @@ HELP_GROUPS = [
             {"cmd": "ark材料 / ark敌人", "desc": "材料 / 敌方资料卡", "eg": "ark材料 固源岩"},
             {"cmd": "ark关卡 <关卡>", "desc": "关卡资料卡（敌方数值/地图）", "eg": "ark关卡 1-7"},
             {"cmd": "ark公招 <标签>", "desc": "公招标签组合查询", "eg": "ark公招 高级资深干员"},
-            {"cmd": "ark公招推荐 <标签…>", "desc": "输全部标签→最优组合排行", "eg": "ark公招推荐 高级资深干员 术师 输出"},
+            {"cmd": "ark公招推荐 <标签…/截图>", "desc": "输标签或发公招截图→最优组合排行", "eg": "ark公招推荐 高级资深干员 术师 输出"},
             {"cmd": "ark藏品 <名字>", "desc": "肉鸽藏品效果查询", "eg": "ark藏品 钝爪-典训"},
             {"cmd": "ark危机合约", "desc": "危机合约赛季时间线（18 期全录）", "eg": "ark危机合约"},
             {"cmd": "ark日历", "desc": "活动/卡池日历", "eg": "ark日历"},
@@ -103,9 +104,11 @@ HELP_GROUPS = [
             {"cmd": "ark帮助搜索 <关键词>", "desc": "按关键词找命令", "eg": "ark帮助搜索 肉鸽"},
             {"cmd": "ark订阅方舟活动", "desc": "群聊订阅新动态推送", "eg": "ark订阅方舟活动"},
             {"cmd": "ark取消订阅方舟活动", "desc": "取消群聊动态推送", "eg": "ark取消订阅方舟活动"},
+            {"cmd": "ark订阅公告", "desc": "官方新公告推送（群聊/私聊）", "eg": "ark订阅公告"},
+            {"cmd": "ark取消订阅公告", "desc": "取消官方公告推送", "eg": "ark取消订阅公告"},
             {"cmd": "ark订阅理智 [序号]", "desc": "理智回满推送提醒", "eg": "ark订阅理智"},
             {"cmd": "ark取消订阅理智", "desc": "取消理智回满推送", "eg": "ark取消订阅理智"},
-            {"cmd": "ark订阅训练 [序号]", "desc": "专精预警+完成提醒", "eg": "ark订阅训练"},
+            {"cmd": "ark订阅训练 [序号] [提前量]", "desc": "专精剩余时间预警(可设提前量)+完成提醒", "eg": "ark订阅训练 5小时"},
             {"cmd": "ark取消订阅训练", "desc": "取消专精训练推送", "eg": "ark取消订阅训练"},
             {"cmd": "ark订阅剿灭 [序号]", "desc": "周五晚剿灭未完成提醒", "eg": "ark订阅剿灭"},
             {"cmd": "ark取消订阅剿灭", "desc": "取消剿灭周提醒", "eg": "ark取消订阅剿灭"},
@@ -121,7 +124,9 @@ HELP_GROUPS = [
         "en": "ADMIN",
         "cmds": [
             {"cmd": "ark清理缓存", "desc": "清理过期缓存文件（另每天 03:30 自动）", "eg": "ark清理缓存"},
+            {"cmd": "ark下载资源 [分类]", "desc": "预下载全部渲染图片（重跑只补新增）", "eg": "ark下载资源 / ark下载资源 立绘"},
             {"cmd": "ark更新记录", "desc": "查看插件最近更新（git 日志）", "eg": "ark更新记录"},
+            {"cmd": "ark安装依赖 [名字]", "desc": "兜底补装可选依赖（ocr/takumi，装完即生效）", "eg": "ark安装依赖 ocr"},
             {"cmd": "ark删除无效凭据", "desc": "清理已失效的本地登录行", "eg": "ark删除无效凭据"},
         ],
     },
@@ -254,6 +259,13 @@ def _draw_fortune(seed: int) -> dict[str, str | list[str]]:
     }
 
 
+# 运势等级 → 卡片主色档（good=吉 金 / plain=平 蓝 / bad=凶 红）
+_FORTUNE_TONES = {
+    "大吉": "good", "中吉": "good", "小吉": "good",
+    "平": "plain", "小凶": "bad", "凶": "bad",
+}
+
+
 @fortune_sv.on_fullmatch(("抽签", "方舟抽签", "运势"), block=True)
 async def send_daily_fortune(bot: Bot, ev: Event) -> None:
     from datetime import date
@@ -261,6 +273,11 @@ async def send_daily_fortune(bot: Bot, ev: Event) -> None:
     today = date.today().isoformat()
     seed = _daily_seed(f"{ev.bot_id}:{ev.user_id}", today)
     fortune = _draw_fortune(seed)
+
+    # 同行干员的卡片展示信息（索引不可用时只留名字，头像/星级整格隐藏）
+    char_id = ""
+    rarity = 0
+    profession = ""
 
     # 有索引时从全干员池抽（六星更受运势眷顾的既视感）
     try:
@@ -275,21 +292,54 @@ async def send_daily_fortune(bot: Bot, ev: Event) -> None:
         if index:
             import random
 
-            names = [
-                str(v.get("name") or "")
-                for v in index.values()
+            entries = [
+                (cid, str(v.get("name") or ""))
+                for cid, v in index.items()
                 if str(v.get("name") or "")
             ]
-            if names:
-                fortune["char"] = random.Random(seed + 1).choice(names)
+            if entries:
+                char_id, name = random.Random(seed + 1).choice(entries)
+                fortune["char"] = name
+                info = index.get(char_id) or {}
+                rarity = int(info.get("rarity") or 0)
+                profession = str(info.get("profession") or "")
     except Exception:
         pass
 
+    # 同行干员初始头像（磁盘缓存，失败空串降级）
+    avatar = ""
+    if char_id:
+        try:
+            try:
+                from ArknightsUID.utils.player.context import char_avatar_b64
+            except ModuleNotFoundError:
+                from ArknightsUID.ArknightsUID.utils.player.context import (
+                    char_avatar_b64,
+                )
+
+            avatar = await char_avatar_b64(char_id)
+        except Exception:
+            avatar = ""
+
+    level = str(fortune["level"])
+    context = {
+        "date": today,
+        "level": level,
+        "tone": _FORTUNE_TONES.get(level, "plain"),
+        "char": str(fortune["char"]),
+        "avatar": avatar,
+        "rarity": rarity,
+        "profession": profession,
+        "good": [str(x) for x in fortune["good"]],
+        "bad": [str(x) for x in fortune["bad"]],
+        "version": ArknightsUID_version,
+    }
+
     lines = [
         f"「明日方舟」今日运势（{today}）",
-        f"{fortune['level']} · 今日同行干员：{fortune['char']}",
+        f"{level} · 今日同行干员：{fortune['char']}",
         f"宜：{'、'.join(str(x) for x in fortune['good'])}",
         f"忌：{'、'.join(str(x) for x in fortune['bad'])}",
         "（同一人一天内结果固定；纯属娱乐）",
     ]
-    await _send_help_text(bot, ev, "\n".join(lines))
+    await send_card_or_text(bot, ev, "ark_fortune.html", context, "\n".join(lines))
