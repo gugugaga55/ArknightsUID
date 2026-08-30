@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from gsuid_core.logger import logger
@@ -31,6 +31,10 @@ from ..api.request_util import SIGN_VNAME, RespCode
 from ..api.smsdk import get_device_id
 from ..http import request_json
 from . import client as skland_client
+
+# 公告时间戳按北京时区渲染日期（宿主多为 UTC 容器，本地时区会把
+# 北京 00:00-08:00 发布的公告显示成前一天）；无夏令时，固定 +8 即可
+_TZ_BJ = timezone(timedelta(hours=8))
 
 WEB_BASE = "https://zonai.skland.com"
 WEB_REFRESH_PATH = "/web/v1/auth/refresh"
@@ -64,9 +68,12 @@ _web_did: str = ""
 _list_cache: dict[str, Any] = {"data": [], "ts": 0.0}
 _LIST_CACHE_TTL = 600
 
-# 公告详情缓存（10 分钟；textKey → (ts, detail)）
+# 公告详情缓存（10 分钟；textKey → (ts, detail)）。容量上限：过期条目
+# 只在同 key 复访时被覆盖，不同公告 id 会永久驻留（正文数 KB/条），
+# 超限淘汰最旧的，防长期运行无界增长
 _detail_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _DETAIL_CACHE_TTL = 600
+_DETAIL_CACHE_MAX = 64
 
 
 def _get_web_did(force: bool = False) -> str:
@@ -98,8 +105,13 @@ def _web_headers(sign_data: dict[str, str], did: str) -> dict[str, str]:
 
 
 async def _http_get_json(url: str, headers: dict[str, str]) -> dict[str, Any] | None:
-    """GET → json（测试缝：单测 patch 此函数）。异常返回 None。"""
-    result = await request_json("GET", url, headers=headers, timeout=20.0)
+    """GET → json（测试缝：单测 patch 此函数）。异常返回 None。
+
+    请求头携带 sign/dId 签名：禁用自动重定向，避免跨域 307/308 重放凭据头。
+    """
+    result = await request_json(
+        "GET", url, headers=headers, timeout=20.0, follow_redirects=False
+    )
     return result.data if isinstance(result.data, dict) else None
 
 
@@ -197,7 +209,7 @@ def _format_ts(ts: Any) -> str:
         return ""
     if value > 10**12:  # 毫秒
         value //= 1000
-    return datetime.fromtimestamp(value).strftime("%Y-%m-%d")
+    return datetime.fromtimestamp(value, tz=_TZ_BJ).strftime("%Y-%m-%d")
 
 
 def _ann_cover_url(item: dict[str, Any]) -> str:
@@ -289,6 +301,7 @@ async def get_ark_ann_list(limit: int = 10) -> list[dict[str, str]]:
         }
         if page_token:
             params["pageToken"] = page_token
+        prev_len = len(collected)
         response = await web_public_get(WEB_HOME_PATH, params)
         if not isinstance(response, dict) or response.get("code") != 0:
             logger.warning(
@@ -301,9 +314,14 @@ async def get_ark_ann_list(limit: int = 10) -> list[dict[str, str]]:
                 continue
             seen_ids.add(ann["id"])
             collected.append(ann)
-        page_token = str(((response.get("data") or {}).get("pageToken")) or "")
-        if not page_token:
+        next_token = str(((response.get("data") or {}).get("pageToken")) or "")
+        if not next_token:
             break
+        # 无进展保护：游标不推进，或整页全是重复 id（collected 没增长）时
+        # 强制收手，避免服务端异常形态让循环以每轮一次请求的速率空转
+        if next_token == page_token or len(collected) == prev_len:
+            break
+        page_token = next_token
 
     if collected:
         _list_cache["data"] = collected
@@ -327,9 +345,12 @@ def parse_ann_detail(response: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(item, dict):
         return None
 
+    text_slice = item.get("textSlice") or []
+    if not isinstance(text_slice, list):  # 异常信封：truthy 非列表不可迭代
+        text_slice = []
     text_lookup = {
         str(t.get("id")): str(t.get("c") or "")
-        for t in (item.get("textSlice") or [])
+        for t in text_slice
         if isinstance(t, dict)
     }
     ordered_text: list[str] = []
@@ -365,10 +386,14 @@ def parse_ann_detail(response: dict[str, Any] | None) -> dict[str, Any] | None:
         for img in (item.get("imageListSlice") or [])
         if isinstance(img, dict)
     ]
+    def _cover_url(video: dict) -> str:
+        cover = video.get("cover")
+        return str(cover.get("url") or "") if isinstance(cover, dict) else ""
+
     videos = [
         {
             "url": str(v.get("url") or ""),
-            "coverUrl": str(((v.get("cover") or {}).get("url")) or ""),
+            "coverUrl": _cover_url(v),
         }
         for v in (item.get("videoListSlice") or [])
         if isinstance(v, dict)
@@ -405,4 +430,9 @@ async def get_ann_detail(post_id: Any) -> Optional[dict[str, Any]]:
         )
         return None
     _detail_cache[key] = (time.time(), detail)
+    if len(_detail_cache) > _DETAIL_CACHE_MAX:
+        for stale_key in sorted(_detail_cache, key=lambda k: _detail_cache[k][0]):
+            _detail_cache.pop(stale_key, None)
+            if len(_detail_cache) <= _DETAIL_CACHE_MAX:
+                break
     return detail

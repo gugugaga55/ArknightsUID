@@ -6,6 +6,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
@@ -21,6 +22,14 @@ from ArknightsUID.arknightsuid_notify import (
 import ArknightsUID.arknightsuid_notify as notify_mod
 
 from ArknightsUID.arknightsuid_gacha import build_export_payload
+
+
+class _FakeBot:
+    def __init__(self) -> None:
+        self.sent: list = []
+
+    async def send(self, message, **kwargs) -> None:
+        self.sent.append((message, kwargs))
 
 
 class TrainingWarnTest(unittest.TestCase):
@@ -157,6 +166,55 @@ class GachaExportTest(unittest.TestCase):
         payload = build_export_payload("u", [])
         self.assertEqual(payload["records"], [])
         self.assertEqual(payload["info"]["count"], 0)
+
+
+class GachaExportPrivacyTest(unittest.IsolatedAsyncioTestCase):
+    """群聊导出拒绝（审计 #2）：存档含完整 UID + 全量历史，不得进群。"""
+
+    async def test_export_rejected_in_group(self) -> None:
+        from unittest import mock
+
+        from ArknightsUID.arknightsuid_gacha import export_gacha_records
+
+        bot = _FakeBot()
+        ev = SimpleNamespace(
+            text="", group_id="g1", user_id="u1", bot_id="b1"
+        )
+        with mock.patch(
+            "ArknightsUID.arknightsuid_gacha.load_local_logs",
+            new=mock.AsyncMock(return_value=[{"gacha_ts": 1}]),
+        ) as m_load:
+            await export_gacha_records(bot, ev)
+
+        self.assertEqual(len(bot.sent), 1)
+        self.assertIn("私聊", str(bot.sent[0][0]))
+        m_load.assert_not_awaited()  # 群聊直接拒绝，不触记录读取
+
+    async def test_export_allowed_in_private(self) -> None:
+        from unittest import mock
+
+        from ArknightsUID.arknightsuid_gacha import export_gacha_records
+
+        bot = _FakeBot()
+        ev = SimpleNamespace(
+            text="", group_id=None, user_id="u1", bot_id="b1"
+        )
+        credential = SimpleNamespace(uid="123456789", nickname="刀客塔")
+        records = [{"gacha_ts": 100, "pos": 1, "name": "A", "char_id": "c",
+                    "rarity": 5, "is_new": False, "pool_name": "池", "category": "1"}]
+        with mock.patch(
+            "ArknightsUID.arknightsuid_gacha.resolve_credential",
+            new=mock.AsyncMock(return_value=credential),
+        ), mock.patch(
+            "ArknightsUID.arknightsuid_gacha.load_local_logs",
+            new=mock.AsyncMock(return_value=records),
+        ):
+            await export_gacha_records(bot, ev)
+
+        # 私聊允许：至少发了消息（文件或降级文案），且不是"请在私聊"拒绝语
+        self.assertTrue(bot.sent)
+        for message, _kwargs in bot.sent:
+            self.assertNotIn("私聊中使用", str(message))
 
 
 if __name__ == "__main__":

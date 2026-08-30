@@ -224,7 +224,12 @@ async def refresh_token(cred: str) -> str:
         is_last = attempt == _REFRESH_MAX_ATTEMPTS
         try:
             response = await client.get(
-                REFRESH_TOKEN_URL, headers=headers, timeout=20.0
+                REFRESH_TOKEN_URL,
+                headers=headers,
+                timeout=20.0,
+                # 请求头携带 cred：禁用自动重定向，避免跨域 307/308
+                # 把凭据头重放给重定向目标
+                follow_redirects=False,
             )
         except Exception as exc:
             if not is_last:
@@ -269,6 +274,16 @@ async def refresh_token(cred: str) -> str:
             )
             return ""
 
+        if not isinstance(data, dict):
+            # HTTP 200 但 JSON 顶层非对象（网关数组/字符串）——按未知错误重试
+            if not is_last:
+                await asyncio.sleep(_REFRESH_RETRY_DELAY)
+                continue
+            logger.warning(
+                "[ArknightsUID] Skland token refresh non-dict response: "
+                f"HTTP {response.status_code}"
+            )
+            return ""
         code = data.get("code")
         if code == int(RespCode.OK):
             token = (data.get("data") or {}).get("token")
@@ -352,19 +367,34 @@ async def _token_for_cred(cred: str, *, force: bool = False, stale: str = "") ->
         return token
 
 
+def _lock_is_idle(lock: asyncio.Lock) -> bool:
+    """锁未被持有且无排队 waiter 才算空闲。
+
+    只看 locked() 不够：CPython 的 Lock.release() 先置 _locked=False 再
+    唤醒 waiter，存在「已释放、waiter 尚未恢复执行」的窗口。此时回收
+    会让排队协程持着被孤立的旧锁、新协程 setdefault 另建新锁，同一
+    cred 并发双 refresh → 两个 token 互相吊销（正是该锁要防止的）。
+    _waiters 是 CPython 实现细节，3.8+ 稳定存在；拿不到时退化为旧行为。
+    """
+    if lock.locked():
+        return False
+    waiters = getattr(lock, "_waiters", None)
+    return not waiters
+
+
 def _prune_token_state(*, keep: str = "") -> None:
     """清理过期 token 缓存与不再需要的 refresh 锁（防无界增长）。
 
     删除登录后 cred 对应条目不会立刻消失，这里在 refresh 成功的时机
-    顺带清扫：过期的缓存条目直接删；空闲（未加锁）且 cred 已无缓存
-    的锁也一并回收。持有中的锁绝不删除（保证互斥语义）。
+    顺带清扫：过期的缓存条目直接删；空闲（未加锁且无排队）且 cred
+    已无缓存的锁也一并回收。持有中/有排队的锁绝不删除（保证互斥语义）。
     """
     now = time.time()
     for key, (_token, ts) in list(_token_cache.items()):
         if key != keep and now - ts >= _TOKEN_CACHE_TTL:
             _token_cache.pop(key, None)
     for key, lock in list(_refresh_locks.items()):
-        if key != keep and key not in _token_cache and not lock.locked():
+        if key != keep and key not in _token_cache and _lock_is_idle(lock):
             _refresh_locks.pop(key, None)
 
 
@@ -450,9 +480,14 @@ async def _signed_request(
             request_url = f"{url}?{query}"
         client = await get_client()
         try:
+            # 请求头携带 cred/sign/dId：禁用自动重定向，避免跨域 307/308
+            # 把凭据头重放给重定向目标（森空岛 API 正常响应无重定向）
             if method == "GET":
                 response = await client.get(
-                    request_url, headers=headers, timeout=25.0
+                    request_url,
+                    headers=headers,
+                    timeout=25.0,
+                    follow_redirects=False,
                 )
             else:
                 response = await client.post(
@@ -460,6 +495,7 @@ async def _signed_request(
                     headers=headers,
                     content=body_string if body is not None else None,
                     timeout=25.0,
+                    follow_redirects=False,
                 )
             if not response.content:
                 return None

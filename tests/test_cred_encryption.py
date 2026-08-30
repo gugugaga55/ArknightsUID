@@ -92,6 +92,21 @@ class CryptoRoundTripTest(unittest.TestCase):
         self.assertFalse(cred_equals("", ""))
         self.assertFalse(cred_equals(CRED, ""))
 
+    def test_encrypt_fails_closed_when_no_key(self) -> None:
+        """加密不可用必须抛错拒绝，而不是回退明文（审计 #4）。"""
+        from ArknightsUID.utils.crypto import EncryptionUnavailableError
+
+        # 模拟密钥初始化失败的粘滞状态
+        with mock.patch.object(ark_crypto, "_fernet", None), mock.patch.object(
+            ark_crypto, "_fernet_failed", True
+        ):
+            with self.assertRaises(EncryptionUnavailableError):
+                encrypt_secret(CRED)
+        # 空串/已加密值仍原样返回（无需加密，不构成明文降级）
+        self.assertEqual(encrypt_secret(""), "")
+        encrypted = ENC_PREFIX + "xxx"
+        self.assertEqual(encrypt_secret(encrypted), encrypted)
+
 
 class StorePersistEncryptionTest(unittest.IsolatedAsyncioTestCase):
     async def test_persist_stores_ciphertext_not_plaintext(self) -> None:
@@ -103,7 +118,7 @@ class StorePersistEncryptionTest(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(
             ark_store, "list_ark_roles_by_cred", new=mock.AsyncMock(return_value=roles)
         ), mock.patch.object(
-            ark_store.ArkUser, "insert_data", new=mock.AsyncMock(return_value=0)
+            ark_store.ArkUser, "upsert_by_uid", new=mock.AsyncMock(return_value=True)
         ) as m_user, mock.patch.object(
             ark_store.ArkBind, "insert_uid", new=mock.AsyncMock(return_value=0)
         ):
