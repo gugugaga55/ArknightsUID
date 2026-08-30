@@ -3,13 +3,18 @@
 - `ark活动`：进行中的限时活动 + 限定卡池清单（PRTS SMW，与日历同源）
 - `ark公告 [编号]`：明日方舟官方公告列表（森空岛 web 公共接口）
 - `订阅方舟活动` / `取消订阅方舟活动`（pm=3，群聊）：gs_subscribe 订阅
+- `订阅公告` / `取消订阅公告`（群聊/私聊）：仅官方公告的专项推送，
+  与「订阅方舟活动」（活动+卡池+公告合并）互不影响、各自独立基线
 - 定时轮询（间隔/开关见插件配置 AnnCheckMinute / AnnPushEnable）：新活动 / 新卡池 / 新公告 → 推送订阅群
 
-推送状态（已见条目键）落 MAIN_PATH/push_state.json，条目上限防膨胀。
+推送状态（已见条目键）落 MAIN_PATH/push_state.json（活动合并订阅）与
+ann_push_state.json（公告专项订阅），条目上限防膨胀。
 """
 from __future__ import annotations
 
 import asyncio
+import math
+import os
 import random
 import time
 
@@ -78,9 +83,100 @@ _STATE_PATH: Path = MAIN_PATH / "push_state.json"
 # 已见条目键上限（超出裁剪最旧的，防状态文件膨胀）
 _STATE_LIMIT = 400
 
+# 公告专项订阅（仅公告，不掺活动/卡池；session 模式群聊/私聊各一条）
+ANN_TASK_NAME = "订阅方舟公告"
+_ANN_STATE_PATH: Path = MAIN_PATH / "ann_push_state.json"
+# 公告推送单轮上限：超过的留下轮增量推（与活动合并推送同款防刷屏）
+_ANN_PUSH_LIMIT = 5
+
 
 def _activity_key(kind: str, title: str) -> str:
     return f"{kind}:{title}"
+
+
+# 推送状态读-改-写锁：定时任务在"load → 发送(await) → save"整段持有，
+# 防止两轮推送并发重复推/互相覆盖；命令侧写盘由 save_* 的合并语义兜底
+# （多进程部署仍需外部协调，见 save_push_state 注释）
+_push_state_lock = asyncio.Lock()
+
+
+def _session_key(subscribe) -> str:
+    """订阅会话标识：群聊按群、私聊按用户。"""
+    if getattr(subscribe, "group_id", None):
+        return f"group:{subscribe.group_id}"
+    return f"direct:{getattr(subscribe, 'uid', '')}"
+
+
+async def _deliver_per_session(
+    datas,
+    keys: list[str],
+    build_message,
+    delivered: dict[str, list[str]],
+    log_tag: str,
+) -> tuple[dict[str, list[str]], bool]:
+    """按订阅会话投递条目（审计 #9：部分成功不再造成永久漏发）。
+
+    delivered[key] = 已确认收到的会话集合（跨轮持久化在状态文件里）。
+    某条目对某会话已投递则跳过——A 成功 B 失败时，下轮只给 B 补发，
+    不给 A 重复刷屏；条目对全部会话投递完成后由调用方推进全局 seen。
+
+    返回 (更新后的 delivered, 本轮是否有任何发送成功)。
+    """
+    any_sent = False
+    for subscribe in datas:
+        session = _session_key(subscribe)
+        pending = [
+            key for key in keys
+            if session not in (delivered.get(key) or [])
+        ]
+        if not pending:
+            continue
+        try:
+            await subscribe.send(build_message(pending))
+            any_sent = True
+            for key in pending:
+                delivered.setdefault(key, []).append(session)
+        except Exception as exc:
+            logger.warning(
+                f"[ArknightsUID·{log_tag}] 推送失败 session={session}: "
+                f"{exc.__class__.__name__}"
+            )
+        await asyncio.sleep(random.uniform(1, 3))
+    return delivered, any_sent
+
+
+def _merge_seen_state(current_state: dict, incoming: dict) -> dict:
+    """落盘前合并：fresh 磁盘状态优先，incoming 的 seen 追加并集（保序）。
+
+    旧快照整文件覆盖会丢掉"轮询期间其他写入者（命令/另一轮任务）刚标的
+    条目"——seen 是标记集合，并集语义下重复无害、丢失即漏推/重推。
+    """
+    merged = dict(current_state) if isinstance(current_state, dict) else {}
+    if isinstance(incoming, dict):
+        merged.update({k: v for k, v in incoming.items() if k not in ("seen", "delivered")})
+        # delivered（per-session 投递进度，审计 #9）：按条目并集合并
+        incoming_delivered = incoming.get("delivered")
+        if isinstance(incoming_delivered, dict):
+            merged_delivered = dict(merged.get("delivered") or {})
+            for key, sessions in incoming_delivered.items():
+                if not isinstance(sessions, list):
+                    continue
+                current_sessions = merged_delivered.get(key) or []
+                merged_delivered[key] = list(
+                    dict.fromkeys([*current_sessions, *sessions])
+                )
+            merged["delivered"] = merged_delivered
+        incoming_seen = incoming.get("seen")
+        if isinstance(incoming_seen, list):
+            fresh_seen = merged.get("seen")
+            seen_list = list(fresh_seen) if isinstance(fresh_seen, list) else []
+            seen_set = {str(key) for key in seen_list}
+            for key in incoming_seen:
+                if str(key) not in seen_set:
+                    seen_set.add(str(key))
+                    seen_list.append(key)
+            merged["seen"] = seen_list
+    return merged
 
 
 def load_push_state() -> dict:
@@ -91,18 +187,83 @@ def load_push_state() -> dict:
 
 
 def save_push_state(state: dict) -> None:
+    from ..utils.file_lock import file_locked, unique_tmp
+
     try:
-        seen = state.get("seen")
-        if isinstance(seen, list) and len(seen) > _STATE_LIMIT:
-            state["seen"] = seen[-_STATE_LIMIT:]
-        _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-        _STATE_PATH.write_text(
-            json.dumps(state, ensure_ascii=False), encoding="utf-8"
-        )
+        # 读-合并-写三步全在跨进程文件锁内（审计 #10：多 worker 部署
+        # 下另一进程的旧快照不能再整文件覆盖；合并语义见 _merge_seen_state）
+        with file_locked(_STATE_PATH):
+            state = _merge_seen_state(load_push_state(), state)
+            seen = state.get("seen")
+            if isinstance(seen, list) and len(seen) > _STATE_LIMIT:
+                state["seen"] = seen[-_STATE_LIMIT:]
+            _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            # 唯一 tmp + os.replace 原子写：崩溃不留半文件（半文件会被当
+            # 无基线，下轮重建 seen 基线漏推一轮）
+            tmp = unique_tmp(_STATE_PATH)
+            tmp.write_text(
+                json.dumps(state, ensure_ascii=False), encoding="utf-8"
+            )
+            os.replace(tmp, _STATE_PATH)
     except Exception as exc:
         logger.warning(
             f"[ArknightsUID·推送] 状态写入失败: {exc.__class__.__name__}"
         )
+
+
+def _load_ann_state() -> dict:
+    try:
+        state = json.loads(_ANN_STATE_PATH.read_text(encoding="utf-8"))
+        return state if isinstance(state, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_ann_state(state: dict) -> None:
+    from ..utils.file_lock import file_locked, unique_tmp
+
+    try:
+        # 读-合并-写三步全在跨进程文件锁内（审计 #10，语义同 save_push_state）
+        with file_locked(_ANN_STATE_PATH):
+            state = _merge_seen_state(_load_ann_state(), state)
+            seen = state.get("seen")
+            if isinstance(seen, list) and len(seen) > _STATE_LIMIT:
+                state["seen"] = seen[-_STATE_LIMIT:]
+            _ANN_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            tmp = unique_tmp(_ANN_STATE_PATH)
+            tmp.write_text(
+                json.dumps(state, ensure_ascii=False), encoding="utf-8"
+            )
+            os.replace(tmp, _ANN_STATE_PATH)
+    except Exception as exc:
+        logger.warning(
+            f"[ArknightsUID·公告推送] 状态写入失败: {exc.__class__.__name__}"
+        )
+
+
+def diff_new_announcements(
+    anns: list[dict[str, str]], seen: list[str]
+) -> list[dict[str, str]]:
+    """公告列表中未见过的（保持新→旧原序；无 id 的条目跳过）。"""
+    seen_set = {str(key) for key in seen}
+    return [
+        ann for ann in anns
+        if ann.get("id") and str(ann["id"]) not in seen_set
+    ]
+
+
+def format_ann_push_message(fresh: list[dict[str, str]]) -> str:
+    """新公告 → 推送文案（标题+日期+链接，单轮最多 5 条）。"""
+    lines = ["「明日方舟」新公告"]
+    for ann in fresh[:_ANN_PUSH_LIMIT]:
+        date = f"（{ann['date']}）" if ann.get("date") else ""
+        lines.append(f"《{ann['title']}》{date}")
+        if ann.get("url"):
+            lines.append(f"  {ann['url']}")
+    if len(fresh) > _ANN_PUSH_LIMIT:
+        lines.append(f"……（本轮共 {len(fresh)} 条，其余下轮继续推）")
+    lines.append("发送「ark公告」查看列表与正文。")
+    return "\n".join(lines)
 
 
 async def _send_text(bot: Bot, ev: Event, msg: str) -> None:
@@ -181,13 +342,35 @@ _ANN_LONG_IMAGE_RATIO = 5.0
 # 详情卡内嵌配图上限（防纯图帖把卡片撑爆渲染）；追发超长图上限（防刷屏）
 _ANN_CARD_IMAGE_LIMIT = 12
 _ANN_LONG_IMAGE_LIMIT = 6
+# 公告图宽高合理上限：超过按无效处理（接口异常/脏数据，不进卡片布局）
+_ANN_IMG_MAX_SIDE = 100_000
+
+
+def _safe_img_side(value: object) -> int:
+    """公告图宽高安全解析：仅接受有限数值（含数字字符串），异常回 0。
+
+    接口是外部输入：None/列表/字典/"auto"/NaN 等此前会让 int() 直接
+    抛 ValueError/TypeError，公告命令整体失败。
+    """
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        number = float(value)
+    elif isinstance(value, str) and value.strip().lstrip("+-").isdigit():
+        number = float(value.strip())
+    else:
+        return 0
+    if not math.isfinite(number) or number <= 0 or number > _ANN_IMG_MAX_SIDE:
+        return 0
+    return int(number)
 
 
 def split_ann_images(detail: dict) -> tuple[list[dict], list[str]]:
     """公告配图 →（内嵌卡片的普通图, 单独追发的超长图直链）。
 
     与视频封面重复的图片跳过（EndUID 同规则）；无尺寸信息的图按普通图
-    处理（内嵌显示宽度由卡片约束）。
+    处理（内嵌显示宽度由卡片约束）。宽高经 _safe_img_side 归一，脏数据
+    不再让命令抛异常。
     """
     video_cover_urls = {
         str(v.get("coverUrl") or "") for v in detail.get("videos") or []
@@ -195,11 +378,13 @@ def split_ann_images(detail: dict) -> tuple[list[dict], list[str]]:
     normal: list[dict] = []
     longs: list[str] = []
     for img in detail.get("images") or []:
+        if not isinstance(img, dict):
+            continue
         url = str(img.get("url") or "")
         if not url or url in video_cover_urls:
             continue
-        width = int(img.get("width") or 0)
-        height = int(img.get("height") or 0)
+        width = _safe_img_side(img.get("width"))
+        height = _safe_img_side(img.get("height"))
         if width > 0 and height / width > _ANN_LONG_IMAGE_RATIO:
             longs.append(url)
         else:
@@ -691,7 +876,10 @@ async def subscribe_ark_activities(bot: Bot, ev: Event) -> None:
     # 首次订阅即初始化基线，避免把存量活动当新活动轰炸
     state = load_push_state()
     if "seen" not in state or not state.get("seen"):
-        await collect_current_entries()
+        entries = await collect_current_entries()
+        if entries:
+            # 必须落盘才成基线——此前返回值被丢弃，基线实际未建立
+            save_push_state({"seen": list(entries.keys())})
     await bot.send(
         "已重新订阅方舟活动推送！" if resubscribed else "成功订阅方舟活动推送！"
     )
@@ -708,6 +896,71 @@ async def unsubscribe_ark_activities(bot: Bot, ev: Event) -> None:
                 await gs_subscribe.delete_subscribe("session", TASK_NAME, ev)
                 return await bot.send("成功取消订阅方舟活动！")
     await bot.send("未曾订阅方舟活动！")
+
+
+@push_sv.on_command(
+    (
+        "订阅公告",
+        "订阅方舟公告",
+    ),
+    block=True,
+)
+async def subscribe_ark_announcements(bot: Bot, ev: Event) -> None:
+    """订阅官方公告专项推送（session 模式：群聊按群、私聊按人各一条）。"""
+    await gs_subscribe.add_subscribe(
+        "session", task_name=ANN_TASK_NAME, event=ev, extra_message=""
+    )
+    # 首次订阅建基线：存量公告不当新公告轰炸（已有基线则不动）
+    if not _load_ann_state().get("seen"):
+        try:
+            current = await get_ark_ann_list(limit=10)
+        except Exception as exc:
+            logger.warning(
+                f"[ArknightsUID·公告推送] 基线拉取失败: {exc.__class__.__name__}"
+            )
+            current = []
+        if current:
+            _save_ann_state({"seen": [a["id"] for a in current if a.get("id")]})
+
+    lines = ["已订阅官方公告推送（仅公告；活动/卡池请用 ark订阅方舟活动）"]
+    try:
+        latest = await get_ark_ann_list(limit=3)
+    except Exception:
+        latest = []
+    if latest:
+        lines.append("最近公告：")
+        for index, ann in enumerate(latest, start=1):
+            date = f" · {ann['date']}" if ann.get("date") else ""
+            lines.append(f"{index}. {ann['title']}{date}")
+    lines.append("新公告发布后会在这里推送。取消：ark取消订阅公告")
+    await _send_text(bot, ev, "\n".join(lines))
+
+
+@push_sv.on_command(
+    (
+        "取消订阅公告",
+        "取消方舟公告",
+        "退订公告推送",
+        "退订方舟公告",
+    ),
+    block=True,
+)
+async def unsubscribe_ark_announcements(bot: Bot, ev: Event) -> None:
+    data = await gs_subscribe.get_subscribe(ANN_TASK_NAME) or []
+    # session 模式：群聊按 group_id 定位本群订阅，私聊按 user_id
+    mine = [
+        subscribe
+        for subscribe in data
+        if (
+            ev.group_id and subscribe.group_id == ev.group_id
+        ) or (
+            not ev.group_id and subscribe.user_id == ev.user_id
+        )
+    ]
+    if not mine:
+        return await _send_text(bot, ev, "未曾订阅官方公告。")
+    await gs_subscribe.delete_subscribe("session", ANN_TASK_NAME, ev)
+    await _send_text(bot, ev, "已取消官方公告推送。")
 
 
 async def collect_current_entries() -> dict[str, list[dict[str, str]]]:
@@ -744,9 +997,12 @@ async def collect_current_entries() -> dict[str, list[dict[str, str]]]:
 def diff_new_entries(
     entries: dict[str, list[dict[str, str]]], seen: list[str]
 ) -> list[dict[str, str]]:
-    """当前条目中未见过的（保留插入序）。"""
+    """当前条目中未见过的（保留插入序；条目附带其去重 key）。"""
     seen_set = set(seen)
-    return [items[0] for key, items in entries.items() if key not in seen_set]
+    return [
+        {**items[0], "key": key}
+        for key, items in entries.items() if key not in seen_set
+    ]
 
 
 def _push_check_minutes() -> int:
@@ -766,6 +1022,77 @@ def _push_enabled() -> bool:
         return True
 
 
+async def _push_new_announcements(datas) -> None:
+    """公告专项订阅：新公告 → 逐订阅推送（独立 seen 基线，与活动订阅互不影响）。"""
+    try:
+        anns = await get_ark_ann_list(limit=10)
+    except Exception as exc:
+        logger.warning(
+            f"[ArknightsUID·公告推送] 公告拉取失败: {exc.__class__.__name__}"
+        )
+        return
+    if not anns:
+        return
+
+    async with _push_state_lock:
+        state = _load_ann_state()
+        seen: list[str] = [str(key) for key in (state.get("seen") or [])]
+        if not seen:
+            # 无基线（首次运行/状态丢失）：只建基线不推送
+            _save_ann_state({"seen": [a["id"] for a in anns if a.get("id")]})
+            logger.info("[ArknightsUID·公告推送] 基线初始化完成，下轮开始检测")
+            return
+
+        fresh = diff_new_announcements(anns, seen)
+        if not fresh:
+            logger.info("[ArknightsUID·公告推送] 无新增")
+            return
+
+        # 单轮最多推 5 条；其余留下轮增量推
+        fresh_ids = [str(ann["id"]) for ann in fresh[:_ANN_PUSH_LIMIT]]
+        logger.info(
+            f"[ArknightsUID·公告推送] 推送 {len(fresh_ids)} 条新公告"
+            f"（会话 {len(datas)} 个）"
+        )
+        delivered: dict[str, list[str]] = {
+            str(k): list(v or [])
+            for k, v in (state.get("delivered") or {}).items()
+            if isinstance(v, list)
+        }
+        delivered_before = {
+            k: list(v) for k, v in delivered.items()
+        }
+
+        def _build_ann_message(ids: list[str]) -> str:
+            return format_ann_push_message(
+                [a for a in fresh if str(a["id"]) in ids]
+            )
+
+        delivered, _any = await _deliver_per_session(
+            datas, fresh_ids, _build_ann_message, delivered, "公告推送"
+        )
+        # 条目对全部会话投递完成 → 推进全局 seen 并清掉其投递进度；
+        # 部分完成 → seen 不动、delivered 落盘，下轮只补发未覆盖会话
+        sessions = {_session_key(sub) for sub in datas}
+        done = [
+            key for key in fresh_ids
+            if sessions and sessions.issubset(set(delivered.get(key) or []))
+        ]
+        if done or delivered != delivered_before:
+            _save_ann_state({
+                "seen": seen + done,
+                "delivered": {
+                    k: v for k, v in delivered.items() if k not in done
+                },
+            })
+        else:
+            # 全部投递失败且无新进度：不落盘（seen/delivered 均未变），
+            # 下轮整批重试
+            logger.warning(
+                "[ArknightsUID·公告推送] 全部订阅推送失败，本轮不落盘，下轮重试"
+            )
+
+
 @scheduler.scheduled_job("interval", minutes=_push_check_minutes(), id="ark_push_check")
 async def check_ark_activities() -> None:
     """定时检测新活动/卡池/公告并推送订阅群。"""
@@ -773,48 +1100,82 @@ async def check_ark_activities() -> None:
         logger.debug("[ArknightsUID·推送] AnnPushEnable 已关闭，跳过本轮检查")
         return
     datas = await gs_subscribe.get_subscribe(TASK_NAME)
-    if not datas:
+    ann_datas = await gs_subscribe.get_subscribe(ANN_TASK_NAME)
+    if not datas and not ann_datas:
         return
     logger.info("[ArknightsUID·推送] 定时任务：检查活动/卡池/公告更新..")
+
+    if ann_datas:
+        await _push_new_announcements(ann_datas)
+    if not datas:
+        return
 
     entries = await collect_current_entries()
     if not entries:
         logger.info("[ArknightsUID·推送] 本次未拉到任何条目，跳过")
         return
 
-    state = load_push_state()
-    seen: list[str] = list(state.get("seen") or [])
-    if not seen:
-        # 无基线（首次运行/状态丢失）：只建基线不推送
-        save_push_state({"seen": list(entries.keys())})
-        logger.info("[ArknightsUID·推送] 基线初始化完成，下轮开始检测")
-        return
+    async with _push_state_lock:
+        state = load_push_state()
+        seen: list[str] = list(state.get("seen") or [])
+        if not seen:
+            # 无基线（首次运行/状态丢失）：只建基线不推送
+            save_push_state({"seen": list(entries.keys())})
+            logger.info("[ArknightsUID·推送] 基线初始化完成，下轮开始检测")
+            return
 
-    fresh = diff_new_entries(entries, seen)
-    if not fresh:
-        logger.info("[ArknightsUID·推送] 无新增")
-        return
+        fresh = diff_new_entries(entries, seen)
+        if not fresh:
+            logger.info("[ArknightsUID·推送] 无新增")
+            return
 
-    lines = ["「明日方舟」新动态"]
-    for item in fresh[:8]:
-        detail = f"（{item['detail']}）" if item.get("detail") else ""
-        lines.append(f"[{item['kind']}] {item['title']}{detail}")
-    message = "\n".join(lines)
-    logger.info(f"[ArknightsUID·推送] 推送 {len(fresh)} 条新动态")
+        # 单轮最多推 8 条；seen 只标实际推过的 key（多余的留下轮增量推，
+        # 否则一次性全标会让第 9 条起永久漏推）
+        seen_set = set(seen)
+        fresh_keys = [k for k in entries.keys() if k not in seen_set]
+        pushed_keys = fresh_keys[:8]
 
-    for subscribe in datas:
-        try:
-            await subscribe.send(message)
-        except Exception as exc:
-            logger.warning(
-                f"[ArknightsUID·推送] 推送失败 group={subscribe.group_id}: "
-                f"{exc.__class__.__name__}"
-            )
-        await asyncio.sleep(random.uniform(1, 3))
+        fresh_by_key = {item["key"]: item for item in fresh if item.get("key")}
+        logger.info(
+            f"[ArknightsUID·推送] 推送 {len(pushed_keys)} 条新动态"
+            f"（会话 {len(datas)} 个）"
+        )
 
-    seen.extend(entries.keys())
-    save_push_state({"seen": seen})
-    logger.info("[ArknightsUID·推送] 推送完毕")
+        def _build_entry_message(keys: list[str]) -> str:
+            lines = ["「明日方舟」新动态"]
+            for key in keys:
+                item = fresh_by_key.get(key)
+                if not item:
+                    continue
+                detail = f"（{item['detail']}）" if item.get("detail") else ""
+                lines.append(f"[{item['kind']}] {item['title']}{detail}")
+            return "\n".join(lines)
+
+        delivered: dict[str, list[str]] = {
+            str(k): list(v or [])
+            for k, v in (state.get("delivered") or {}).items()
+            if isinstance(v, list)
+        }
+        delivered_before = {
+            k: list(v) for k, v in delivered.items()
+        }
+        delivered, _any = await _deliver_per_session(
+            datas, pushed_keys, _build_entry_message, delivered, "推送"
+        )
+        # 条目对全部会话投递完成 → 推进全局 seen；部分完成 → 下轮补发
+        sessions = {_session_key(sub) for sub in datas}
+        done = [
+            key for key in pushed_keys
+            if sessions and sessions.issubset(set(delivered.get(key) or []))
+        ]
+        if done or delivered != delivered_before:
+            save_push_state({
+                "seen": seen + done,
+                "delivered": {
+                    k: v for k, v in delivered.items() if k not in done
+                },
+            })
+        logger.info("[ArknightsUID·推送] 推送完毕")
 
 
 # ---------------------------------------------------------------------------
