@@ -1,0 +1,123 @@
+<!--
+  ark_rogue_ending.html —— 肉鸽结局前置条件卡（#35）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_rogue._build_rogue_ending_context 提供）：
+    theme_name: str           期显示名（主题表权威名）
+    shown_count/count: int    展示数 / 该期结局总数
+    focus_note: str           聚焦提示（按结局名/藏品名查询时非空）
+    guide_updated: str        攻略核对日期（ENDING_GUIDES 维护时间）
+    banner: str               期主题 KV 图 b64（可空，降级为无图）
+    endings: [{seq, name, label, desc, unlock, steps: [str],
+               key_relics: [{name, icon}], final, note, has_guide}]
+                              has_guide=False 为表内有而攻略未收录（攻略整理中）
+    notes: [str]              期级脚注（失败结局等特殊口径）
+    source_note/version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="IS-ENDING">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 肉鸽结局档案 I.S. ENDINGS</em></span>
+            <span class="mast-meta"><span class="idx">35</span>PRTS.WIKI</span>
+        </div>
+
+        <div class="titleblock" style="align-items: center;">
+            <div>
+                <div class="eyebrow">集成战略 · 结局前置条件</div>
+                <h1 class="title title--s">{{ theme_name }}</h1>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_rogue.b64" %}" alt="">
+        </div>
+        <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">ENDING GUIDE</span></div>
+
+        <div class="chip-flow" style="margin-top: var(--space-4);">
+            <span class="chip chip--ink">{% if focus_note %}展示 {{ shown_count }} / {% endif %}共 {{ count }} 个结局</span>
+            {% if focus_note %}<span class="chip chip--blue">{{ focus_note }}</span>{% endif %}
+            <span class="chip chip--ghost">攻略核对 {{ guide_updated }}</span>
+        </div>
+
+        {% if banner %}
+        <img src="{{ banner }}" alt="" style="display: block; width: 100%; margin-top: var(--space-4); border: 1px solid var(--hairline);">
+        {% endif %}
+
+        {% for e in endings %}
+        <div class="sect" style="margin-top: var(--space-4);">
+            <span class="sect-label bk">{{ e.seq }}　{{ e.name }}</span>
+            {% if e.label %}<span class="chip chip--red" style="height: 20px;">{{ e.label }}</span>{% endif %}
+            <span class="sect-en">ENDING</span>
+        </div>
+
+        {% if e.desc %}
+        <div class="prose" style="font-size: 11px; margin-top: var(--space-2);">{{ e.desc }}</div>
+        {% endif %}
+
+        {% if e.has_guide %}
+        <div class="rows" style="margin-top: var(--space-3);">
+            {% if e.unlock %}
+            <div class="row">
+                <span class="row-label">前置解锁</span>
+                <span class="row-value" style="font-size: 12px;">{{ e.unlock }}</span>
+            </div>
+            {% endif %}
+            {% if e.steps %}
+            <div class="row" style="display: block;">
+                <div class="row-label" style="margin-bottom: 4px;">达成步骤</div>
+                {% for s in e.steps %}
+                <div style="display: flex; gap: 8px; font-size: 12px; line-height: 1.8; color: var(--tx-1);">
+                    <span class="mono" style="flex-shrink: 0; color: var(--tx-2); font-size: 10px; padding-top: 3px;">{{ "%02d" | format(loop.index) }}</span>
+                    <span>{{ s }}</span>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+            {% if e.key_relics %}
+            <div class="row">
+                <span class="row-label">关键藏品</span>
+                <span style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center;">
+                    {% for r in e.key_relics %}
+                    <span style="display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--hairline); padding: 2px 8px 2px 4px; border-radius: 3px;">
+                        {% if r.icon %}<span class="iicon"><img src="{{ r.icon }}" alt=""></span>{% endif %}
+                        <span style="font-size: 11px; color: var(--tx-1);">{{ r.name }}</span>
+                    </span>
+                    {% endfor %}
+                </span>
+            </div>
+            {% endif %}
+            {% if e.final %}
+            <div class="row">
+                <span class="row-label">最终关卡</span>
+                <span class="row-value mono" style="font-size: 11px; letter-spacing: 0.3px;">{{ e.final }}</span>
+            </div>
+            {% endif %}
+            {% if e.note %}
+            <div class="prose prose--blue" style="font-size: 11px;">{{ e.note }}</div>
+            {% endif %}
+        </div>
+        {% else %}
+        <div class="prose prose--blue" style="margin-top: var(--space-2); font-size: 11px;">
+            攻略整理中（新结局刚上线，前置条件暂未收录；以上为游戏表内描述）。
+        </div>
+        {% endif %}
+        {% endfor %}
+
+        {% for n in notes %}
+        <div class="prose prose--blue" style="margin-top: var(--space-3); font-size: 11px;">※ {{ n }}</div>
+        {% endfor %}
+
+        <div class="prose" style="margin-top: var(--space-3); font-size: 11px;">
+            查其它期：ark肉鸽结局 &lt;期名&gt;；按结局名/关键藏品名也可直查（如 ark肉鸽结局 巴别塔誓言）；查藏品效果：ark藏品 &lt;名字&gt;。
+        </div>
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · {{ source_note }}</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// IS // ENDING GUIDE</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

@@ -4,6 +4,8 @@
 - `ark更新记录`（pm=1）：展示插件最近 git 提交记录
 - `ark删除无效凭据`（pm=1）：清理 cookie_status=无效 的本地登录行
 - `ark刷新`：删除游戏数据表缓存（干员/技能/物品等），下次查询自动重新下载
+- `ark下载资源 [分类…]`（pm=1）：批量预下载全部渲染图片（已存在跳过，重跑只补新增）
+- `ark安装依赖 [名字]`（pm=1）：兜底 core 自动装依赖失败的补装（白名单：ocr/takumi）
 """
 from __future__ import annotations
 
@@ -143,3 +145,81 @@ async def refresh_gamedata_cache(bot: Bot, ev: Event) -> None:
         f"「明日方舟」已清理 {removed} 个游戏数据缓存文件，"
         "下次查询会自动重新下载最新数据（首次会稍慢）。",
     )
+
+
+# ---------------------------------------------------------------------------
+# 安装依赖：core AutoInstallDep 失败时的聊天内兜底（白名单，见 dep_install）
+# ---------------------------------------------------------------------------
+
+@maintenance_sv.on_command(("安装依赖", "安装组件"), block=True)
+async def install_dependency_command(bot: Bot, ev: Event) -> None:
+    try:
+        from ArknightsUID.ArknightsUID.utils import dep_install
+    except ModuleNotFoundError:
+        from ArknightsUID.utils import dep_install
+
+    arg = (ev.text or "").strip()
+    if not arg:
+        lines = ["用法：ark安装依赖 <名字>。可选依赖："]
+        for entry in dep_install.dependency_status():
+            state = "✅ 已安装" if entry.installed else "❌ 未安装"
+            keys = "/".join(entry.keys)
+            lines.append(f"- {keys}（{entry.spec}）：{state}")
+        lines.append("依赖通常由 core 启动时自动安装（AutoInstallDep），本命令兜底补装。")
+        return await _send_text(bot, ev, "\n".join(lines))
+
+    resolved = dep_install.resolve_dependency(arg)
+    if resolved is None:
+        return await _send_text(
+            bot, ev, f"未知依赖名「{arg}」，发送 ark安装依赖 查看可用列表。"
+        )
+    spec, module = resolved
+    if dep_install.is_installed(module):
+        return await _send_text(bot, ev, f"{module} 已安装，无需重复安装。")
+    await _send_text(
+        bot, ev, f"正在安装 {spec}（多镜像回退，约需 1-2 分钟）…"
+    )
+    ok, msg = await dep_install.install_dependency(arg)
+    await _send_text(bot, ev, msg)
+
+
+# ---------------------------------------------------------------------------
+# 下载资源：批量预下载全部渲染图片（已存在跳过，重跑只补 diff）
+# ---------------------------------------------------------------------------
+
+@maintenance_sv.on_command(
+    ("下载资源", "全部下载", "下载全部资源", "预下载资源"), block=True
+)
+async def bulk_download_resources(bot: Bot, ev: Event) -> None:
+    try:
+        from ArknightsUID.ArknightsUID.utils.resource import bulk_download
+    except ModuleNotFoundError:
+        from ArknightsUID.utils.resource import bulk_download
+
+    category_keys = bulk_download.parse_category_args(ev.text or "")
+    if isinstance(category_keys, str):
+        return await _send_text(bot, ev, category_keys)
+
+    if not bulk_download.try_acquire_run():
+        return await _send_text(
+            bot, ev, "资源下载正在进行中，请等本轮结束再试。"
+        )
+    try:
+        labels = "、".join(
+            bulk_download.CATEGORY_LABELS[key] for key in category_keys
+        )
+        await _send_text(
+            bot, ev,
+            f"「明日方舟」开始预下载资源（{labels}）：已存在的图片会跳过，"
+            "首次运行需先拉取游戏数据表，耗时较长，进度逐类回报…",
+        )
+
+        async def _report(result) -> None:
+            await _send_text(bot, ev, bulk_download.format_category_line(result))
+
+        summary = await bulk_download.run_bulk_download(
+            category_keys, on_category_done=_report
+        )
+        await _send_text(bot, ev, bulk_download.format_summary(summary))
+    finally:
+        bulk_download.release_run()

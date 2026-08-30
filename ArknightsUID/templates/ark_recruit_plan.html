@@ -2,7 +2,8 @@
   ark_recruit_plan.html —— 公招组合推荐卡（#27）
   设计语言：罗德岛终端（见 ark_base.css 头部注释）
   上下文（arknightsuid_wiki.send_recruit_recommend 组装）：
-    input_tags: str            用户输入的标签串（"/" 分隔）
+    input_tags: str            用户输入的标签串（"/" 分隔；截图识别时
+                               末尾带「（截图识别）」标注）
     unknown_tags: str          未识别标签（可空）
     rows: [{tags, tier, tier_name, min_rarity, max_rarity, pool_count,
             names: [str], more: int, avatars: [str]}]
