@@ -10,11 +10,17 @@ from typing import Any
 from gsuid_core.logger import logger
 
 try:
-    from ArknightsUID.ArknightsUID.utils.crypto import encrypt_secret
+    from ArknightsUID.ArknightsUID.utils.crypto import (
+        EncryptionUnavailableError,
+        encrypt_secret,
+    )
     from ArknightsUID.ArknightsUID.utils.database.models import ArkBind, ArkUser
     from ArknightsUID.ArknightsUID.utils.skland.auth import list_ark_roles_by_cred
 except ModuleNotFoundError:
-    from ArknightsUID.utils.crypto import encrypt_secret
+    from ArknightsUID.utils.crypto import (
+        EncryptionUnavailableError,
+        encrypt_secret,
+    )
     from ArknightsUID.utils.database.models import ArkBind, ArkUser
     from ArknightsUID.utils.skland.auth import list_ark_roles_by_cred
 
@@ -57,16 +63,31 @@ async def persist_ark_login(
     if not valid_roles:
         return None, "森空岛返回的账号数据异常，已拒绝写入。"
 
+    # 加密在写库之前一次性完成：密钥不可用时拒绝登录落库（不留半写状态），
+    # 错误文案引导修复密钥——静默明文降级会把 cred 直接写进数据库文件
+    try:
+        enc_cred = encrypt_secret(cred)
+        enc_hg_token = encrypt_secret(hg_token)
+    except EncryptionUnavailableError as exc:
+        logger.warning(f"[ArknightsUID·绑定] 登录信息未保存: {exc}")
+        return None, (
+            "本地凭据加密初始化失败，为避免明文存储已取消保存登录信息。\n"
+            "请检查插件数据目录下 ark_cred_key 密钥文件"
+            "（或 ARK_UID_ENC_KEY 环境变量）后重试。"
+        )
+
     for role in valid_roles:
-        # insert_data 内部 upsert：存在（按 uid）则 update，否则 insert。重复登录幂等。
+        # 按 (user_id, bot_id, uid) upsert：只更新当前账号行。
+        # 不能用基类 insert_data——它的 update 分支只按 (user_id, bot_id)
+        # 更新，会把该用户全部账号行改写成当前 uid（多账号凭据互相覆盖）。
         # cred / hg_token 是长期凭据，落库前加密（见 utils/crypto）。
-        await ArkUser.insert_data(
+        saved = await ArkUser.upsert_by_uid(
             user_id=user_id,
             bot_id=bot_id,
             uid=role["role_id"],
             nickname=role["nickname"],
-            cookie=encrypt_secret(cred),
-            hg_token=encrypt_secret(hg_token),
+            cookie=enc_cred,
+            hg_token=enc_hg_token,
             skland_user_id=skland_user_id,
             record_id=role["record_uid"],
             server_id=role["server_id"],
@@ -74,6 +95,12 @@ async def persist_ark_login(
             cookie_status="",
             platform="3",
         )
+        if not saved:
+            logger.warning(
+                f"[ArknightsUID·绑定] 账号 {role['role_id']} 写入未确认，"
+                "中止本轮保存（已写入的 role 保留，凭据未落库的账号请重试登录）"
+            )
+            return None, "登录信息保存失败（数据库写入异常），请稍后重试。"
         # insert_uid 自动去重（多 uid 用 _ 拼接），重复绑返回 -2 无害
         await ArkBind.insert_uid(user_id, bot_id, role["role_id"], group_id=group_id)
     logger.info(
@@ -83,11 +110,23 @@ async def persist_ark_login(
 
 
 async def remove_ark_login(user_id: str, bot_id: str, uid: str = "") -> int:
-    """删除自有登录。uid 非空删指定 uid，否则删该用户全部。返回处理的账号数。"""
+    """删除自有登录。uid 非空删指定 uid，否则删该用户全部。返回实际删除数。"""
     if uid:
-        await ArkUser.delete_by_user(user_id, bot_id, uid=uid)
-        await ArkBind.delete_uid(user_id, bot_id, uid)
-        return 1
+        # delete_by_user 返回真实删除行数：uid 不存在时返回 0（此前恒
+        # 返回 1，删不存在的 UID 也报"已删除"，与库状态不符）。
+        # DB 三次重试耗尽时返回 None：也按 0 处理，但落 error 日志——
+        # 用户看到的"未找到登录记录"此时实为数据库故障
+        deleted = await ArkUser.delete_by_user(user_id, bot_id, uid=uid)
+        if deleted is None:
+            logger.error(
+                f"[ArknightsUID·绑定] 删除登录时数据库不可用 uid={uid}: "
+                "已按未找到处理"
+            )
+            deleted = 0
+        if deleted:
+            await ArkBind.delete_uid(user_id, bot_id, uid)
+            return 1
+        return 0
 
     users = await list_local_accounts(user_id, bot_id)
     for u in users:
