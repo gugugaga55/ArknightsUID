@@ -20,14 +20,25 @@ from typing import List, Optional
 
 from sqlmodel import Field, SQLModel, select, col
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import Index, or_
+from sqlalchemy import Index, UniqueConstraint, or_, update
+from sqlalchemy.exc import IntegrityError
 
+from gsuid_core.logger import logger
 from gsuid_core.utils.database.base_models import Bind, User, with_session
 from gsuid_core.server import on_core_start
 
 from ..api.request_util import RespCode  # noqa: F401  # 保留 RespCode 引用便于迁移
-from ..crypto import cred_equals, encrypt_secret
-from .auto_migrate import auto_add_missing_columns
+from ..crypto import (
+    ENC_PREFIX,
+    EncryptionUnavailableError,
+    cred_equals,
+    encrypt_secret,
+)
+from .auto_migrate import (
+    auto_add_missing_columns,
+    ensure_ark_alias_unique_index,
+    ensure_ark_user_unique_index,
+)
 
 # 明日方舟官服 channelMasterId（与 skland/client.py 的 ARKNIGHTS_CHANNEL_OFFICIAL 一致）
 ARKNIGHTS_CHANNEL_OFFICIAL = 1
@@ -41,6 +52,11 @@ class ArkUser(User, table=True):
         Index("idx_ark_uid_user_bot", "uid", "user_id", "bot_id"),
         Index("idx_ark_last_used", "last_used_time"),
         Index("idx_ark_cookie_status", "cookie_status"),
+        # 每行一个 (bot_id, user_id, uid)：唯一约束是 upsert_by_uid 原子性的
+        # 数据库级兜底（旧库由 ensure_ark_user_unique_index 去重后补建索引）
+        UniqueConstraint(
+            "bot_id", "user_id", "uid", name="ux_ark_user_bot_uid"
+        ),
         {"extend_existing": True},
     )
 
@@ -81,6 +97,60 @@ class ArkUser(User, table=True):
     last_cred_request_time: Optional[int] = Field(
         default=None, title="上次请求 cred 时间（秒）"
     )
+
+    @classmethod
+    @with_session
+    async def upsert_by_uid(
+        cls,
+        session: AsyncSession,
+        user_id: str,
+        bot_id: str,
+        uid: str,
+        **data,
+    ) -> bool:
+        """按 (user_id, bot_id, uid) 原子 upsert；重登幂等且不影响其他账号行。
+
+        不能用基类 insert_data：它的 update 分支（base_models.update_data）
+        只按 (user_id, bot_id) 更新，多账号用户重登其中一个账号时会把该用户
+        **全部**账号行改写成当前 uid（凭据互相覆盖 + 留下重复行）。
+
+        并发安全：UPDATE 未命中 → savepoint 内 INSERT，撞唯一索引（另一
+        协程刚插入同键）时回滚 savepoint 并确认竞争者行确实存在才收敛为
+        UPDATE；**其他**完整性错误（长度/非空/外键等）如实上抛，不吞。
+        返回 False = 未确认落库，调用方不得当成功。
+        """
+        stmt = (
+            update(cls)
+            .where(
+                cls.user_id == user_id,
+                cls.bot_id == bot_id,
+                cls.uid == uid,
+            )
+            .values(**data)
+            .execution_options(synchronize_session="fetch")
+        )
+        result = await session.execute(stmt)
+        if result.rowcount:
+            return True
+        session.add(cls(user_id=user_id, bot_id=bot_id, uid=uid, **data))
+        try:
+            await session.flush()
+            return True
+        except IntegrityError:
+            await session.rollback()
+            # 是否真是并发插入竞态：竞争者行必须已存在，否则属于其他
+            # 完整性错误（字段非法等），如实上抛而不是伪装成功
+            check = await session.execute(
+                select(cls).where(
+                    cls.user_id == user_id,
+                    cls.bot_id == bot_id,
+                    cls.uid == uid,
+                )
+            )
+            if check.scalars().first() is None:
+                raise
+            result = await session.execute(stmt)
+            return bool(result.rowcount)
 
     @classmethod
     @with_session
@@ -127,13 +197,19 @@ class ArkUser(User, table=True):
         result = await session.execute(select(cls).where(*filters))
         rows = result.scalars().all()
         matched = 0
-        for row in rows:
-            if not cred_equals(row.cookie, cred):
-                continue
-            row.token = encrypt_secret(token)
-            if cred_time is not None:
-                row.last_cred_request_time = cred_time
-            matched += 1
+        try:
+            for row in rows:
+                if not cred_equals(row.cookie, cred):
+                    continue
+                row.token = encrypt_secret(token)
+                if cred_time is not None:
+                    row.last_cred_request_time = cred_time
+                matched += 1
+        except EncryptionUnavailableError as exc:
+            # 加密不可用时放弃回写：本次请求继续用内存里的 token，
+            # 不明文落库（下次 refresh 会再尝试回写）
+            logger.warning(f"[ArknightsUID·数据库] token 回写被拒绝: {exc}")
+            return 0
         return matched
 
     @classmethod
@@ -160,6 +236,43 @@ class ArkUser(User, table=True):
             row.cookie_status = "无效"
             matched += 1
         return matched
+
+    @classmethod
+    @with_session
+    async def reencrypt_plaintext_credentials(
+        cls, session: AsyncSession
+    ) -> int:
+        """存量明文凭据一次性重加密（审计 #4 收尾）。
+
+        decrypt_secret 兼容读取历史明文，但明文行在"数据库文件被非授权
+        读取"的威胁模型下仍是裸奔——启动时把 cookie/token/hg_token 中的
+        明文值升级为 enc:v1 密文（幂等：已加密的行不动）。加密不可用时
+        跳过本轮（下次启动再试），不影响启动。返回升级行数。
+        """
+        result = await session.execute(select(cls))
+        rows = result.scalars().all()
+        upgraded = 0
+        for row in rows:
+            changed = False
+            for field in ("cookie", "token", "hg_token"):
+                value = getattr(row, field, None)
+                if value and not value.startswith(ENC_PREFIX):
+                    try:
+                        setattr(row, field, encrypt_secret(value))
+                        changed = True
+                    except EncryptionUnavailableError as exc:
+                        logger.warning(
+                            "[ArknightsUID·加密] 存量明文重加密被跳过"
+                            f"（{exc}），下次启动再试"
+                        )
+                        return upgraded
+            if changed:
+                upgraded += 1
+        if upgraded:
+            logger.info(
+                f"[ArknightsUID·加密] 存量明文凭据已重加密 {upgraded} 行"
+            )
+        return upgraded
 
     @classmethod
     @with_session
@@ -223,6 +336,11 @@ class ArkAlias(SQLModel, table=True):
     __tablename__ = "ArkAlias"
     __table_args__ = (
         Index("idx_ark_alias_user", "bot_id", "user_id"),
+        # (bot_id, user_id, alias) 唯一：set_alias 撞约束收敛的数据库级
+        # 兜底（旧库由 ensure_ark_alias_unique_index 去重后补建索引）
+        UniqueConstraint(
+            "bot_id", "user_id", "alias", name="ux_ark_alias_key"
+        ),
         {"extend_existing": True},
     )
 
@@ -242,19 +360,42 @@ class ArkAlias(SQLModel, table=True):
         alias: str,
         target: str,
     ) -> None:
-        """设置别名（同键覆盖）。"""
-        result = await session.execute(
-            select(cls).where(
+        """设置别名（同键覆盖）。
+
+        原子化（审计 #37）：旧实现"先查后插"，并发设置同一别名会产生
+        重复行（.first() 命中不确定）。改为 UPDATE 未命中 → INSERT flush
+        撞唯一约束（另一协程刚插入）→ 确认竞争者行存在后收敛为 UPDATE；
+        其他完整性错误如实上抛。
+        """
+        stmt = (
+            update(cls)
+            .where(
                 cls.bot_id == bot_id,
                 cls.user_id == user_id,
                 cls.alias == alias,
             )
+            .values(target=target)
+            .execution_options(synchronize_session="fetch")
         )
-        existing = result.scalars().first()
-        if existing is not None:
-            existing.target = target
-        else:
-            session.add(cls(bot_id=bot_id, user_id=user_id, alias=alias, target=target))
+        result = await session.execute(stmt)
+        if result.rowcount:
+            await session.commit()
+            return
+        session.add(cls(bot_id=bot_id, user_id=user_id, alias=alias, target=target))
+        try:
+            await session.flush()
+        except IntegrityError:
+            await session.rollback()
+            check = await session.execute(
+                select(cls).where(
+                    cls.bot_id == bot_id,
+                    cls.user_id == user_id,
+                    cls.alias == alias,
+                )
+            )
+            if check.scalars().first() is None:
+                raise
+            await session.execute(stmt)
         await session.commit()
 
     @classmethod
@@ -311,5 +452,17 @@ async def _ark_auto_migrate() -> None:
 
     `exec_list` 只在冷启动跑，热重载（reload_plugin）不重跑。
     本钩子通过对比"模型列 vs 实表列"补齐缺的列，幂等。
+    随后为 ArkUser 补建 (bot_id, user_id, uid) 唯一索引（先清理旧版
+    update_data 全行覆盖 bug 留下的重复行），幂等。
     """
     await auto_add_missing_columns(__name__, log_prefix="[ARK·补列]")
+    await ensure_ark_user_unique_index(log_prefix="[ARK·唯一索引]")
+    await ensure_ark_alias_unique_index()
+    # 存量明文凭据升级为密文（幂等；加密不可用时下轮启动再试）
+    try:
+        await ArkUser.reencrypt_plaintext_credentials()
+    except Exception as exc:
+        logger.warning(
+            f"[ArknightsUID·加密] 存量明文重加密异常（不影响启动）: "
+            f"{exc.__class__.__name__}"
+        )

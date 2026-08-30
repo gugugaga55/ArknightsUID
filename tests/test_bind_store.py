@@ -44,7 +44,7 @@ class StorePersistTest(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(
             ark_store, "list_ark_roles_by_cred", new=mock.AsyncMock(return_value=roles)
         ), mock.patch.object(
-            ark_store.ArkUser, "insert_data", new=mock.AsyncMock(return_value=0)
+            ark_store.ArkUser, "upsert_by_uid", new=mock.AsyncMock(return_value=True)
         ) as m_user, mock.patch.object(
             ark_store.ArkBind, "insert_uid", new=mock.AsyncMock(return_value=0)
         ) as m_bind:
@@ -76,14 +76,14 @@ class StorePersistTest(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(
             ark_store, "list_ark_roles_by_cred", new=mock.AsyncMock(return_value=roles)
         ), mock.patch.object(
-            ark_store.ArkUser, "insert_data", new=mock.AsyncMock(return_value=0)
+            ark_store.ArkUser, "upsert_by_uid", new=mock.AsyncMock(return_value=True)
         ) as m_user, mock.patch.object(
             ark_store.ArkBind, "insert_uid", new=mock.AsyncMock(return_value=0)
         ):
             await ark_store.persist_ark_login(
                 "u", "b", None, "CRED", hg_token="HG", skland_user_id="SUID"
             )
-        # insert_data 的关键字参数应含 hg_token（密文）/ skland_user_id
+        # upsert_by_uid 的关键字参数应含 hg_token（密文）/ skland_user_id
         _args, kwargs = m_user.await_args
         # hg_token 2026-08 起密文落库（utils/crypto）：断言非明文且可解密还原
         from ArknightsUID.utils.crypto import decrypt_secret
