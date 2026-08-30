@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from gsuid_core.bot import Bot
@@ -125,12 +126,11 @@ async def show_gacha_report(bot: Bot, ev: Event) -> None:
         return await _send_text(bot, ev, warning or "暂无抽卡记录。")
 
     nickname = credential.nickname or ""
+    shown_uid = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
     context = build_gacha_context(
-        nickname, hide_uid(credential.uid), records, ArknightsUID_version
+        nickname, shown_uid, records, ArknightsUID_version
     )
-    text = format_gacha_text(
-        nickname, hide_uid(credential.uid), records, warning
-    )
+    text = format_gacha_text(nickname, shown_uid, records, warning)
     if context is not None:
         # 最近六星逐个挂初始头像（gamedata 索引精确名反查，失败空串降级）
         try:
@@ -235,11 +235,15 @@ async def plan_gacha_draws(bot: Bot, ev: Event) -> None:
             bot, ev, _PLAN_USAGE + "\n" + "；".join(args.errors)
         )
 
-    # 参数 token（key:value）与独立数字（=目标抽数）不参与 UID/序号提取，
-    # 否则 `玉:60000` 的数字会被误认成 UID，绑定用户被当成未绑定
+    # 参数 token（key:value）与 1-4 位独立数字（=目标抽数）不参与
+    # UID/序号提取，否则 `玉:60000` 的数字会被误认成 UID。
+    # 5 位以上纯数字是 UID（extract_uid 口径）必须保留（审计 #23）：
+    # 旧版 `not t.isdigit()` 会把裸 UID 删掉，`ark攒抽 149809765`
+    # 静默落到默认账号、垫刀数据查错人
     positional = " ".join(
         t for t in ev.text.split()
-        if ":" not in t and "：" not in t and not t.isdigit()
+        if ":" not in t and "：" not in t
+        and not (t.isascii() and t.isdigit() and len(t) <= 4)
     )
     uid = extract_uid(positional)
     index = extract_index(positional)
@@ -250,7 +254,9 @@ async def plan_gacha_draws(bot: Bot, ev: Event) -> None:
     else:
         pity = await _auto_pity(credential)
         name = credential.nickname
-        uid_masked = hide_uid(credential.uid)
+        uid_masked = await hide_uid_for(
+            credential.uid, ev.user_id, ev.bot_id
+        )
     if args.pity is not None:
         pity = args.pity
 
@@ -258,7 +264,8 @@ async def plan_gacha_draws(bot: Bot, ev: Event) -> None:
     if pool_err:
         return await _send_text(bot, ev, pool_err)
 
-    summary = build_summary(args, pool, pity=pity)
+    # 概率 DP 纯 CPU（双UP双限定实测 ~0.4s）：下放线程池避免卡事件循环
+    summary = await asyncio.to_thread(build_summary, args, pool, pity)
 
     context = build_plan_context(summary, name, uid_masked, ArknightsUID_version)
     text = format_plan_text(summary, name, uid_masked)
@@ -281,7 +288,9 @@ def _annual_report(records: list[dict], year: str) -> str | None:
     from collections import Counter
     from datetime import datetime
 
-    _threshold = 6 if any(r.get("rarity") == 6 for r in records) else 5
+    from ..utils.hypergryph.gacha import _legacy_one_based, _normalize_rarity
+
+    _legacy = _legacy_one_based(records)
 
     def _year_of(ts: int) -> str:
         return datetime.fromtimestamp(ts).strftime("%Y") if ts else ""
@@ -294,7 +303,10 @@ def _annual_report(records: list[dict], year: str) -> str | None:
         return None
 
     total = len(year_records)
-    sixes = [r for r in year_records if r.get("rarity", 0) >= _threshold]
+    sixes = [
+        r for r in year_records
+        if _normalize_rarity(r, _legacy) >= 6
+    ]
     six_count = len(sixes)
     new_chars = [r for r in sixes if r.get("is_new")]
 
@@ -305,7 +317,7 @@ def _annual_report(records: list[dict], year: str) -> str | None:
     for record in year_records:
         cate = str(record.get("category", ""))
         pity_by_cate[cate] = pity_by_cate.get(cate, 0) + 1
-        if record.get("rarity", 0) >= _threshold:
+        if _normalize_rarity(record, _legacy) >= 6:
             pity = pity_by_cate[cate]
             if pity > worst_pity:
                 worst_pity, worst_record = pity, record
@@ -327,8 +339,10 @@ def _annual_report(records: list[dict], year: str) -> str | None:
            if new_chars else ""),
     ]
     if worst_record is not None:
+        # 计数含出货那一抽（"第 N 抽"口径）；文案写"前垫"须减 1，
+        # 否则首个六星会显示"前垫了 1 抽"
         lines.append(
-            f"最非时刻：{worst_record['name']} 前垫了 {worst_pity} 抽"
+            f"最非时刻：{worst_record['name']} 第 {worst_pity} 抽才出货"
         )
     lines.append(f"最肝月份：{busiest} 月（{months[busiest]} 抽）")
     lines.append("（基于本地已同步记录；ark抽卡记录 先同步最新数据）")
@@ -502,7 +516,7 @@ def build_export_payload(
             ),
             "count": len(export_records),
             # rarity 为官方 inquiry 接口原始量纲（0 基或 1 基并存，
-            # 见 utils/hypergryph/gacha._six_threshold 的说明）
+            # 见 utils/hypergryph/gacha._normalize_rarity 的说明）
             "rarity_basis": "official-inquiry-raw",
         },
         "records": export_records,
@@ -532,6 +546,13 @@ async def delete_gacha_records(bot: Bot, ev: Event) -> None:
 
 @gacha_sv.on_command(("导出抽卡", "抽卡导出", "导出寻访记录"), block=True)
 async def export_gacha_records(bot: Bot, ev: Event) -> None:
+    # 导出文件含完整 UID 与全量抽卡历史（时间/卡池/干员），发到群里等于
+    # 把账号标识和消费记录公开给全体群成员——仅允许私聊使用
+    if ev.group_id:
+        return await _send_text(
+            bot, ev,
+            "抽卡存档含完整 UID 与全部寻访历史，请在私聊中使用 ark导出抽卡。",
+        )
     uid = extract_uid(ev.text)
     index = extract_index(ev.text)
     credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)

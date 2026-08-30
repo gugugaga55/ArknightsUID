@@ -13,20 +13,18 @@ from gsuid_core.models import Event
 from gsuid_core.sv import SV
 
 try:
-    from ArknightsUID.ArknightsUID.utils.database.models import (
-        ArkBind,
-        ArkUser,
-    )
+    from ArknightsUID.ArknightsUID.utils.account_switch import get_default_uid
+    from ArknightsUID.ArknightsUID.utils.database.models import ArkUser
     from ArknightsUID.ArknightsUID.utils.enduid.adapter import (
         hide_uid_for,
+        resolve_accounts,
     )
 except ModuleNotFoundError:
-    from ArknightsUID.utils.database.models import (
-        ArkBind,
-        ArkUser,
-    )
+    from ArknightsUID.utils.account_switch import get_default_uid
+    from ArknightsUID.utils.database.models import ArkUser
     from ArknightsUID.utils.enduid.adapter import (
         hide_uid_for,
+        resolve_accounts,
     )
 
 GAME_TITLE = "「明日方舟」"
@@ -39,7 +37,24 @@ async def _send_text(bot: Bot, ev: Event, msg: str) -> None:
 
 
 async def _resolve_bound_uid(ev: Event) -> str:
-    return await ArkBind.get_bound_uid(ev.user_id, ev.bot_id) or ""
+    """当前实际查询账号的 UID，与查询命令同口径（ark切换 的默认账号
+    优先，否则首个可用账号）。
+
+    此前用 ArkBind.get_bound_uid 恒返回第一个绑定行：多账号下设置
+    会写到别的账号行上，用户明确要求的隐藏在其后查询里不生效。
+    """
+    result = await resolve_accounts(ev.user_id, ev.bot_id)
+    if not result.accounts:
+        return ""
+    default_uid = get_default_uid(ev.bot_id, ev.user_id)
+    if default_uid:
+        for account in result.accounts:
+            if account.uid == default_uid:
+                return default_uid
+    for account in result.accounts:
+        if account.usable:
+            return account.uid
+    return result.accounts[0].uid
 
 
 async def _set_hide_uid_pref(ev: Event, uid: str, value: str) -> str:

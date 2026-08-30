@@ -34,7 +34,9 @@ async def _fetch_icon_with_negcache(url: str, cache_dir: Path) -> str:
         from ..render import get_image_b64_with_cache
     except Exception:
         return ""
-    miss_path = cache_dir / f"{url.split('/')[-1]}.miss"
+    from .path_safety import safe_url_basename
+
+    miss_path = cache_dir / f"{safe_url_basename(url)}.miss"
     try:
         cache_dir.mkdir(parents=True, exist_ok=True)
         if miss_path.exists():

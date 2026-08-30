@@ -54,6 +54,8 @@ CRISIS_TABLE_URL = f"{GAMEDATA_BASE}/crisis_table.json"
 CRISIS_V2_TABLE_URL = f"{GAMEDATA_BASE}/crisis_v2_table.json"
 # 皮肤目录（~4MB：charSkins 含全部时装 displaySkin 元数据）
 SKIN_TABLE_URL = f"{GAMEDATA_BASE}/skin_table.json"
+# 关卡目录（~4MB：stages 的 code/name 供地图文件名枚举）
+STAGE_TABLE_URL = f"{GAMEDATA_BASE}/stage_table.json"
 
 GAMEDATA_CACHE_DIR = CACHE_PATH / "gamedata"
 GAMEDATA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -67,6 +69,7 @@ BUILDING_TABLE_PATH = GAMEDATA_CACHE_DIR / "building_data.json"
 CRISIS_TABLE_PATH = GAMEDATA_CACHE_DIR / "crisis_table.json"
 CRISIS_V2_TABLE_PATH = GAMEDATA_CACHE_DIR / "crisis_v2_table.json"
 SKIN_TABLE_PATH = GAMEDATA_CACHE_DIR / "skin_table.json"
+STAGE_TABLE_PATH = GAMEDATA_CACHE_DIR / "stage_table.json"
 
 # 全量缓存 TTL（game data 随版本更新，7 天足够）
 CHAR_TABLE_TTL = 7 * 86400
@@ -102,7 +105,9 @@ async def _download_json(url: str) -> Any | None:
         if raw is None:
             continue
         try:
-            return json.loads(raw)
+            # 全量表 15-18MB，json.loads 实测 ~130ms/15MB——下放线程池，
+            # 否则 TTL 过期后第一个用到该表的命令会卡住整个事件循环
+            return await asyncio.to_thread(json.loads, raw)
         except Exception as exc:
             logger.warning(
                 f"[ArknightsUID·gamedata] 响应非 JSON {try_url.rsplit('/', 1)[-1]}: "
@@ -212,6 +217,13 @@ async def ensure_skin_table(force: bool = False) -> dict[str, Any] | None:
     """确保 skin_table 可用（charSkins 全皮肤目录，~4MB）。"""
     return await _ensure_table(
         SKIN_TABLE_URL, SKIN_TABLE_PATH, ttl=CHAR_TABLE_TTL, force=force
+    )
+
+
+async def ensure_stage_table(force: bool = False) -> dict[str, Any] | None:
+    """确保 stage_table 可用（stages 的 code/name，供地图文件名枚举）。"""
+    return await _ensure_table(
+        STAGE_TABLE_URL, STAGE_TABLE_PATH, ttl=CHAR_TABLE_TTL, force=force
     )
 
 

@@ -822,21 +822,38 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         digest = _hl.md5("1-7_暴君_地图.png".encode("utf-8")).hexdigest()
         md5_url = f"https://media.prts.wiki/{digest[0]}/{digest[:2]}/1-7_%E6%9A%B4%E5%90%9B_%E5%9C%B0%E5%9B%BE.png"
 
-        async def fake_fetch(url, cache_path, *args, **kwargs):
+        import tempfile
+        from io import BytesIO
+        from pathlib import Path as _P
+
+        import ArknightsUID.utils.http as http_mod
+        import ArknightsUID.utils.render as render_mod
+        import ArknightsUID.utils.resource.RESOURCE_PATH as rp_mod
+        from PIL import Image
+
+        buf = BytesIO()
+        Image.new("RGB", (4, 4)).save(buf, "PNG")
+        png_bytes = buf.getvalue()
+
+        async def fake_status(url, **kwargs):
             self.assertEqual(url, md5_url)
-            return "BASE64MAP"
+            return 200, png_bytes  # md5 直连命中
+
+        async def fake_fetch(url, cache_path, *args, **kwargs):
+            return "BASE64MAP"  # 落盘后的缓存读取路径
 
         async def fake_resolve(code: str, name: str) -> str:
             raise AssertionError("md5 直连命中时不应回退 API 查询")
-
-        import ArknightsUID.utils.render as render_mod
 
         with (
             mock.patch(
                 "ArknightsUID.arknightsuid_wiki.resolve_map_file_url",
                 new=fake_resolve,
             ),
+            mock.patch.object(http_mod, "download_bytes_status", fake_status),
             mock.patch.object(render_mod, "get_image_b64_with_cache", fake_fetch),
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.object(rp_mod, "CACHE_PATH", _P(tmp)),
         ):
             context = await _build_stage_context(stage)
 
@@ -857,8 +874,27 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
             map_url="https://map.prts.wiki/CW-1",
         )
 
+        import tempfile
+        from io import BytesIO
+        from pathlib import Path as _P
+
+        import ArknightsUID.utils.http as http_mod
+        import ArknightsUID.utils.render as render_mod
+        import ArknightsUID.utils.resource.RESOURCE_PATH as rp_mod
+        from PIL import Image
+
+        buf = BytesIO()
+        Image.new("RGB", (4, 4)).save(buf, "PNG")
+        png_bytes = buf.getvalue()
+
+        async def fake_status(url, **kwargs):
+            # md5 直连（标准+辅助）都 404；API 兜底 URL 才有图
+            if url == "https://media.prts.wiki/api/found.png":
+                return 200, png_bytes
+            return 404, None
+
         async def fake_fetch(url, cache_path, *args, **kwargs):
-            # md5 直连（标准+辅助）都拿不到；API 兜底 URL 才有图
+            # 落盘后的缓存读取路径（含烘焙/格式分支由真实逻辑走）
             if url == "https://media.prts.wiki/api/found.png":
                 return "API_MAP"
             return ""
@@ -866,17 +902,12 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         async def fake_resolve(code: str, name: str) -> str:
             return "https://media.prts.wiki/api/found.png"
 
-        import tempfile
-        from pathlib import Path as _P
-
-        import ArknightsUID.utils.render as render_mod
-        import ArknightsUID.utils.resource.RESOURCE_PATH as rp_mod
-
         with (
             mock.patch(
                 "ArknightsUID.arknightsuid_wiki.resolve_map_file_url",
                 new=fake_resolve,
             ),
+            mock.patch.object(http_mod, "download_bytes_status", fake_status),
             mock.patch.object(render_mod, "get_image_b64_with_cache", fake_fetch),
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.object(rp_mod, "CACHE_PATH", _P(tmp)),
