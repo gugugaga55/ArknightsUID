@@ -21,6 +21,7 @@ from ._table_cache import (
     CHAR_TABLE_PATH,
     CHAR_TABLE_TTL,
     GAMEDATA_CACHE_DIR,
+    SKIN_TABLE_PATH,
     _cache_fresh,
     _read_sidecar,
     _write_sidecar,
@@ -62,9 +63,9 @@ async def load_skin_index() -> dict[str, dict[str, str]]:
     """加载时装目录（精简缓存优先，TTL 同 skin_table 7 天）。失败返回 {}。"""
     if SKININDEX_PATH.exists() and await _cache_fresh(
         CHAR_TABLE_PATH, CHAR_TABLE_TTL
-    ):
-        # 精简缓存新鲜但可能建于旧版干员索引（新干员新皮肤），TTL 内可接受；
-        # 目录随版本演进由 7 天 TTL 自然刷新
+    ) and await _cache_fresh(SKIN_TABLE_PATH, CHAR_TABLE_TTL):
+        # 索引由 char_table + skin_table 共同派生（审计 #24）：任一源表
+        # 更新都应触发重建——此前漏查 skin_table，新皮肤最长滞后 7 天
         cached = _read_sidecar(SKININDEX_PATH)
         if isinstance(cached, dict) and cached:
             return cached

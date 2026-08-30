@@ -17,6 +17,7 @@ try:
     from ArknightsUID.ArknightsUID.utils.cultivate import calculate_cultivation
     from ArknightsUID.ArknightsUID.utils.enduid.adapter import (
         hide_uid,
+        hide_uid_for,
         resolve_credential,
     )
     from ArknightsUID.ArknightsUID.utils.gamedata.charinfo import (
@@ -32,6 +33,7 @@ except ModuleNotFoundError:
     from ArknightsUID.utils.cultivate import calculate_cultivation
     from ArknightsUID.utils.enduid.adapter import (
         hide_uid,
+        hide_uid_for,
         resolve_credential,
     )
     from ArknightsUID.utils.gamedata.charinfo import (
@@ -61,13 +63,14 @@ async def _send_text(bot: Bot, ev: Event, msg: str) -> None:
     await bot.send((" " if ev.group_id else "") + msg, at_sender=bool(ev.group_id))
 
 
-def _format_result(credential, result: dict) -> str:
+def _format_result(credential, result: dict, shown_uid: str = "") -> str:
     char = result["char"]
     gap = result["gap"]
     current = result["current"]
+    uid_line = shown_uid or hide_uid(credential.uid)
     lines = [
         f"「明日方舟」养成计算 · {char.display_name}",
-        f"UID：{hide_uid(credential.uid)}",
+        f"UID：{uid_line}",
         (
             f"当前：精{current['evolve_phase']} · 主技能{current['main_skill_lvl']} · "
             f"专精{'/'.join(str(m) for m in current['masteries']) or '-'}"
@@ -187,7 +190,9 @@ async def show_cultivation_plan(bot: Bot, ev: Event) -> None:
         if not char_id:
             unresolved.append(f"{name}（{resolve_error}）")
             continue
-        result = await calculate_cultivation(credential, char_id, max_rows=999)
+        result = await calculate_cultivation(
+            credential, char_id, max_rows=999, keep_zero=True
+        )
         if isinstance(result, str):
             unresolved.append(f"{name}（{result}）")
             continue
@@ -214,15 +219,16 @@ async def show_cultivation_plan(bot: Bot, ev: Event) -> None:
     if gap["gold_lack"]:
         gap["gold_icon"] = await item_icon_b64("龙门币")
 
+    shown_uid = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
     context = {
         "version": ArknightsUID_version,
-        "uid": hide_uid(credential.uid),
+        "uid": shown_uid,
         "merged": merged,
         "farm_rows": farm_rows,
     }
     await send_card_or_text(
         bot, ev, "ark_cultivate_plan.html", context,
-        _format_plan_result(credential, merged, farm_rows),
+        _format_plan_result(credential, merged, farm_rows, shown_uid),
     )
 
 
@@ -277,7 +283,11 @@ async def show_cultivation(bot: Bot, ev: Event) -> None:
         "result": result,
     }
     await send_card_or_text(
-        bot, ev, "ark_cultivate.html", context, _format_result(credential, result)
+        bot, ev, "ark_cultivate.html", context,
+        _format_result(
+            credential, result,
+            await hide_uid_for(credential.uid, ev.user_id, ev.bot_id),
+        ),
     )
 
 
@@ -300,11 +310,14 @@ def _split_plan_names(text: str) -> list[str]:
     return seen
 
 
-def _format_plan_result(credential, merged: dict, farm_rows: list[dict]) -> str:
+def _format_plan_result(
+    credential, merged: dict, farm_rows: list[dict], shown_uid: str = ""
+) -> str:
     names = "、".join(str(c["name"]) for c in merged["chars"])
+    uid_line = shown_uid or hide_uid(credential.uid)
     lines = [
         "「明日方舟」养成规划（合并缺口）",
-        f"UID：{hide_uid(credential.uid)}",
+        f"UID：{uid_line}",
         f"干员：{names}",
         "目标：精2 · 技能7 · 专精3 · 模组满级（各干员当前进度到毕业）",
     ]

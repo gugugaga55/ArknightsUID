@@ -18,6 +18,7 @@ import subprocess
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -101,6 +102,7 @@ class TriggerOrderInvariantTest(unittest.TestCase):
             ("ark活动", "ark活动列表"),
             ("ark肉鸽", "ark肉鸽别名"),
             ("ark肉鸽", "ark肉鸽别名删除"),
+            ("ark肉鸽", "ark肉鸽结局"),
         ]
         for short, long in cases:
             with self.subTest(pair=f"{short} < {long}"):
@@ -110,3 +112,81 @@ class TriggerOrderInvariantTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RealDispatchOrderTest(unittest.TestCase):
+    """审计 P1-2：`ark签到全部` 必须路由到全部签到 handler。
+
+    用框架真实的 Trigger.check_command（消息匹配）与
+    handler._command_sort_key（handle_event 的分发排序）复现选路：
+    fullmatch 精确匹配优先于 command 前缀匹配、长关键字优先于短前缀，
+    分发结果不依赖插件注册顺序（server 用未排序 iterdir 加载插件）。
+    """
+
+    @staticmethod
+    def _collect(msg_text: str) -> list:
+        """按真实匹配+排序收集 (trigger, priority)，返回排序后的触发器。"""
+        from gsuid_core.handler import _command_sort_key
+        from gsuid_core.sv import SL
+
+        import ArknightsUID.arknightsuid_account  # noqa: F401
+        import ArknightsUID.arknightsuid_notify  # noqa: F401
+        import ArknightsUID.arknightsuid_rogue  # noqa: F401
+
+        msg = SimpleNamespace(
+            raw_text=msg_text, is_tome=False,
+            file=None, file_name=None, meta_event_type=None,
+        )
+        candidates: dict = {}
+        for sv_name, sv in SL.lst.items():
+            if "ArknightsUID" not in sv_name:
+                continue
+            for trig_dict in sv.TL.values():
+                for trig in trig_dict.values():
+                    if trig.type == "message":
+                        continue
+                    try:
+                        if trig.check_command(msg):
+                            candidates[trig] = sv.priority
+                    except Exception:
+                        pass
+        return [t for t, _ in sorted(candidates.items(), key=_command_sort_key)]
+
+    def test_sign_all_beats_plain_sign_regardless_of_registration(self) -> None:
+        order = self._collect("ark签到全部")
+        types = [(t.type, t.keyword) for t in order]
+        # 两个触发器都命中（这正是冲突所在）……
+        self.assertIn(("command", "签到"), types)
+        self.assertIn(("fullmatch", "签到全部"), types)
+        # ……但分发第一名必须是全部签到的 fullmatch
+        first = order[0]
+        self.assertEqual(first.type, "fullmatch")
+        self.assertIn(first.keyword, ("全部签到", "签到全部"))
+        self.assertIn(
+            "sign_all_accounts", getattr(first.func, "__qualname__", "")
+        )
+
+    def test_plain_sign_still_routes_to_normal_handler(self) -> None:
+        """反向用例：普通 `ark签到` 不被 fullmatch 抢走。"""
+        order = self._collect("ark签到")
+        first = order[0]
+        self.assertEqual(first.type, "command")
+        self.assertIn(first.keyword, ("签到", "方舟签到"))
+        self.assertIn(
+            "send_ark_attendance", getattr(first.func, "__qualname__", "")
+        )
+
+    def test_longer_command_beats_its_short_prefix(self) -> None:
+        """长命令优先于自己的短前缀（此前靠注册顺序保证）。
+
+        `ark肉鸽别名列表` 同时命中 command("肉鸽") 与 肉鸽别名系列命令；
+        第一名必须是肉鸽别名触发器（fullmatch 精确或长 command），
+        绝不能是会被 `肉鸽` 前缀抢走。
+        """
+        order = self._collect("ark肉鸽别名列表")
+        first = order[0]
+        self.assertIn(first.type, ("command", "fullmatch"))
+        self.assertTrue(
+            first.keyword.startswith("肉鸽别名"),
+            f"第一名应为「肉鸽别名…」，实际 {first.type}:{first.keyword!r}",
+        )

@@ -659,6 +659,67 @@ MOCK_CONTEXTS = {
         "source_note": "数据 ArknightsGameData · 图标 tomimi.dev",
         "version": VERSION,
     },
+    "ark_rogue_ending.html": {
+        "theme_name": "萨卡兹的无终奇语",
+        "count": 5,
+        "shown_count": 5,
+        "focus_note": "",
+        "guide_updated": "2026-08-30",
+        "banner": "",
+        "endings": [
+            {
+                "seq": "01", "name": "憧憬未来", "label": "默认",
+                "desc": "把故事讲到最后，卡兹戴尔拥有了它的结局。",
+                "unlock": "无前置",
+                "steps": [
+                    "第5层倒数第2节点固定为命运所指，事件「尾页」：选择不报出魔王的名讳",
+                    "不持有【时与光】【阿纳萨羯磨】【无终之钥】时通过第5层即可",
+                ],
+                "key_relics": [],
+                "final": "ISW-DF 紧急授课（持有滚动先祖时为思维矫正）",
+                "note": "", "has_guide": True,
+            },
+            {
+                "seq": "02", "name": "双王记", "label": "",
+                "desc": "两位魔王，一顶冠冕。",
+                "unlock": "达成过「憧憬未来」",
+                "steps": [
+                    "第2层命运所指「戴冠式」：选“两人为对方戴上冠冕”，获得遗愿【纯白花瓣】与【无字地契】",
+                    "在【去伪存真】解读这两缕遗愿，获得【巴别塔誓言】",
+                    "（可选）「离去者的庭院」查看阿米娅纪念碑获得【十戒】，最终战中尊主残影生命减半",
+                    "「尾页」选报出魔王名讳：第5层险路恶敌变为朝谒（或魂灵朝谒），不持三件结局藏品通过第5层",
+                ],
+                "key_relics": [
+                    {"name": "纯白花瓣", "item_id": "rogue_4_fragment_D_01", "icon": ""},
+                    {"name": "无字地契", "item_id": "rogue_4_fragment_D_02", "icon": ""},
+                    {"name": "巴别塔誓言", "item_id": "rogue_4_relic_final_1", "icon": ""},
+                    {"name": "十戒", "item_id": "rogue_4_relic_final_3", "icon": ""},
+                ],
+                "final": "特雷西斯与特蕾西娅（黑冠形态）",
+                "note": "", "has_guide": True,
+            },
+            {
+                "seq": "03", "name": "天使之城", "label": "",
+                "desc": "在光芒中一切都被原谅了。",
+                "unlock": "达成过「憧憬未来」，且历史重构点亮【置换现实】",
+                "steps": [
+                    "【失与得】选【一个方盒】获得【先知长角】（与【一片莲瓣】互斥）",
+                    "刷新节点：受【先知长角】影响必出命运所指「待诉说的真相」，耗2缕构想进入特殊诡谲断章",
+                    "事件「扣响异音」中获得【时与光】（代价：年代更频繁，所有思绪负荷+1）",
+                    "不持有【无终之钥】通过第6层【辉光天顶】",
+                ],
+                "key_relics": [
+                    {"name": "先知长角", "item_id": "rogue_4_relic_final_2", "icon": ""},
+                    {"name": "时与光", "item_id": "rogue_4_relic_final_4", "icon": ""},
+                ],
+                "final": "时光凯旋（霜星“冬痕”与爱国者）→ 圣城",
+                "note": "", "has_guide": True,
+            },
+        ],
+        "notes": ["表内另收录失败结局「无迹可寻」（特殊结算演出，不占常规结局编号）"],
+        "source_note": "结局名单 ArknightsGameData · 攻略口径 PRTS Wiki",
+        "version": VERSION,
+    },
     "ark_rogue.html": {
         "name": "刀客塔不吃香菜",
         "uid": "12****89",
@@ -1063,6 +1124,18 @@ MOCK_CONTEXTS = {
         "speed": 1.3,
         "version": VERSION,
     },
+    "ark_fortune.html": {
+        "date": "2026-08-30",
+        "level": "大吉",
+        "tone": "good",
+        "char": "维什戴尔",
+        "avatar": "",
+        "rarity": 6,
+        "profession": "SNIPER",
+        "good": ["公开招募", "打肉鸽", "专精训练"],
+        "bad": ["凌晨四点抽卡", "越级打 N15"],
+        "version": VERSION,
+    },
 }
 
 
@@ -1122,6 +1195,29 @@ async def _enrich_icons(name: str, context: dict) -> None:
         # 首行用已知存在的图标（钝爪-典训 rogue_5 档）
         if context.get("rows"):
             context["rows"][0]["icon"] = await relic_icon_b64("rogue_5_relic_legacy_1")
+    elif name == "ark_rogue_ending.html":
+        # 关键藏品图标 + 期主题 KV（与生产 _build_rogue_ending_context 同源）
+        from ArknightsUID.utils.gamedata.rogue_relic import relic_icon_b64
+
+        for e in context.get("endings", []):
+            for chip in e.get("key_relics") or []:
+                chip["icon"] = await relic_icon_b64(chip.get("item_id") or "")
+        try:
+            from ArknightsUID.utils.prts.client import activity_banner_urls
+            from ArknightsUID.utils.render import get_image_b64_with_cache
+            from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
+
+            banner_urls = await activity_banner_urls([context["theme_name"]])
+            url = banner_urls.get(str(context["theme_name"]), "")
+            context["banner"] = (
+                await get_image_b64_with_cache(
+                    url, CACHE_PATH / "rogue_theme", quality=82
+                )
+                if url
+                else ""
+            )
+        except Exception as e:
+            print(f"⚠️  ark_rogue_ending 主题图拉取失败，按无图降级: {e}")
     elif name == "ark_wiki_stage.html":
         # 真实关卡地图（md5 直链 + 磁盘缓存，与生产同一取图函数）
         from ArknightsUID.arknightsuid_wiki import _get_stage_map_b64
@@ -1514,6 +1610,20 @@ async def _enrich_icons(name: str, context: dict) -> None:
                     "",
                 )
                 m["avatar"] = await char_avatar_b64(hit) if hit else ""
+
+    if name == "ark_fortune.html":
+        # 同行干员头像：干员名反查 charId（与生产 send_daily_fortune 同口径）
+        from ArknightsUID.utils.gamedata.charinfo import load_char_index
+        from ArknightsUID.utils.player.context import char_avatar_b64
+
+        char_index = await load_char_index()
+        hit = next(
+            (cid for cid, info in char_index.items()
+             if info.get("name") == context.get("char")),
+            "",
+        )
+        if hit:
+            context["avatar"] = await char_avatar_b64(hit)
 
     if name == "ark_training.html":
         # 受训干员立绘/头像 + 协助干员头像：干员名反查 charId（生产同口径）

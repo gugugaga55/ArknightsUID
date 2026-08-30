@@ -689,7 +689,16 @@ async def show_ark_status(bot: Bot, ev: Event) -> None:
 
     context = build_status_context(data, ArknightsUID_version, shown)
     if context is not None:
-        return await send_card_or_text(bot, ev, "ark_status.html", context, "")
+        # 渲染失败回退文本不能是空串（会发出空消息），用既有格式化器出卡
+        return await send_card_or_text(
+            bot,
+            ev,
+            "ark_status.html",
+            context,
+            _format_player_info(
+                credential, {"data": data.raw}, uid_display=shown
+            ),
+        )
     # 数据不足（缺昵称/理智）回退旧文本格式：用原始响应走既有格式化
     response = await fetch_player_info(credential)
     if isinstance(response, str):

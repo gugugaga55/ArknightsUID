@@ -129,9 +129,15 @@ async def scan_login(bot: Bot, ev: Event) -> None:
     await bot.send(qr_img)
     await _send_text(bot, ev, "请使用森空岛 APP 扫码确认登录（100 秒内有效）……")
 
-    # 轮询扫码状态：2s/次，最多 50 次（照搬 EndUID，不加长）
+    # 轮询扫码状态：2s/次，最多 50 次，且整体 deadline 3 分钟
+    # （审计 #33：单次请求最长 25s，无 deadline 时最坏 50×(2+25)≈22.5
+    # 分钟挂着命令任务与连接；3 分钟足够覆盖"100 秒有效"的扫码窗口
+    # 与正常网络抖动）
     scan_code = ""
+    deadline = asyncio.get_running_loop().time() + 180.0
     for _ in range(50):
+        if asyncio.get_running_loop().time() >= deadline:
+            break
         await asyncio.sleep(2)
         scan_code = await ark_auth.get_scan_status(scan_id) or ""
         if scan_code:
@@ -169,7 +175,12 @@ async def remove_login(bot: Bot, ev: Event) -> None:
 
     uid = extract_uid(ev.text)
     if uid:
-        await ark_store.remove_ark_login(ev.user_id, ev.bot_id, uid=uid)
+        removed = await ark_store.remove_ark_login(ev.user_id, ev.bot_id, uid=uid)
+        if not removed:
+            return await _send_text(
+                bot, ev,
+                f"未找到 UID {hide_uid(uid)} 的登录记录（可用账号见 ark绑定列表）。",
+            )
         # 默认账号恰好指向被删 UID 时一并清除，防止 resolve 落到不存在的默认
         if clear_default_uid(ev.bot_id, ev.user_id, uid=uid):
             await _send_text(

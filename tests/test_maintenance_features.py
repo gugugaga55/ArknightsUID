@@ -12,7 +12,7 @@ from unittest import mock
 from ArknightsUID.utils import cache_clean as cc
 
 
-class CacheCleanTest(unittest.TestCase):
+class CacheCleanTest(unittest.IsolatedAsyncioTestCase):
     def test_clean_dir_removes_only_stale_files(self) -> None:
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

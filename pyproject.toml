@@ -3,13 +3,23 @@ name = "arknightsuid"
 version = "0.2.0"
 # 对齐 parent gsuid_core 的 Python 约束，避免无谓收紧兼容范围。
 requires-python = ">=3.11,<4.0"
-# 仅声明插件直接使用的网络库；其余运行时依赖由 parent gsuid_core 提供。
+# 声明插件直接使用的第三方依赖；其余运行时依赖由 parent gsuid_core 提供。
+# core 的 AutoInstallDep（默认开）启动加载插件时按此列表自动 pip 安装
+# （阿里→字节→清华→官方多镜像回退）。
 dependencies = [
-    "httpx>=0.23.0",
+    # proxy= 关键字 0.26 才引入（utils/http.get_client）；0.23-0.25 上
+    # 启用 LocalProxyUrl 会在首次请求抛 TypeError（审计 #32）
+    "httpx>=0.26.0",
 ]
 
+# OCR 截图识别（ark公招推荐 发图）是可选能力：代码运行时惰性导入，
+# 未装时命令回退文字输入，不放主依赖——避免所有部署无条件拉取
+# onnxruntime 重型组件。需要时「ark安装依赖 ocr」补装（见 dep_install）。
 # 可选渲染引擎：RenderEngine=takumi 时需要（未安装自动回退 playwright）。
 [project.optional-dependencies]
+ocr = [
+    "rapidocr[onnxruntime]>=3.0.0",
+]
 takumi = [
     "pytakumi>=0.1.4",
 ]

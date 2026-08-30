@@ -32,6 +32,47 @@ class TakumiConfigTest(unittest.TestCase):
         self.assertEqual(ArkConfig.get_config("RenderEngine").data, "takumi")
 
 
+class TakumiRuntimeInstallTest(unittest.TestCase):
+    """审计 #35：ark安装依赖 takumi 装完后本进程即时生效（无需重载）。"""
+
+    def test_import_retry_picks_up_late_install(self) -> None:
+        from types import SimpleNamespace
+
+        from ArknightsUID.utils.render import render_utils as ru
+
+        fake = SimpleNamespace(html_to_pic=lambda *a, **k: b"jpg")
+        with mock.patch.object(ru, "pytakumi", None), mock.patch.object(
+            ru, "TAKUMI_AVAILABLE", False
+        ), mock.patch.object(
+            ru, "_import_takumi", new=mock.Mock(return_value=fake)
+        ) as m_import:
+            # 首次调用：全局为 None → 重试导入 → 拿到"刚装好"的模块
+            self.assertIs(ru._takumi_module(), fake)
+            # 已拿到后不再重复 import
+            self.assertIs(ru._takumi_module(), fake)
+        self.assertEqual(m_import.call_count, 1)
+        self.assertTrue(ru.TAKUMI_AVAILABLE)
+
+    def test_render_via_takumi_uses_live_module(self) -> None:
+        from types import SimpleNamespace
+
+        from ArknightsUID.utils.render import render_utils as ru
+
+        calls: dict = {}
+
+        def fake_html_to_pic(html, **kwargs):
+            calls.update(kwargs, html=html)
+            return b"fake-jpeg"
+
+        fake = SimpleNamespace(html_to_pic=fake_html_to_pic)
+        with mock.patch.object(ru, "pytakumi", None), mock.patch.object(
+            ru, "_import_takumi", new=mock.Mock(return_value=fake)
+        ):
+            out = ru._render_via_takumi("<p>x</p>")
+        self.assertEqual(out, b"fake-jpeg")
+        self.assertEqual(calls["html"], "<p>x</p>")
+
+
 @unittest.skipIf(not _takumi_available(), "pytakumi 不可用，跳过 takumi 用例")
 class TakumiDirectRenderTest(unittest.TestCase):
     def test_render_via_takumi_returns_jpeg(self) -> None:

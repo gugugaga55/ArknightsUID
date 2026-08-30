@@ -9,7 +9,9 @@
 """
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from ArknightsUID.utils.reply_safety import safe_external_message
@@ -88,7 +90,7 @@ class StoreRoleValidationTest(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(
             ark_store, "list_ark_roles_by_cred", new=mock.AsyncMock(return_value=roles)
         ), mock.patch.object(
-            ark_store.ArkUser, "insert_data", new=mock.AsyncMock(return_value=0)
+            ark_store.ArkUser, "upsert_by_uid", new=mock.AsyncMock(return_value=True)
         ) as m_user, mock.patch.object(
             ark_store.ArkBind, "insert_uid", new=mock.AsyncMock(return_value=0)
         ):
@@ -107,7 +109,7 @@ class StoreRoleValidationTest(unittest.IsolatedAsyncioTestCase):
             ark_store, "list_ark_roles_by_cred",
             new=mock.AsyncMock(return_value=[good, bad]),
         ), mock.patch.object(
-            ark_store.ArkUser, "insert_data", new=mock.AsyncMock(return_value=0)
+            ark_store.ArkUser, "upsert_by_uid", new=mock.AsyncMock(return_value=True)
         ) as m_user, mock.patch.object(
             ark_store.ArkBind, "insert_uid", new=mock.AsyncMock(return_value=0)
         ):
@@ -196,5 +198,169 @@ class CharIdWhitelistTest(unittest.TestCase):
             self.assertIsNone(_CHAR_ID_RE.fullmatch(bad), bad)
 
 
+class SafeCacheStemTest(unittest.TestCase):
+    """审计 #7：第三方资源字段 → 安全缓存文件名。"""
+
+    def test_clean_values_pass_through_unchanged(self) -> None:
+        """白名单值原样返回（存量缓存文件名兼容，不触发重下）。"""
+        from ArknightsUID.utils.gamedata.path_safety import safe_cache_stem
+
+        for good in ("ro1_b-8", "enemy_2001_bocar", "char_002_amiya", "源石虫"):
+            self.assertEqual(safe_cache_stem(good), good)
+
+    def test_traversal_and_separators_neutralized(self) -> None:
+        from ArknightsUID.utils.gamedata.path_safety import safe_cache_stem
+
+        for evil in ("../evil", "../../target", "/abs/path", "a/b/c", ".."):
+            stem = safe_cache_stem(evil)
+            self.assertNotIn("/", stem, evil)
+            self.assertNotIn("\\", stem, evil)
+            self.assertFalse(stem.startswith("."), evil)
+            # 替换发生 → 必须带内容哈希后缀区分不同原始值
+            self.assertIn("~", stem, evil)
+
+    def test_overlong_values_truncated_with_hash(self) -> None:
+        from ArknightsUID.utils.gamedata.path_safety import safe_cache_stem
+
+        stem = safe_cache_stem("a" * 300)
+        self.assertLessEqual(len(stem), 64 + 9)
+        # 不同长值截断后仍可区分
+        self.assertNotEqual(stem, safe_cache_stem("a" * 299))
+
+    def test_blank_falls_back(self) -> None:
+        from ArknightsUID.utils.gamedata.path_safety import safe_cache_stem
+
+        self.assertEqual(safe_cache_stem(""), "_blank")
+        self.assertEqual(safe_cache_stem("   "), "_blank")
+
+    def test_resolve_inside_rejects_escape(self) -> None:
+        from ArknightsUID.utils.gamedata.path_safety import resolve_inside
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            inside = resolve_inside(base, "x.json")
+            self.assertEqual(inside.parent, base.resolve())
+            # 注意 "..\\..\\x" 在 POSIX 上是合法单文件名，不构成越界
+            for evil in ("../x.json", "a/../../x", ".."):
+                with self.assertRaises(ValueError):
+                    resolve_inside(base, evil)
+
+
+class GamedataPathEscapeTest(unittest.IsolatedAsyncioTestCase):
+    """审计 #7：被污染的 levelId / 敌人 key / iconId 不得逃出缓存目录。"""
+
+    async def test_stage_file_uses_sanitized_url_and_path(self) -> None:
+        from ArknightsUID.utils.gamedata import rogue_enemy
+
+        captured: dict = {}
+
+        async def fake_fetch(url, cache_path):
+            captured["url"], captured["path"] = url, Path(cache_path)
+            return {}
+
+        with mock.patch.object(
+            rogue_enemy, "_fetch_url_json_cached", new=fake_fetch
+        ):
+            await rogue_enemy._load_stage_file("../../evil")
+
+        self.assertNotIn("..", str(captured["url"]))
+        cache_root = Path(rogue_enemy._STAGE_CACHE_DIR).resolve()
+        self.assertEqual(
+            Path(captured["path"]).resolve().parent, cache_root,
+            f"缓存路径逃出目录: {captured['path']}",
+        )
+
+    async def test_enemy_icon_malicious_key_stays_in_cache_dir(self) -> None:
+        from ArknightsUID.utils.gamedata import rogue_enemy
+
+        with tempfile.TemporaryDirectory() as tmp:
+            icons = Path(tmp) / "icons"
+            with mock.patch.object(
+                rogue_enemy, "IS_ENEMY_CACHE_DIR", tmp
+            ), mock.patch.object(
+                rogue_enemy,
+                "download_bytes",
+                new=mock.AsyncMock(return_value=b"fake-webp"),
+            ):
+                result = await rogue_enemy.enemy_icon_b64("../../../etc/passwd")
+
+            self.assertTrue(result.startswith("data:image/webp;base64,"))
+            # 全部落盘文件都在 icons 一层内，无嵌套/越界
+            for path in icons.rglob("*"):
+                self.assertEqual(path.parent, icons, f"越界文件: {path}")
+
+    async def test_relic_icon_malicious_id_stays_in_cache_dir(self) -> None:
+        from ArknightsUID.utils.gamedata import rogue_relic
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(
+                rogue_relic, "RELIC_ICON_CACHE_DIR", tmp
+            ), mock.patch.object(
+                rogue_relic,
+                "download_bytes",
+                new=mock.AsyncMock(return_value=b"fake-webp"),
+            ):
+                result = await rogue_relic.relic_icon_b64("..\\..\\system32")
+
+            self.assertTrue(result.startswith("data:image/webp;base64,"))
+            for path in Path(tmp).rglob("*"):
+                self.assertEqual(path.parent, Path(tmp), f"越界文件: {path}")
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class SafeUrlBasenameTest(unittest.TestCase):
+    """审计 P2-3：通用图片缓存入口的 URL basename 清洗。"""
+
+    def test_normal_names_unchanged(self) -> None:
+        """正常/percent-encoded 文件名原样返回（存量缓存兼容）。"""
+        from ArknightsUID.utils.gamedata.path_safety import safe_url_basename
+
+        self.assertEqual(safe_url_basename("https://cdn.x/a/shot.png"), "shot.png")
+        self.assertEqual(
+            safe_url_basename(
+                "https://media.prts.wiki/a/ab/%E9%81%93%E5%85%B7_%E5%B8%A6%E6%A1%86.png"
+            ),
+            "%E9%81%93%E5%85%B7_%E5%B8%A6%E6%A1%86.png",
+        )
+
+    def test_query_fragment_stripped(self) -> None:
+        from ArknightsUID.utils.gamedata.path_safety import safe_url_basename
+
+        self.assertEqual(
+            safe_url_basename("https://cdn.x/a/b.png?sign=abc#frag"), "b.png"
+        )
+
+    def test_traversal_and_empty_segments_rejected(self) -> None:
+        from ArknightsUID.utils.gamedata.path_safety import safe_url_basename
+
+        self.assertEqual(safe_url_basename("https://cdn.x/a/"), "")
+        self.assertEqual(safe_url_basename("https://cdn.x/.."), "")
+        # 尾段为 ../x 形态（真分隔符）不会出现在 urlsplit 之后段里，
+        # 但 Windows 反斜杠混入时必须被清洗且不带路径能力
+        stem = safe_url_basename("https://cdn.x/a/..%5Cevil.png")
+        self.assertNotIn("/", stem)
+        self.assertNotIn("\\", stem)
+        self.assertNotIn("..", stem)
+
+    def test_bulk_and_image_entries_use_safe_basename(self) -> None:
+        """源码级：缓存入口不得再用裸 split 拼路径（#7/#20 双契约）。"""
+        import inspect
+
+        from ArknightsUID.utils.image import pic_download_from_url
+        from ArknightsUID.utils.render import render_utils
+        from ArknightsUID.utils.resource import bulk_download
+
+        # #7 路径安全：统一走安全命名函数（cache_names_for_url 内部即
+        # safe_url_basename + URL 哈希，#20）
+        self.assertIn(
+            "cache_names_for_url", inspect.getsource(pic_download_from_url)
+        )
+        self.assertIn(
+            "cache_names_for_url", inspect.getsource(render_utils.get_image_b64_with_cache)
+        )
+        self.assertIn(
+            "cache_names_for_url", inspect.getsource(bulk_download.download_target)
+        )
