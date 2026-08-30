@@ -17,6 +17,7 @@ bundle main-DPBXoxQ6.js 的预计算概率表 lEe/sEe 与 gacha-calc-test chunk
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
 # === 官方公示常量 ===
@@ -171,18 +172,34 @@ _ALIASES: dict[str, str] = {
     "目标": "target_draws",
 }
 
+# 各数值参数合理上限（防天文数字让概率 DP 空转）
+_PLAN_ARG_LIMITS = {
+    "pity": 1000,
+    "days": 3650,
+    "target_draws": 10**6,
+    "orundum": 10**9,
+    "originium": 10**9,
+    "single_tickets": 10**7,
+    "ten_tickets": 10**7,
+}
+
 
 def parse_plan_args(text: str) -> PlanArgs:
     """解析 `key:value` 参数串（空格分隔，key 支持别名）。
 
-    独立纯数字视为目标抽数（`ark攒抽 300`）。
+    独立纯数字视为目标抽数（`ark攒抽 300`）。5 位以上的纯数字 token
+    是 UID（命令层 extract_uid 的口径）——不当抽数也不当池关键词，
+    留给账号解析（审计 #23：`ark攒抽 玉:60000 149809765` 不得把 UID
+    吃成 1.5 亿抽目标）。
     """
     args = PlanArgs()
     for token in (text or "").split():
         if ":" not in token and "：" not in token:
             # isascii 守卫：`①`/`²` 等 isdigit() 为 True 但 int() 抛 ValueError
             if token.isascii() and token.isdigit():
-                args.target_draws = int(token)
+                if len(token) <= 4:
+                    args.target_draws = int(token)
+                # 5+ 位纯数字 = UID 候选，跳过
             else:
                 # 无分隔且非数字：当卡池关键词（ark攒抽 深池）
                 args.pool_keyword = token
@@ -203,6 +220,15 @@ def parse_plan_args(text: str) -> PlanArgs:
                 number = float(value)
             except ValueError:
                 args.errors.append(f"{key} 需要数字：{value}")
+                continue
+            # 审计 #28：float() 接受 nan/inf/1e309——不拦会在 round()/int()
+            # 抛异常或让概率 DP 拿天文数字空转
+            if not math.isfinite(number) or number < 0:
+                args.errors.append(f"{key} 需要非负有限数字：{value}")
+                continue
+            limit = _PLAN_ARG_LIMITS.get(name, 10**12)
+            if number > limit:
+                args.errors.append(f"{key} 超出合理范围（≤{limit}）：{value}")
                 continue
             if name == "pity":
                 args.pity = max(0, int(number))

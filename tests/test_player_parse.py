@@ -224,3 +224,27 @@ class ParsePlayerInfoTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ApZeroSemanticsTest(unittest.TestCase):
+    """审计 #29：理智 0 与字段缺失必须区分，0 不再被当满理智。"""
+
+    @staticmethod
+    def _data(ap: dict) -> "PlayerData":
+        return parse_player_info({"data": {"status": {"name": "D", "uid": "1",
+                                                      "ap": ap}}})
+
+    def test_current_zero_is_real_zero(self) -> None:
+        data = self._data({"current": 0, "max": 135})
+        self.assertIsNotNone(data)
+        self.assertEqual(effective_ap(data), 0)  # 旧逻辑误报 135
+
+    def test_current_missing_falls_back_to_max(self) -> None:
+        data = self._data({"max": 135})  # 无 current 字段
+        self.assertIsNotNone(data)
+        self.assertIsNone(data.ap_current)
+        self.assertEqual(effective_ap(data), 135)  # 缺失保持回退语义
+
+    def test_positive_current_kept(self) -> None:
+        data = self._data({"current": 80, "max": 135})
+        self.assertEqual(effective_ap(data), 80)

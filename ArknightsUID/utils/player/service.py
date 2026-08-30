@@ -46,7 +46,10 @@ def _cache_path_safe(uid: str) -> Path | None:
 
 def _cache_age_seconds(uid: str) -> float | None:
     """缓存年龄；无缓存/uid 非法返回 None。"""
-    resolved = resolve_player_path(_cache_path_safe(uid))
+    path = _cache_path_safe(uid)
+    if path is None:
+        return None
+    resolved = resolve_player_path(path)
     if resolved is None:
         return None
     try:
@@ -97,6 +100,14 @@ async def fetch_cached_player_info(
                 f"[ArknightsUID·player] 缓存写入失败 uid={credential.uid}: "
                 f"{exc.__class__.__name__}: {exc}"
             )
+    elif isinstance(response, dict):
+        # 排障关键信息：上层只报"解析失败"，真实原因（220 token 失效 /
+        # 10001 设备信息无效 / 10000 签名异常）在这里落日志
+        logger.warning(
+            "[ArknightsUID·player] player_info 返回异常 "
+            f"uid={credential.uid} code={response.get('code')} "
+            f"message={response.get('message')!r}"
+        )
     return response
 
 

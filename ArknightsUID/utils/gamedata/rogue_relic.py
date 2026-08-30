@@ -179,12 +179,17 @@ async def relic_icon_b64(icon_id: str) -> str:
     """藏品图标 base64 data URL（自下载 + 磁盘缓存 + 失败负缓存）。
 
     空 id / 下载失败 / 坏文件返回空串（模板降级为无图行）。
+    iconId 来自外部表：过 safe_cache_stem 清洗后再拼 URL/路径，防数据源
+    污染时的路径逃逸（常规 ascii id 文件名不变，缓存兼容）。
     """
+    from .path_safety import safe_cache_stem
+
     icon_id = (icon_id or "").strip()
     if not icon_id:
         return ""
+    stem = safe_cache_stem(icon_id)
     cache_dir = Path(RELIC_ICON_CACHE_DIR)
-    filename = f"{icon_id}.webp"
+    filename = f"{stem}.webp"
     local_path = cache_dir / filename
     miss_path = cache_dir / f"{filename}.miss"
     try:

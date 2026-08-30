@@ -70,15 +70,27 @@ def format_remaining(ts: int, now: float | None = None) -> str:
     return f"{minutes}m"
 
 
+
+def _encode_skin_key(skin_id: str) -> str:
+    """皮肤键 → hycdn 编码形态（审计 #21）。
+
+    @N → #N；裸 charId（接口未给 skinId 时调用方传 char_xxx 兜底）末尾
+    补 #1——hycdn 无后缀路径 404，基础皮肤的真实键名是 char_xxx#1。
+    已含 # 的装扮键保持原样。
+    """
+    value = re.sub(r"@(\d+)$", r"#\1", skin_id)
+    if "#" not in value and "@" not in value:
+        value += "#1"
+    return value.replace("@", "%40").replace("#", "%23")
+
 def skin_avatar_url(skin_id: str) -> str:
     if not skin_id:
         return ""
     # player_info 的基础皮肤写作 char_xxx@N（N=1 初始 / 2 精一 / 3 精二），
     # hycdn 按皮肤表键名 char_xxx#N 提供头像；装扮皮肤本身是 char_xxx@系列#N，
     # 已含 #，保持原样。经验证：@N 形态 404，#N 与 @系列#N 均 200。
-    skin_id = re.sub(r"@(\d+)$", r"#\1", skin_id)
-    encoded = skin_id.replace("@", "%40").replace("#", "%23")
-    return f"{_HYCDN}/char_skin/avatar/{encoded}.png"
+    # 裸 charId（无后缀）由 _encode_skin_key 补 #1，否则该路径恒 404。
+    return f"{_HYCDN}/char_skin/avatar/{_encode_skin_key(skin_id)}.png"
 
 
 def skill_icon_url(skill_id: str) -> str:
@@ -91,9 +103,7 @@ def skin_portrait_url(skin_id: str) -> str:
     """皮肤立绘 URL（portrait 路径，编码规则同 skin_avatar_url）。"""
     if not skin_id:
         return ""
-    skin_id = re.sub(r"@(\d+)$", r"#\1", skin_id)
-    encoded = skin_id.replace("@", "%40").replace("#", "%23")
-    return f"{_HYCDN}/char_skin/portrait/{encoded}.png"
+    return f"{_HYCDN}/char_skin/portrait/{_encode_skin_key(skin_id)}.png"
 
 
 def equip_icon_url(equip_id: str) -> str:
@@ -162,6 +172,20 @@ async def char_portrait_b64(char_id: str, rarity: int = 0) -> str:
     return ""
 
 
+def _mask_uid(uid_masked: str, raw_uid: str) -> str:
+    """展示上下文的 UID：调用方传入的脱敏值优先；空值时本地默认掩码。
+
+    fail-closed：绝不回退原始 UID——调用方漏传 mask 也不把明文 UID 送进
+    卡片（审计 P3-1）。默认掩码与 hide_uid 的规格一致（前3后3）。
+    """
+    if uid_masked:
+        return uid_masked
+    text = str(raw_uid or "")
+    if len(text) <= 6:
+        return "***"
+    return f"{text[:3]}***{text[-3:]}"
+
+
 def build_status_context(
     data: PlayerData, version: str, uid_masked: str = "", now: float | None = None
 ) -> dict[str, Any] | None:
@@ -174,7 +198,7 @@ def build_status_context(
     return {
         "name": data.name,
         "level": data.level,
-        "uid": uid_masked or data.uid,
+        "uid": _mask_uid(uid_masked, data.uid),
         "ap_current": ap_current,
         "ap_max": data.ap_max,
         "ap_pct": round(ap_current * 100 / data.ap_max) if data.ap_max else 0,
@@ -196,7 +220,7 @@ def build_daily_context(
         return None
     return {
         "name": data.name,
-        "uid": uid_masked or data.uid,
+        "uid": _mask_uid(uid_masked, data.uid),
         "daily_done": min(data.daily_done, data.daily_total),
         "daily_total": data.daily_total,
         "weekly_done": min(data.weekly_done, data.weekly_total),
@@ -226,7 +250,7 @@ def build_campaign_context(
     ]
     return {
         "name": data.name,
-        "uid": uid_masked or data.uid,
+        "uid": _mask_uid(uid_masked, data.uid),
         "reward_current": data.campaign_current,
         "reward_total": data.campaign_total,
         "reward_pct": pct,
@@ -272,7 +296,7 @@ def build_char_stat_context(
     )
     return {
         "name": data.name,
-        "uid": uid_masked or data.uid,
+        "uid": _mask_uid(uid_masked, data.uid),
         "total": len(chars),
         "e2_total": e2_total,
         "maxlvl_total": maxlvl_total,
@@ -314,7 +338,7 @@ def build_box_context(
     ]
     return {
         "name": data.name,
-        "uid": uid_masked or data.uid,
+        "uid": _mask_uid(uid_masked, data.uid),
         "total": total,
         "rarity_rows": rarity_rows,
         "elite_rows": elite_rows,
@@ -429,7 +453,7 @@ async def build_building_context(
     recruit_next = recruit_next_remaining(data.recruit_slots)
     return {
         "name": data.name or "博士",
-        "uid": uid_masked or data.uid,
+        "uid": _mask_uid(uid_masked, data.uid),
         "control_level": building.control_level,
         "labor_value": building.labor_value,
         "labor_max": building.labor_max,
@@ -511,7 +535,9 @@ async def build_training_context(
         finish_at = datetime.fromtimestamp(
             time.time() + remaining
         ).strftime("%m-%d %H:%M")
-    if not trainee_id:
+    if not trainee_id or remaining < 0:
+        # remaining=-1 是接口哨兵（空闲/未知）：trainee 只是残留指派，
+        # 不能当"受训中"渲染（空闲期的常态查询此前全部误标）
         state2, state_en = "空闲", "IDLE"
     elif remaining == 0:
         state2, state_en = "已完成", "DONE"
@@ -519,7 +545,7 @@ async def build_training_context(
         state2, state_en = "受训中", "TRAINING"
     return {
         "name": data.name or "博士",
-        "uid": uid_masked or data.uid,
+        "uid": _mask_uid(uid_masked, data.uid),
         "trainee": building.training_trainee,
         "portrait": portrait,
         "avatar": avatar,
@@ -543,7 +569,13 @@ async def build_training_context(
             else None
         ),
         "base_exact": base_hours is not None,
-        "speed": building.training_speed,
+        # speed 缺字段时为 0.0，与进度条口径（<=0 按 1.0x 折算）一致化，
+        # 否则卡片显示"0.0x（无加成）"而进度按 1.0x 算，自相矛盾
+        "speed": (
+            building.training_speed
+            if building.training_speed > 0
+            else 1.0
+        ),
         "version": version,
     }
 
@@ -701,7 +733,7 @@ async def build_skin_context(
 
     return {
         "name": data.name or "博士",
-        "uid": uid_masked or data.uid,
+        "uid": _mask_uid(uid_masked, data.uid),
         "total": summary["total"],
         "owned": summary["owned"],
         "pct": summary["pct"],

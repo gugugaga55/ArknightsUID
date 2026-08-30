@@ -1,4 +1,4 @@
-"""多干员合并养成测试：merge_cultivation_results + 名单切分 + 刷图建议文案。"""
+"""多干员合并养成测试：merge_cultivation_results + 名字切分 + 刷图建议文案。"""
 from __future__ import annotations
 
 import sys
@@ -7,7 +7,11 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
-from ArknightsUID.utils.cultivate import merge_cultivation_results
+from ArknightsUID.utils.cultivate import (
+    GOLD_ITEM_ID,
+    merge_cultivation_results,
+    summarize_gap,
+)
 
 
 def _char(name: str, rarity: int = 6):
@@ -110,6 +114,91 @@ class MergeCultivationTest(unittest.TestCase):
             ]
         )
         self.assertEqual(merged["materials"][0]["name"], "D32钢")
+
+
+class SharedInventoryMergeTest(unittest.TestCase):
+    """审计 #8：多干员共享库存漏算——单干员各自无缺口 ≠ 合并后无缺口。"""
+
+    @staticmethod
+    def _keep_zero_result(name: str, need: dict, owned: dict) -> dict:
+        """走真实 summarize_gap(keep_zero=True)，与 ark养成计划 同链路。"""
+        gap = summarize_gap(need, owned, item_index={}, keep_zero=True)
+        return {
+            "char": _char(name),
+            "gap": gap,
+            "current": {},
+            "warnings": [],
+        }
+
+    def test_shared_material_two_operators_need_8_own_10(self) -> None:
+        """两个各需 8、仓库 10：单看都无缺口，合并真实缺口 6。"""
+        merged = merge_cultivation_results(
+            [
+                self._keep_zero_result(
+                    "A", {"3003": 8, GOLD_ITEM_ID: 0}, {"3003": 10}
+                ),
+                self._keep_zero_result(
+                    "B", {"3003": 8, GOLD_ITEM_ID: 0}, {"3003": 10}
+                ),
+            ]
+        )
+        # 旧逻辑：两行 lack=0 在 summarize 阶段被丢 → 合并桶空 → 误报无缺口
+        self.assertEqual(merged["materials_total"], 1)
+        row = merged["materials"][0]
+        self.assertEqual(row["need"], 16)
+        self.assertEqual(row["owned"], 10)
+        self.assertEqual(row["lack"], 6)
+
+    def test_shared_gold_summed_before_deduction(self) -> None:
+        """龙门币：gold_need 求和后统一扣库存（不能累加各自折算值）。"""
+        merged = merge_cultivation_results(
+            [
+                self._keep_zero_result(
+                    "A", {GOLD_ITEM_ID: 10000}, {GOLD_ITEM_ID: 12000}
+                ),
+                self._keep_zero_result(
+                    "B", {GOLD_ITEM_ID: 5000}, {GOLD_ITEM_ID: 12000}
+                ),
+            ]
+        )
+        # 旧逻辑：各自 gold_lack=0 相加 → 误报 0；真实 15000-12000=3000
+        self.assertEqual(merged["gold_lack"], 3000)
+
+    def test_partial_gap_operator_still_counts(self) -> None:
+        """A 有缺口 B 无缺口：B 的需求并入后缺口扩大（跨行抵消不被掩盖）。"""
+        merged = merge_cultivation_results(
+            [
+                self._keep_zero_result(
+                    "A", {"3003": 12, GOLD_ITEM_ID: 0}, {"3003": 2}
+                ),
+                self._keep_zero_result(
+                    "B", {"3003": 8, GOLD_ITEM_ID: 0}, {"3003": 2}
+                ),
+            ]
+        )
+        row = merged["materials"][0]
+        self.assertEqual(row["need"], 20)
+        self.assertEqual(row["lack"], 18)  # 旧逻辑只显示 A 的 10
+
+    def test_keep_zero_mode_keeps_rows_and_raw_gold(self) -> None:
+        """keep_zero 模式契约：零缺口行保留、不截断、带原始 gold 量纲。"""
+        need = {GOLD_ITEM_ID: 5, "2004": 8}
+        need.update({f"99{i}": 1 for i in range(20)})  # 超 max_rows 也不截断
+        gap = summarize_gap(
+            need, {GOLD_ITEM_ID: 10, "2004": 10}, item_index={}, keep_zero=True
+        )
+        self.assertEqual(len(gap["materials"]), 20)  # 20 个 99x 全保留（无截断）
+        self.assertEqual(len(gap["exp_books"]), 1)   # 2004（经验书）零缺口行也在
+        self.assertEqual(gap["gold_lack"], 0)  # 折算口径保持
+        self.assertEqual(gap["gold_need"], 5)
+        self.assertEqual(gap["gold_owned"], 10)
+        # 默认模式（单干员展示）：零缺口行依旧过滤（2004/gold 不出现）
+        plain = summarize_gap(
+            need, {GOLD_ITEM_ID: 10, "2004": 10}, item_index={}
+        )
+        self.assertEqual(plain["exp_books"], [])
+        self.assertEqual(plain["gold_lack"], 0)
+        self.assertEqual(len(plain["materials"]), 12)  # 99x 有缺口，仅截断到 12
 
 
 class PlanHelpersTest(unittest.TestCase):

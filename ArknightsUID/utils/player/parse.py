@@ -186,7 +186,8 @@ class PlayerData:
     register_ts: int = 0
     char_cnt: int = 0  # status.charCnt（0 表示缺失，回退 len(chars)）
     skin_cnt: int = 0
-    ap_current: int = 0
+    # None = 接口未提供该字段（走恢复时间/回满回退）；0 = 真的 0 理智
+    ap_current: int | None = None
     ap_max: int = 0
     ap_complete_recovery_time: int = 0
     daily_done: int = 0
@@ -297,10 +298,16 @@ def parse_player_info(response: Any) -> PlayerData | None:
     if data is None:
         return None
 
-    status = path(data, "status") or {}
-    routine = path(data, "routine") or {}
-    campaign = path(data, "campaign") or {}
-    ap = status.get("ap") or {}
+    # 结构守卫（审计 #26e）：异常信封里这些字段可能是列表/字符串，
+    # truthy 非 dict 会让后续 .get() 抛异常拖垮命令
+    status = path(data, "status")
+    status = status if isinstance(status, dict) else {}
+    routine = path(data, "routine")
+    routine = routine if isinstance(routine, dict) else {}
+    campaign = path(data, "campaign")
+    campaign = campaign if isinstance(campaign, dict) else {}
+    ap = status.get("ap")
+    ap = ap if isinstance(ap, dict) else {}
 
     info_map = path(data, "charInfoMap") or {}
     chars: list[CharEntry] = []
@@ -325,8 +332,13 @@ def parse_player_info(response: Any) -> PlayerData | None:
 
     owned_skin_ids: list[str] = []
     for skin in data.get("skins") or []:
-        if isinstance(skin, dict) and skin.get("id"):
-            owned_skin_ids.append(str(skin["id"]))
+        if not isinstance(skin, dict):
+            continue
+        # Skland dump 实测为 {id, ts}；部分响应/适配层用 skinId（审计 #25
+        # 防御性兼容：两种键名都认，避免皮肤收集静默清零）
+        skin_id = skin.get("id") or skin.get("skinId")
+        if skin_id:
+            owned_skin_ids.append(str(skin_id))
 
     return PlayerData(
         name=str(first_path(status, (("name",), ("nickName",))) or ""),
@@ -336,9 +348,7 @@ def parse_player_info(response: Any) -> PlayerData | None:
         register_ts=_as_int(status.get("registerTs")),
         char_cnt=_as_int(status.get("charCnt")),
         skin_cnt=_as_int(status.get("skinCnt")),
-        ap_current=_as_int(
-            first_path(ap, (("current",),)) or 0,
-        ),
+        ap_current=_as_int_or_none(first_path(ap, (("current",),))),
         ap_max=_as_int(ap.get("max")),
         ap_complete_recovery_time=_as_int(ap.get("completeRecoveryTime")),
         daily_done=_as_int(path(routine, "daily", "current")),
@@ -357,12 +367,23 @@ def parse_player_info(response: Any) -> PlayerData | None:
     )
 
 
+def _as_int_or_none(raw) -> int | None:
+    """_as_int 的缺失保留版：None/不可解析 → None（0 原样返回）。"""
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 def effective_ap(data: PlayerData, now: float | None = None) -> int:
     """当前理智：优先用实时公式，无恢复时间戳时退回 dump 里的 current。"""
     if data.ap_max <= 0:
         return 0
     if data.ap_complete_recovery_time > 0:
         return compute_ap_current(data.ap_max, data.ap_complete_recovery_time, now)
-    if data.ap_current > 0:
-        return min(data.ap_current, data.ap_max)
+    if data.ap_current is not None:
+        # 字段存在即信接口值——0 理智是真 0，不再当"缺失"回退成满理智（审计 #29）
+        return min(max(0, data.ap_current), data.ap_max)
     return data.ap_max

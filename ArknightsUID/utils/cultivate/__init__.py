@@ -179,8 +179,18 @@ def summarize_gap(
     owned: dict[str, int],
     item_index: dict[str, dict[str, Any]],
     max_rows: int = 12,
+    *,
+    keep_zero: bool = False,
 ) -> dict[str, Any]:
-    """需求 × 持有 → 缺口清单（含名称/稀有度，金币与经验书单列）。"""
+    """需求 × 持有 → 缺口清单（含名称/稀有度，金币与经验书单列）。
+
+    keep_zero=False（单干员展示）：零缺口行过滤、materials 截断 max_rows。
+    keep_zero=True（多干员合并）：**保留全部需求行（含零缺口）且不截断**，
+    另附 gold_need/gold_owned 原始值——合并必须在"每个干员的完整需求"上
+    汇总后再统一扣库存；若在单干员阶段先过滤（旧行为），两个各需 8、
+    仓库 10 的干员会各自显示无缺口，真实缺口 6 被漏算。龙门币同理必须
+    用 gold_need 求和后统一 max(0, need-owned)，不能累加各自折算值。
+    """
     def display_name(item_id: str) -> str:
         info = item_index.get(item_id)
         if info and info.get("name"):
@@ -214,7 +224,7 @@ def summarize_gap(
     ):
         have = owned.get(item_id, 0)
         lack = max(0, count - have)
-        if lack <= 0:
+        if lack <= 0 and not keep_zero:
             continue
         if item_id == GOLD_ITEM_ID:
             gold_lack = lack
@@ -232,19 +242,28 @@ def summarize_gap(
         else:
             materials.append(row)
     return {
-        "materials": materials[:max_rows],
+        "materials": materials if keep_zero else materials[:max_rows],
         "materials_total": len(materials),
         "exp_books": exp_books,
         "gold_lack": gold_lack,
+        # 原始量纲：多干员合并用（求和后统一扣库存，见 merge_cultivation_results）
+        "gold_need": int(need.get(GOLD_ITEM_ID, 0) or 0),
+        "gold_owned": int(owned.get(GOLD_ITEM_ID, 0) or 0),
     }
 
 
 async def calculate_cultivation(
-    credential: "ArkCredential", char_id: str, max_rows: int = 12
+    credential: "ArkCredential",
+    char_id: str,
+    max_rows: int = 12,
+    *,
+    keep_zero: bool = False,
 ) -> dict[str, Any] | str:
     """完整计算链：进度（player_info 缓存）+ 需求（cal_character）+ 持有（cal_player）。
 
     返回卡片/文本两用的结果 dict；失败返回中文错误文案。
+    keep_zero=True 供多干员合并（ark养成计划）：gap 保留零缺口行与原始
+    gold 量纲，合并时统一扣库存（见 summarize_gap/merge_cultivation_results）。
     """
     from ..enduid.adapter import (
         fetch_cultivate_character,
@@ -279,7 +298,9 @@ async def calculate_cultivation(
 
     need, warnings = build_remaining_need(cost, char)
     item_index = await load_item_index()
-    gap = summarize_gap(need, owned, item_index, max_rows=max_rows)
+    gap = summarize_gap(
+        need, owned, item_index, max_rows=max_rows, keep_zero=keep_zero
+    )
 
     return {
         "char": char,
@@ -298,14 +319,19 @@ async def calculate_cultivation(
 def merge_cultivation_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     """多干员养成缺口合并（ark养成计划）：同账号仓库持有只扣一次。
 
-    - 材料/经验书按 itemId 汇总 need，lack = max(0, 合计 need - owned)
-      （owned 各结果一致——同一账号的 cal_player 快照）
-    - 龙门币缺口直接累加（summarize_gap 已按持有折算）
+    - 材料/经验书：按 itemId 汇总**完整需求**（keep_zero 的 gap 含零缺口行），
+      lack = max(0, 合计 need - owned)——不能在单干员阶段先过滤零缺口行，
+      否则"两个各需 8、仓库 10"会双双显示无缺口，漏掉真实缺口 6
+    - 龙门币：优先用 gold_need 求和后统一 max(0, need - owned)；
+      旧格式 gap（无 gold_need 字段）回退为 gold_lack 累加
+    - owned 各结果一致（同一账号的 cal_player 快照）
     - 排序沿用 summarize_gap 口径：稀有度降序 → sort → id
     """
     materials: dict[str, dict[str, Any]] = {}
     exp_books: dict[str, dict[str, Any]] = {}
     gold_lack = 0
+    gold_need_total: int | None = None  # None = 旧格式 gap，走回退
+    gold_owned = 0
     warnings: list[str] = []
     chars: list[dict[str, Any]] = []
 
@@ -320,9 +346,19 @@ def merge_cultivation_results(results: list[dict[str, Any]]) -> dict[str, Any]:
     for result in results:
         gap = result["gap"]
         char = result["char"]
-        gold_lack += int(gap.get("gold_lack") or 0)
+        if "gold_need" in gap:
+            if gold_need_total is None:
+                gold_need_total = 0
+            gold_need_total += int(gap.get("gold_need") or 0)
+            gold_owned = int(gap.get("gold_owned") or 0)
+        else:
+            gold_lack += int(gap.get("gold_lack") or 0)
         warnings.extend(result.get("warnings") or [])
-        char_material_total = len(gap.get("materials") or [])
+        char_material_total = sum(
+            1
+            for row in gap.get("materials") or []
+            if int(row.get("lack", 0)) > 0
+        )
         for row in gap.get("materials") or []:
             _absorb(materials, row)
         for row in gap.get("exp_books") or []:
@@ -346,6 +382,9 @@ def merge_cultivation_results(results: list[dict[str, Any]]) -> dict[str, Any]:
                 str(row.get("name") or ""),
             ),
         )
+
+    if gold_need_total is not None:
+        gold_lack = max(0, gold_need_total - gold_owned)
 
     material_rows = _finalize(materials)
     exp_rows = [row for row in _finalize(exp_books) if row["lack"] > 0]

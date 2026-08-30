@@ -313,7 +313,8 @@ def module_choices(
         type_icon = str(entry.get("typeIcon") or "")
         if type_icon == "original":
             continue  # 基础证章无数值面板，不参与模拟
-        module_type = "Y" if type_icon.endswith("y") else "X"
+        # typeIcon 大小写不定（流明的 Y 模组是 "WAH-Y" 大写），统一小写判定
+        module_type = "Y" if type_icon.lower().endswith("y") else "X"
         result.append(
             {
                 "id": equip_id,
