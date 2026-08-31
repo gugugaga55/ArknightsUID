@@ -557,6 +557,7 @@ def image_to_base64(image_path: Union[str, Path], quality: int = 0) -> str:
 
 async def get_image_b64_with_cache(
     url: str, cache_path: Path, quality=None, cover_size: tuple = None,
+    anchor: str = "center",
 ) -> str:
     if not url:
         return ""
@@ -595,12 +596,13 @@ async def get_image_b64_with_cache(
                 data = f.read()
             return f"data:image/{ext};base64,{base64.b64encode(data).decode('utf-8')}"
 
-        # 烘焙缓存: bake/{文件名}_{路径hash}_{quality}_{宽x高}.webp
+        # 烘焙缓存: bake/{文件名}_{路径hash}_{quality}_{宽x高}{锚点}.webp
         import hashlib
         path_hash = hashlib.md5(str(local_path.resolve()).encode()).hexdigest()[:8]
         stem = local_path.stem
         size_tag = f"_{cover_size[0]}x{cover_size[1]}" if cover_size else ""
-        bake_name = f"{stem}_{path_hash}_q{quality or 80}{size_tag}.webp"
+        anchor_tag = f"_{anchor}" if (cover_size and anchor != "center") else ""
+        bake_name = f"{stem}_{path_hash}_q{quality or 80}{size_tag}{anchor_tag}.webp"
         bake_path = BAKE_PATH / bake_name
 
         if bake_path.exists() and bake_path.stat().st_mtime >= local_path.stat().st_mtime:
@@ -626,7 +628,9 @@ async def get_image_b64_with_cache(
                 new_w, new_h = int(img.width * scale), int(img.height * scale)
                 img = img.resize((new_w, new_h), Image.LANCZOS)
                 left = (new_w - tw) // 2
-                top = (new_h - th) // 2
+                # 竖长图（公告封面常见）取顶部切片：居中裁只会截到中段
+                # 一条，顶部锚定才能带上标题视觉；宽图与居中等价
+                top = 0 if anchor == "top" else (new_h - th) // 2
                 img = img.crop((left, top, left + tw, top + th))
             # 唯一 tmp + 原子替换（审计 #19）：多协程同时烘焙同一
             # bake_path 时直接写会产生撕裂/半写 webp，且坏文件无 TTL 校验

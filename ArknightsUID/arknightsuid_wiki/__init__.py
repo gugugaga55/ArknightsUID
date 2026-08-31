@@ -1807,6 +1807,12 @@ async def send_stage_page(bot: Bot, ev: Event) -> None:
 
 # 注册顺序约束：公招推荐 必须先于「公招」注册（core 的 command 匹配是
 # startswith + 注册顺序优先，短词先注册会抢走「ark公招推荐/公招查询」）。
+
+# 推荐卡每组合头像上限：干员名全量列出，头像只取池内前若干个（本地
+# 缓存命中后为纯读盘，首查未缓存时控制下载量与渲染体量）
+_RECOMMEND_AVATAR_LIMIT = 24
+
+
 @wiki_sv.on_command(("公招推荐", "标签推荐", "公招最优", "gztj"), block=True)
 async def send_recruit_recommend(bot: Bot, ev: Event) -> None:
     """ark公招推荐 标签…（把界面看到的标签全输入）→ 1-3 标签最优组合排行。
@@ -1873,10 +1879,10 @@ async def send_recruit_recommend(bot: Bot, ev: Event) -> None:
     rows = []
     for combo in combos:
         names = combo["match_names"]
-        shown = names[:5]
-        more = len(names) - len(shown)
+        # 全部干员列出（不截「等 N 人」）；头像仅取池内前 24 个控制渲染
+        # 体量——池可到几十人，逐个头像会让首次查询的下载量爆炸
         avatars = []
-        for entry in combo["matches"][:4]:
+        for entry in combo["matches"][:_RECOMMEND_AVATAR_LIMIT]:
             avatars.append(await char_avatar_b64(str(entry.get("id", ""))))
         rows.append(
             {
@@ -1886,8 +1892,7 @@ async def send_recruit_recommend(bot: Bot, ev: Event) -> None:
                 "min_rarity": combo["min_rarity"],
                 "max_rarity": combo["max_rarity"],
                 "pool_count": len(names),
-                "names": shown,
-                "more": more,
+                "names": names,
                 "avatars": avatars,
             }
         )
@@ -1907,10 +1912,9 @@ async def send_recruit_recommend(bot: Bot, ev: Event) -> None:
         lines.append("📸 标签来自截图识别，有误可文字输入 ark公招推荐 标签… 修正")
     for row in rows:
         names = "、".join(row["names"])
-        more = f" 等{row['pool_count']}人" if row["more"] > 0 else ""
         lines.append(
             f"[{row['tier_name']}] {row['tags']}（保底{row['min_rarity']}★，"
-            f"池{row['pool_count']}人）：{names}{more}"
+            f"池{row['pool_count']}人）：{names}"
         )
     lines.append(
         "勾选高资/资深标签并拉满 9 小时：标签不划、必得 6★/5★；"

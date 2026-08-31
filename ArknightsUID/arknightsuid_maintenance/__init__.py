@@ -4,7 +4,7 @@
 - `ark更新记录`（pm=1）：展示插件最近 git 提交记录
 - `ark删除无效凭据`（pm=1）：清理 cookie_status=无效 的本地登录行
 - `ark刷新`：删除游戏数据表缓存（干员/技能/物品等），下次查询自动重新下载
-- `ark下载资源 [分类…] [校验]`（pm=1）：批量预下载全部渲染图片（已存在跳过，重跑只补新增；带「校验」逐档验完整性，坏档自动重下）
+- `ark下载资源 [分类…] [校验]`（pm=1）：批量预下载全部渲染图片（已存在跳过，重跑只补新增；带「校验」逐档验完整性，坏档自动重下；进度不逐类刷屏，结束后以一条转发消息汇总）
 - `ark安装依赖 [名字]`（pm=1）：兜底 core 自动装依赖失败的补装（白名单：ocr/takumi）
 """
 from __future__ import annotations
@@ -236,17 +236,26 @@ async def bulk_download_resources(bot: Bot, ev: Event) -> None:
         await _send_text(
             bot, ev,
             f"「明日方舟」开始预下载资源（{labels}{verify_note}）："
-            "已存在的图片会跳过，"
-            "首次运行需先拉取游戏数据表，耗时较长，进度逐类回报…",
+            "已存在的图片会跳过，首次运行需先拉取游戏数据表，"
+            "耗时较长，结束后汇总一条转发消息回报，期间请耐心等待…",
         )
 
-        async def _report(result) -> None:
-            await _send_text(bot, ev, bulk_download.format_category_line(result))
-
+        # 进度不逐类刷屏：收集各分类回报行，跑完连总结一起打包成
+        # 一条转发消息发回本会话（本命令 pm=1，会话即管理员）
         summary = await bulk_download.run_bulk_download(
-            category_keys, on_category_done=_report,
-            verify=category_keys.verify,
+            category_keys, verify=category_keys.verify,
         )
-        await _send_text(bot, ev, bulk_download.format_summary(summary))
+        forward_lines = [
+            bulk_download.format_category_line(result)
+            for result in summary.results
+        ] + [bulk_download.format_summary(summary)]
+        try:
+            from gsuid_core.segment import MessageSegment
+
+            await bot.send(MessageSegment.node(forward_lines))
+        except Exception:
+            # 转发不被平台支持等场景：退回纯文本逐行发送
+            logger.debug("[ArknightsUID·维护] 转发汇总发送失败，回退文本")
+            await _send_text(bot, ev, "\n".join(forward_lines))
     finally:
         bulk_download.release_run()
