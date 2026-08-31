@@ -1551,7 +1551,7 @@ def page_url_title(title: str) -> str:
     return page_url(title)
 
 
-@wiki_sv.on_command(("面板", "干员面板", "oppanel"), block=True)
+@wiki_sv.on_command(("面板", "干员面板", "oppanel", "mb"), block=True)
 async def send_op_panel(bot: Bot, ev: Event) -> None:
     query = _clean_query(ev.text)
     if not query:
@@ -1807,7 +1807,7 @@ async def send_stage_page(bot: Bot, ev: Event) -> None:
 
 # 注册顺序约束：公招推荐 必须先于「公招」注册（core 的 command 匹配是
 # startswith + 注册顺序优先，短词先注册会抢走「ark公招推荐/公招查询」）。
-@wiki_sv.on_command(("公招推荐", "标签推荐", "公招最优"), block=True)
+@wiki_sv.on_command(("公招推荐", "标签推荐", "公招最优", "gztj"), block=True)
 async def send_recruit_recommend(bot: Bot, ev: Event) -> None:
     """ark公招推荐 标签…（把界面看到的标签全输入）→ 1-3 标签最优组合排行。
 
@@ -1921,7 +1921,7 @@ async def send_recruit_recommend(bot: Bot, ev: Event) -> None:
     )
 
 
-@wiki_sv.on_command(("公招查询", "recruit", "公招"), block=True)
+@wiki_sv.on_command(("公招查询", "recruit", "公招", "gz"), block=True)
 async def send_recruit_query(bot: Bot, ev: Event) -> None:
     raw = _clean_query(ev.text)
     if not raw:
@@ -1972,7 +1972,7 @@ async def send_recruit_query(bot: Bot, ev: Event) -> None:
     await _render_or_text(bot, ev, "ark_recruit.html", context, "\n".join(lines))
 
 
-@wiki_sv.on_command(("日历", "calendar"), block=True)
+@wiki_sv.on_command(("日历", "calendar", "rl"), block=True)
 async def send_calendar(bot: Bot, ev: Event) -> None:
     """活动日历：当前版本/维护 + 进行中活动/卡池（SMW 与 PRTS 首页同源）。"""
     beijing = timezone(timedelta(hours=8))

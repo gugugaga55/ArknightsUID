@@ -671,6 +671,7 @@ async def _resolve_char_entry(data: PlayerData, query: str) -> CharEntry | str:
         "理智",
         "方舟理智",
         "便签",
+        "lz",
     ),
     block=True,
 )
@@ -714,6 +715,7 @@ async def show_ark_status(bot: Bot, ev: Event) -> None:
         "日常",
         "方舟每日",
         "方舟日常",
+        "mr",
     ),
     block=True,
 )
@@ -928,6 +930,7 @@ def _parse_char_query(text: str) -> tuple[str, str, int]:
     (
         "签到",
         "方舟签到",
+        "qd",
     ),
     block=True,
 )

@@ -236,6 +236,7 @@ async def show_cultivation_plan(bot: Bot, ev: Event) -> None:
     (
         "养成计算",
         "养成",
+        "yc",
     ),
     block=True,
 )

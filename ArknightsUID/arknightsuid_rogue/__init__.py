@@ -879,7 +879,7 @@ async def send_rogue_ending(bot: Bot, ev: Event) -> None:
     await _send_text(bot, ev, _format_rogue_ending(result))
 
 
-@rogue_sv.on_command(("肉鸽", "集成战略"), block=True)
+@rogue_sv.on_command(("肉鸽", "集成战略", "rg"), block=True)
 async def send_rogue_info(bot: Bot, ev: Event) -> None:
     uid = extract_uid(ev.text)
     index = extract_index(ev.text)

@@ -111,6 +111,7 @@ def _gift_reply(response: dict) -> str:
         "抽卡记录",
         "抽卡分析",
         "寻访记录",
+        "ck",
     ),
     block=True,
 )
@@ -225,6 +226,7 @@ async def _pick_pool(keyword: str) -> tuple[dict | None, str]:
         "攒抽规划",
         "抽卡规划",
         "攒抽",
+        "zc",
     ),
     block=True,
 )
