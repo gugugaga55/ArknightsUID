@@ -190,3 +190,83 @@ class RealDispatchOrderTest(unittest.TestCase):
             first.keyword.startswith("肉鸽别名"),
             f"第一名应为「肉鸽别名…」，实际 {first.type}:{first.keyword!r}",
         )
+
+
+class PinyinAliasDispatchTest(unittest.TestCase):
+    """高频命令的拼音首字母别名（仿 EndUID endmr→end每日）。
+
+    用与 RealDispatchOrderTest 相同的真实匹配+排序链路验证：
+    别名串实际路由到目标 handler，且 arkgztj 不被 arkgz 抢走。
+    """
+
+    # (输入消息, 期望命中的 handler qualname 片段)
+    CASES = [
+        ("arkmr", "show_ark_daily"),
+        ("arklz", "show_ark_status"),
+        ("arkqd", "send_ark_attendance"),
+        ("arkck", "show_gacha_report"),
+        ("arkzc", "plan_gacha_draws"),
+        ("arkbz", "send_ark_help"),
+        ("arkgg", "show_ark_announcements"),
+        ("arkrl", "send_calendar"),
+        ("arkmb", "send_op_panel"),
+        ("arkgz", "send_recruit_query"),
+        ("arkgztj", "send_recruit_recommend"),
+        ("arkrg", "send_rogue_info"),
+        ("arkyc", "show_cultivation"),
+    ]
+
+    @staticmethod
+    def _dispatch_first(msg_text: str):
+        from gsuid_core.handler import _command_sort_key
+        from gsuid_core.sv import SL
+
+        import ArknightsUID.arknightsuid_account  # noqa: F401
+        import ArknightsUID.arknightsuid_cultivate  # noqa: F401
+        import ArknightsUID.arknightsuid_gacha  # noqa: F401
+        import ArknightsUID.arknightsuid_help  # noqa: F401
+        import ArknightsUID.arknightsuid_push  # noqa: F401
+        import ArknightsUID.arknightsuid_rogue  # noqa: F401
+        import ArknightsUID.arknightsuid_wiki  # noqa: F401
+
+        msg = SimpleNamespace(
+            raw_text=msg_text, is_tome=False,
+            file=None, file_name=None, meta_event_type=None,
+        )
+        candidates: dict = {}
+        for sv_name, sv in SL.lst.items():
+            if "ArknightsUID" not in sv_name:
+                continue
+            for trig_dict in sv.TL.values():
+                for trig in trig_dict.values():
+                    if trig.type == "message":
+                        continue
+                    try:
+                        if trig.check_command(msg):
+                            candidates[trig] = sv.priority
+                    except Exception:
+                        pass
+        ordered = [
+            t for t, _ in sorted(candidates.items(), key=_command_sort_key)
+        ]
+        return ordered[0] if ordered else None
+
+    def test_alias_routes_to_expected_handler(self) -> None:
+        for text, handler in self.CASES:
+            with self.subTest(alias=text):
+                first = self._dispatch_first(text)
+                self.assertIsNotNone(first, f"{text} 没有命中任何触发器")
+                self.assertIn(
+                    handler,
+                    getattr(first.func, "__qualname__", ""),
+                    f"{text} 应路由到 {handler}，实际 "
+                    f"{first.type}:{first.keyword!r} → "
+                    f"{getattr(first.func, '__qualname__', '?')}",
+                )
+
+    def test_chinese_commands_still_win_over_aliases(self) -> None:
+        """全中文命令不受别名影响：ark公招 仍走查询（不是推荐）。"""
+        first = self._dispatch_first("ark公招 高级资深干员")
+        self.assertIn(
+            "send_recruit_query", getattr(first.func, "__qualname__", "")
+        )

@@ -178,7 +178,7 @@ def assign_group_icons(groups: list[dict]) -> list[dict]:
     return result
 
 
-@help_sv.on_fullmatch(("帮助", "help", "方舟帮助"), block=True)
+@help_sv.on_fullmatch(("帮助", "help", "方舟帮助", "bz"), block=True)
 async def send_ark_help(bot: Bot, ev: Event) -> None:
     # 标题贴纸与命令格 Q 版图标均为模板烘焙资产，无需运行时下载
     context = {

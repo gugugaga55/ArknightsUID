@@ -567,6 +567,7 @@ async def show_ark_activities(bot: Bot, ev: Event) -> None:
         "公告",
         "方舟公告",
         "官方公告",
+        "gg",
     ),
     block=True,
 )
