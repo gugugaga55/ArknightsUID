@@ -74,10 +74,31 @@ async def show_update_log(bot: Bot, ev: Event) -> None:
     try:
         from pathlib import Path
 
-        repo_root = Path(__file__).resolve().parents[2]
+        plugin_dir = Path(__file__).resolve().parents[2]
+        # 先确认插件目录自己就是 git 仓库根：插件以普通文件形式落在
+        # core 检出里（无独立 .git）时，git 会向上命中 gsuid_core 的仓库，
+        # 把 core 的提交历史当成插件的展示——宁缺毋错，明确提示
+        proc = await asyncio.create_subprocess_exec(
+            "git", "rev-parse", "--show-toplevel",
+            cwd=str(plugin_dir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=10)
+        toplevel = stdout.decode("utf-8", errors="replace").strip()
+        if (
+            proc.returncode != 0
+            or not toplevel
+            or Path(toplevel).resolve() != plugin_dir
+        ):
+            return await _send_text(
+                bot, ev,
+                "更新记录仅对独立 git 部署可用（当前部署未检测到插件自身的"
+                " .git，插件可能随 core 仓库一同部署）。",
+            )
         proc = await asyncio.create_subprocess_exec(
             "git", "log", "--oneline", "-10",
-            cwd=str(repo_root),
+            cwd=str(plugin_dir),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )

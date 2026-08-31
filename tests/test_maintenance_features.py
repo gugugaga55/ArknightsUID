@@ -239,3 +239,69 @@ class RenderScaleTest(unittest.TestCase):
 
         src = inspect.getsource(render_utils)
         self.assertIn("device_scale_factor=_render_scale()", src)
+
+
+class UpdateLogRepoGuardTest(unittest.IsolatedAsyncioTestCase):
+    """ark更新记录：git 向上命中外层仓库时不得把 core 历史当插件历史展示。"""
+
+    class _FakeProc:
+        def __init__(self, stdout: bytes, returncode: int = 0) -> None:
+            self._stdout = stdout
+            self.returncode = returncode
+
+        async def communicate(self):
+            return self._stdout, b""
+
+    class _FakeBot:
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+
+        async def send(self, msg, **kw):
+            self.sent.append(str(msg))
+
+    def _run(self, toplevel: str) -> tuple[list[str], list[tuple]]:
+        import ArknightsUID.arknightsuid_maintenance as maint
+
+        calls: list[tuple] = []
+
+        async def fake_exec(*args, **kwargs):
+            calls.append(args)
+            if args[1] == "rev-parse":
+                return self._FakeProc(toplevel.encode())
+            return self._FakeProc(b"fffdb90 \xe6\xb5\x8b\xe8\xaf\x95\xe6\x8f\x90\xe4\xba\xa4\n")
+
+        ev = SimpleNamespace(user_id="u", bot_id="b", group_id="", text="")
+        bot = self._FakeBot()
+        with mock.patch(
+            "asyncio.create_subprocess_exec", side_effect=fake_exec
+        ):
+            import asyncio
+
+            asyncio.get_event_loop().run_until_complete(
+                maint.show_update_log(bot, ev)
+            )
+        return bot.sent, calls
+
+    def test_outer_repo_hit_shows_unavailable(self) -> None:
+        import ArknightsUID.arknightsuid_maintenance as maint
+
+        plugin_dir = Path(maint.__file__).resolve().parents[2]
+        outer = str(plugin_dir.parent)  # 模拟向上命中外层仓库
+        sent, calls = self._run(outer)
+        self.assertEqual(len(sent), 1)
+        self.assertIn("独立 git 部署", sent[0])
+        # 不得继续执行 git log
+        self.assertFalse(
+            any(c[1] == "log" for c in calls),
+            "toplevel 不匹配时不应再跑 git log",
+        )
+
+    def test_own_repo_shows_plugin_log(self) -> None:
+        import ArknightsUID.arknightsuid_maintenance as maint
+
+        plugin_dir = Path(maint.__file__).resolve().parents[2]
+        sent, calls = self._run(str(plugin_dir))
+        self.assertEqual(len(sent), 1)
+        self.assertIn("ArknightsUID 最近更新", sent[0])
+        self.assertIn("测试提交", sent[0])
+        self.assertTrue(any(c[1] == "log" for c in calls))
