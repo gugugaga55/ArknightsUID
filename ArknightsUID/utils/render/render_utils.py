@@ -606,7 +606,15 @@ async def get_image_b64_with_cache(
         if bake_path.exists() and bake_path.stat().st_mtime >= local_path.stat().st_mtime:
             with open(bake_path, "rb") as f:
                 data = f.read()
-            return f"data:image/webp;base64,{base64.b64encode(data).decode('utf-8')}"
+            if _looks_like_rendered_image(data):
+                return f"data:image/webp;base64,{base64.b64encode(data).decode('utf-8')}"
+            # 坏 bake（旧版本直写半文件/磁盘坏块）：魔数不过即删除重烘，
+            # 否则它会被 mtime 命中长期当缓存喂给上游
+            logger.warning(f"[ARK·渲染] 烘焙缓存损坏，删除重烘: {bake_path.name}")
+            try:
+                bake_path.unlink()
+            except OSError:
+                pass
 
         # 未命中 — PIL 处理 + 写入烘焙缓存（立绘级 LANCZOS+WEBP 实测
         # ~24ms/张，首渲多张累计可观：下放线程池，避免卡事件循环）

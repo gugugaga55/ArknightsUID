@@ -4,7 +4,7 @@
 - `ark更新记录`（pm=1）：展示插件最近 git 提交记录
 - `ark删除无效凭据`（pm=1）：清理 cookie_status=无效 的本地登录行
 - `ark刷新`：删除游戏数据表缓存（干员/技能/物品等），下次查询自动重新下载
-- `ark下载资源 [分类…]`（pm=1）：批量预下载全部渲染图片（已存在跳过，重跑只补新增）
+- `ark下载资源 [分类…] [校验]`（pm=1）：批量预下载全部渲染图片（已存在跳过，重跑只补新增；带「校验」逐档验完整性，坏档自动重下）
 - `ark安装依赖 [名字]`（pm=1）：兜底 core 自动装依赖失败的补装（白名单：ocr/takumi）
 """
 from __future__ import annotations
@@ -229,9 +229,14 @@ async def bulk_download_resources(bot: Bot, ev: Event) -> None:
         labels = "、".join(
             bulk_download.CATEGORY_LABELS[key] for key in category_keys
         )
+        verify_note = (
+            "；校验模式：存量文件逐个验完整性，坏档自动重下（耗时更长）"
+            if category_keys.verify else ""
+        )
         await _send_text(
             bot, ev,
-            f"「明日方舟」开始预下载资源（{labels}）：已存在的图片会跳过，"
+            f"「明日方舟」开始预下载资源（{labels}{verify_note}）："
+            "已存在的图片会跳过，"
             "首次运行需先拉取游戏数据表，耗时较长，进度逐类回报…",
         )
 
@@ -239,7 +244,8 @@ async def bulk_download_resources(bot: Bot, ev: Event) -> None:
             await _send_text(bot, ev, bulk_download.format_category_line(result))
 
         summary = await bulk_download.run_bulk_download(
-            category_keys, on_category_done=_report
+            category_keys, on_category_done=_report,
+            verify=category_keys.verify,
         )
         await _send_text(bot, ev, bulk_download.format_summary(summary))
     finally:

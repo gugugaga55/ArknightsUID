@@ -5,6 +5,10 @@
 预下载；已存在的文件跳过并刷新 mtime（缓存清理按 30 天 mtime 删除，
 周期性重跑既保活全部预下载文件，也只补新增 diff）。
 
+存量完整性：默认模式只看存在性（快）；带「校验」参数进入校验模式——
+已存在文件逐个过 PIL 结构校验，损坏/0 字节残档删除后重下。惰性路径
+（pic_download_from_url）自带自愈：缓存打不开即删除重下一次。
+
 清单来源（与惰性路径同源，保证落盘文件名一致、运行时直接命中缓存）：
 - hycdn 皮肤头像/立绘/技能图标：skin_table / skill_table（gamedata 缓存）
 - torappu 模组图标：uniequip_table；肉鸽地图预览：tomimi 期关卡元数据
@@ -129,11 +133,34 @@ class BulkSummary:
         return self.finished_at - self.started_at
 
 
-def parse_category_args(text: str) -> list[str] | str:
-    """命令参数 → 分类键列表；空/「全部」= 全部分类，未知词返回错误文案。"""
+class DownloadPlan(list):
+    """分类键列表 + 校验模式标志。
+
+    list 子类：与既有的 == 比较 / 迭代 / 顺序契约完全兼容；错误时
+    parse_category_args 仍返回 str（调用方 isinstance 区分）。
+    """
+
+    def __init__(self, keys: list[str], verify: bool = False) -> None:
+        super().__init__(keys)
+        self.verify = verify
+
+
+# 校验模式修饰词（不占分类位）：ark下载资源 校验 / ark下载资源 立绘 校验
+_VERIFY_TOKENS = ("校验", "检查", "check", "verify")
+
+
+def parse_category_args(text: str) -> DownloadPlan | str:
+    """命令参数 → DownloadPlan；空/「全部」= 全部分类，未知词返回错误文案。
+
+    「校验 / check」为修饰词：开启存量校验模式——已存在的文件逐个过
+    PIL 结构校验，损坏/0 字节残档删除后重下（默认模式只看存在性，
+    存量坏档永远发现不了）。
+    """
     tokens = [t for t in re.split(r"[\s,，、/]+", (text or "").strip()) if t]
+    verify = any(t.lower() in _VERIFY_TOKENS for t in tokens)
+    tokens = [t for t in tokens if t.lower() not in _VERIFY_TOKENS]
     if not tokens or any(t in ("全部", "全量", "all") for t in tokens):
-        return list(ALL_CATEGORY_KEYS)
+        return DownloadPlan(ALL_CATEGORY_KEYS, verify)
     keys: list[str] = []
     for token in tokens:
         key = CATEGORY_ALIASES.get(token) or CATEGORY_ALIASES.get(token.lower())
@@ -141,11 +168,14 @@ def parse_category_args(text: str) -> list[str] | str:
             valid = "、".join(
                 f"{v}({k})" for k, v in CATEGORY_LABELS.items()
             )
-            return f"未知资源分类「{token}」，可用：{valid}；不带参数则全部下载。"
+            return (
+                f"未知资源分类「{token}」，可用：{valid}；"
+                "不带参数则全部下载；附加「校验」可对存量逐档验完整性。"
+            )
         if key not in keys:
             keys.append(key)
     # 按固定顺序执行（小文件高频类在前，立绘最后）
-    return [k for k in ALL_CATEGORY_KEYS if k in keys]
+    return DownloadPlan([k for k in ALL_CATEGORY_KEYS if k in keys], verify)
 
 
 def _touch(path: Path) -> None:
@@ -154,6 +184,30 @@ def _touch(path: Path) -> None:
         os.utime(path, None)
     except OSError:
         pass
+
+
+def _is_nonempty_file(path: Path) -> bool:
+    """存在且非 0 字节才算已下载（0 字节残档按缺失处理，重下覆盖）。"""
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
+
+
+async def _verify_image(path: Path) -> bool:
+    """存量图片完整性校验：PIL verify（读结构不整解码，快）。"""
+
+    def _check() -> bool:
+        try:
+            from PIL import Image
+
+            with Image.open(path) as img:
+                img.verify()
+            return True
+        except Exception:
+            return False
+
+    return await asyncio.to_thread(_check)
 
 
 def _save_image_sync(cache_dir: Path, url_last: str, content: bytes) -> None:
@@ -199,11 +253,14 @@ def _clear_miss(target: ResourceTarget) -> None:
         pass
 
 
-async def download_target(target: ResourceTarget) -> str:
+async def download_target(target: ResourceTarget, verify: bool = False) -> str:
     """下载单个目标 → skip / ok / miss(404) / fail。已存在则刷新 mtime。
 
     .miss 命中（TTL 内）直接 skip（审计 #16：此前只查文件不查 .miss，
     已知 404 的目标每轮重跑都再打一次 CDN）。
+
+    存量完整性：0 字节残档一律删除重下（存在即跳过的口径会让它永久
+    占坑）；verify=True 时再逐档过 PIL 结构校验，坏档删除重下。
     """
     import time as _time
 
@@ -219,10 +276,26 @@ async def download_target(target: ResourceTarget) -> str:
     new_name = cache_names_for_url(target.url)[0]
     new_path = target.cache_dir / new_name
     for existing in (webp_path, raw_path, new_path.with_suffix(".webp"), new_path):
-        if existing.exists():
-            _touch(existing)
-            _clear_miss(target)  # 文件在：清掉可能残留的旧 .miss
-            return "skip"
+        if not existing.exists():
+            continue
+        if not _is_nonempty_file(existing):
+            try:
+                existing.unlink()
+            except OSError:
+                pass
+            continue
+        if verify and not await _verify_image(existing):
+            logger.warning(
+                f"[ArknightsUID·资源] 校验发现损坏，删除重下: {existing.name}"
+            )
+            try:
+                existing.unlink()
+            except OSError:
+                pass
+            continue
+        _touch(existing)
+        _clear_miss(target)  # 文件在：清掉可能残留的旧 .miss
+        return "skip"
 
     miss_path = (
         target.cache_dir / target.miss_marker if target.miss_marker else None
@@ -503,7 +576,7 @@ ProgressCallback = Callable[[CategoryResult], Awaitable[None]]
 
 
 async def _run_category(
-    key: str, semaphore: asyncio.Semaphore
+    key: str, semaphore: asyncio.Semaphore, verify: bool = False
 ) -> CategoryResult:
     label = CATEGORY_LABELS[key]
     result = CategoryResult(name=key, label=label)
@@ -519,7 +592,7 @@ async def _run_category(
     # 分批入队 + 信号量限并发；单文件失败只计数，不中断整类
     async def _one(target: ResourceTarget) -> None:
         async with semaphore:
-            status = await download_target(target)
+            status = await download_target(target, verify=verify)
         if status == "ok":
             result.downloaded += 1
         elif status == "skip":
@@ -538,16 +611,18 @@ async def run_bulk_download(
     category_keys: list[str],
     concurrency: int = _DOWNLOAD_CONCURRENCY,
     on_category_done: ProgressCallback | None = None,
+    verify: bool = False,
 ) -> BulkSummary:
     """按序执行各分类：枚举 → 并发下载 → 回调进度。
 
     单分类枚举/下载失败记录在 CategoryResult.error / failed，不中断其余
     分类（网络故障下次重跑自然补齐，已下载文件会被跳过）。
+    verify=True：存量逐档 PIL 校验，坏档删除重下（校验模式）。
     """
     summary = BulkSummary(started_at=time.time())
     semaphore = asyncio.Semaphore(concurrency)
     for key in category_keys:
-        result = await _run_category(key, semaphore)
+        result = await _run_category(key, semaphore, verify=verify)
         summary.results.append(result)
         if on_category_done is not None:
             try:

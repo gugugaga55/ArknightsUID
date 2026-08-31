@@ -278,7 +278,7 @@ class RunBulkDownloadTest(unittest.IsolatedAsyncioTestCase):
 
         statuses = iter(["ok", "skip", "miss", "fail"])
 
-        async def fake_download(target):
+        async def fake_download(target, verify=False):
             return next(statuses)
 
         reported: list[bd.CategoryResult] = []
@@ -310,7 +310,7 @@ class RunBulkDownloadTest(unittest.IsolatedAsyncioTestCase):
         async def good_builder():
             return [bd.ResourceTarget("https://x/a.png", Path("/tmp/ark-test"))]
 
-        async def fake_download(target):
+        async def fake_download(target, verify=False):
             return "ok"
 
         with mock.patch.dict(
@@ -416,3 +416,83 @@ class CommandSmokeTest(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ParseVerifyFlagTest(unittest.TestCase):
+    """「校验」修饰词：不占分类位、可单独用、与分类混用；list 契约不变。"""
+
+    def test_verify_only_means_all_categories(self) -> None:
+        plan = bd.parse_category_args("校验")
+        self.assertEqual(plan, bd.ALL_CATEGORY_KEYS)  # list 相等契约
+        self.assertTrue(plan.verify)
+
+    def test_verify_with_categories(self) -> None:
+        plan = bd.parse_category_args("立绘 校验")
+        self.assertEqual(plan, ["portrait"])
+        self.assertTrue(plan.verify)
+        plan2 = bd.parse_category_args("check 敌人")
+        self.assertEqual(plan2, ["enemy"])
+        self.assertTrue(plan2.verify)
+
+    def test_default_no_verify(self) -> None:
+        self.assertFalse(bd.parse_category_args("立绘").verify)
+        self.assertFalse(bd.parse_category_args("").verify)
+
+
+class DownloadTargetIntegrityTest(unittest.IsolatedAsyncioTestCase):
+    """存量完整性：0 字节残档一律重下；校验模式 PIL 验坏档重下。"""
+
+    async def test_zero_byte_existing_redownloads(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cache = Path(td)
+            (cache / "a.png").write_bytes(b"")  # 0 字节残档
+            target = bd.ResourceTarget("https://web.hycdn.cn/x/a.png", cache)
+            with mock.patch.object(
+                bd, "download_bytes_status",
+                mock.AsyncMock(return_value=(200, _tiny_png())),
+            ) as dl:
+                status = await bd.download_target(target)
+            self.assertEqual(status, "ok")
+            self.assertEqual(dl.await_count, 1, "0 字节残档应触发重下")
+            self.assertTrue((cache / "a.webp").exists())
+            self.assertFalse((cache / "a.png").exists())
+
+    async def test_corrupt_file_skips_without_verify(self) -> None:
+        """默认模式只看存在性（快）：非空坏档仍 skip——校验是显式开关。"""
+        with tempfile.TemporaryDirectory() as td:
+            cache = Path(td)
+            (cache / "a.png").write_bytes(b"not an image at all")
+            target = bd.ResourceTarget("https://web.hycdn.cn/x/a.png", cache)
+            with mock.patch.object(
+                bd, "download_bytes_status",
+                mock.AsyncMock(side_effect=AssertionError("不应下载")),
+            ):
+                status = await bd.download_target(target)
+            self.assertEqual(status, "skip")
+
+    async def test_corrupt_file_redownloads_in_verify_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cache = Path(td)
+            bad = cache / "a.png"
+            bad.write_bytes(b"not an image at all")
+            target = bd.ResourceTarget("https://web.hycdn.cn/x/a.png", cache)
+            with mock.patch.object(
+                bd, "download_bytes_status",
+                mock.AsyncMock(return_value=(200, _tiny_png())),
+            ):
+                status = await bd.download_target(target, verify=True)
+            self.assertEqual(status, "ok")
+            self.assertFalse(bad.exists(), "坏档应被删除")
+            self.assertTrue((cache / "a.webp").exists())
+
+    async def test_valid_file_passes_verify_and_skips(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            cache = Path(td)
+            (cache / "a.png").write_bytes(_tiny_png())
+            target = bd.ResourceTarget("https://web.hycdn.cn/x/a.png", cache)
+            with mock.patch.object(
+                bd, "download_bytes_status",
+                mock.AsyncMock(side_effect=AssertionError("不应下载")),
+            ):
+                status = await bd.download_target(target, verify=True)
+            self.assertEqual(status, "skip")
