@@ -67,15 +67,36 @@ async def pic_download_from_url(
     def _candidates() -> list[Path]:
         return [webp_path, _path, legacy_webp, legacy_path]
 
-    for existing in _candidates():
-        if existing.exists():
-            return Image.open(existing).convert("RGBA")
+    def _open_cached() -> Image.Image | None:
+        """读缓存命中；损坏文件删除后继续查下一候选（交给下载分支重拉）。
+
+        存在即信任的读法会让一张坏缓存（旧版本直写半文件/磁盘坏块）
+        把对应卡片永久卡成无图——PIL 打不开即判损坏，删掉自愈。
+        """
+        for existing in _candidates():
+            if not existing.exists():
+                continue
+            try:
+                return Image.open(existing).convert("RGBA")
+            except Exception:
+                logger.warning(
+                    f"[ARK·图像] 缓存损坏，删除并重下: {existing.name}"
+                )
+                try:
+                    existing.unlink()
+                except OSError:
+                    pass
+        return None
+
+    cached = _open_cached()
+    if cached is not None:
+        return cached
 
     async with await _path_lock(_path):
-        # 锁内复查：等锁期间其他协程可能已完成下载/转换
-        for existing in _candidates():
-            if existing.exists():
-                return Image.open(existing).convert("RGBA")
+        # 锁内复查：等锁期间其他协程可能已完成下载/修复
+        cached = _open_cached()
+        if cached is not None:
+            return cached
 
         # 传入插件共享 client（审计 #34）：框架 download 的 sess=None
         # 分支每次新建 httpx.AsyncClient 且从不关闭，靠 GC 兜底
@@ -89,6 +110,9 @@ async def pic_download_from_url(
         try:
             img = Image.open(_path).convert("RGBA")
         except Exception as e:
+            # 刚下载的文件打不开（CDN 错误页/半截响应）：删掉毒药文件，
+            # 否则下次调用在候选里命中它、永远失败
+            _path.unlink(missing_ok=True)
             logger.warning(f"[ARK·图像] 打开图片失败: {_path}, {e}")
             raise
 

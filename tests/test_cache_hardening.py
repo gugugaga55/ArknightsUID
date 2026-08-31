@@ -407,3 +407,139 @@ class CacheKeyUrlHashTest(unittest.IsolatedAsyncioTestCase):
                 result = await bd.download_target(target)
             self.assertEqual(result, "skip")
             m_dl.assert_not_awaited()
+
+
+class LazyCacheSelfHealTest(unittest.IsolatedAsyncioTestCase):
+    """存量坏缓存自愈：PIL 打不开 → 删除 → 重下一次（不再永久无图）。"""
+
+    async def test_corrupt_cache_deleted_and_redownloaded(self) -> None:
+        import ArknightsUID.utils.image as img_mod
+        from ArknightsUID.utils.gamedata.path_safety import cache_names_for_url
+
+        calls = {"n": 0}
+
+        async def fake_download(url, path, name, sess=None, tag=None, **kw):
+            calls["n"] += 1
+            (Path(path) / name).write_bytes(_png_bytes())
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "gsuid_core.utils.download_resource.download_file.download",
+            new=fake_download,
+        ):
+            # 在新键位置放一份坏缓存（与 cache_names_for_url 同规则）
+            new_name, _ = cache_names_for_url("https://x/pic.png")
+            bad = Path(tmp) / new_name
+            bad.write_bytes(b"definitely not an image")
+            img = await img_mod.pic_download_from_url(
+                Path(tmp), "https://x/pic.png"
+            )
+        self.assertEqual(calls["n"], 1, "坏缓存应触发一次重下")
+        self.assertFalse(bad.exists(), "坏文件应被删除")
+        self.assertIsNotNone(img)
+
+    async def test_fresh_download_failure_leaves_no_poison_file(self) -> None:
+        """下载到网关错误页（200 的 HTML）：删除后抛出，不留毒药文件。"""
+        import ArknightsUID.utils.image as img_mod
+
+        async def fake_download(url, path, name, sess=None, tag=None, **kw):
+            (Path(path) / name).write_bytes(b"<html>gateway error</html>")
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "gsuid_core.utils.download_resource.download_file.download",
+            new=fake_download,
+        ):
+            with self.assertRaises(Exception):
+                await img_mod.pic_download_from_url(Path(tmp), "https://x/err.png")
+            leftovers = [
+                p for p in Path(tmp).iterdir() if not p.name.endswith(".tmp")
+            ]
+            self.assertEqual(leftovers, [], f"毒药文件应被清理: {leftovers}")
+
+
+class BakeCacheIntegrityTest(unittest.IsolatedAsyncioTestCase):
+    """烘焙缓存命中前过魔数：坏 bake 删除重烘，不再长期喂坏图。"""
+
+    async def test_corrupt_bake_deleted_and_rebaked(self) -> None:
+        import base64
+        import hashlib
+
+        from ArknightsUID.utils.render import render_utils as ru
+
+        import ArknightsUID.utils.path as ark_path
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            ark_path, "BAKE_PATH", Path(tmp) / "bake"
+        ):
+            # 源图就位（新键名），bake 位置放垃圾内容（mtime 更新成最新，
+            # 保证命中"新鲜 bake"分支）
+            url = "https://a.cdn.com/img/bake_me.png"
+            from ArknightsUID.utils.gamedata.path_safety import (
+                cache_names_for_url,
+            )
+
+            new_name, _ = cache_names_for_url(url)
+            local_path = Path(tmp) / new_name
+            local_path.write_bytes(_png_bytes())
+            path_hash = hashlib.md5(
+                str(local_path.resolve()).encode()
+            ).hexdigest()[:8]
+            bake_dir = Path(tmp) / "bake"
+            bake_dir.mkdir()
+            bake = bake_dir / f"{local_path.stem}_{path_hash}_q85.webp"
+            bake.write_bytes(b"RIFFxxxxGARBAGE")  # 魔数伪造一半也不够
+            import os
+            import time as _t
+
+            ts = _t.time() + 10
+            os.utime(bake, (ts, ts))
+
+            b64 = await ru.get_image_b64_with_cache(url, Path(tmp), quality=85)
+            self.assertTrue(b64.startswith("data:image/webp;base64,"))
+            data = base64.b64decode(b64.split(",", 1)[1])
+            self.assertTrue(
+                ru._looks_like_rendered_image(data),
+                "重烘产物必须是合法图片魔数",
+            )
+            # 坏 bake 已被替换为真实 webp
+            self.assertNotEqual(bake.read_bytes(), b"RIFFxxxxGARBAGE")
+
+    async def test_valid_bake_still_served(self) -> None:
+        """好 bake 照常命中（不误杀）：内容原样返回，未被重烘。"""
+        import base64
+        import hashlib
+        import os
+        import time as _t
+
+        from ArknightsUID.utils.render import render_utils as ru
+
+        import ArknightsUID.utils.path as ark_path
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            ark_path, "BAKE_PATH", Path(tmp) / "bake"
+        ):
+            url = "https://a.cdn.com/img/good_bake.png"
+            from ArknightsUID.utils.gamedata.path_safety import (
+                cache_names_for_url,
+            )
+
+            new_name, _ = cache_names_for_url(url)
+            local_path = Path(tmp) / new_name
+            local_path.write_bytes(_png_bytes())
+            path_hash = hashlib.md5(
+                str(local_path.resolve()).encode()
+            ).hexdigest()[:8]
+            bake_dir = Path(tmp) / "bake"
+            bake_dir.mkdir()
+            bake = bake_dir / f"{local_path.stem}_{path_hash}_q85.webp"
+            # 造一个真 webp 作为好 bake
+            from PIL import Image
+
+            Image.open(BytesIO(_png_bytes())).save(bake, "WEBP")
+            good = bake.read_bytes()
+            ts = _t.time() + 10
+            os.utime(bake, (ts, ts))
+
+            b64 = await ru.get_image_b64_with_cache(url, Path(tmp), quality=85)
+            self.assertTrue(b64.startswith("data:image/webp;base64,"))
+            # 命中即原样返回好 bake 的内容
+            self.assertEqual(base64.b64decode(b64.split(",", 1)[1]), good)
