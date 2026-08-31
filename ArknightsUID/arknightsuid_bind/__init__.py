@@ -13,6 +13,7 @@ try:
         get_default_uid,
     )
     from ArknightsUID.ArknightsUID.utils.arg_utils import extract_uid
+    from ArknightsUID.ArknightsUID.utils.config import ArkConfig
     from ArknightsUID.ArknightsUID.utils.enduid.adapter import hide_uid
     from ArknightsUID.ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
     from ArknightsUID.ArknightsUID.utils.skland import auth as ark_auth
@@ -23,6 +24,7 @@ except ModuleNotFoundError:
         get_default_uid,
     )
     from ArknightsUID.utils.arg_utils import extract_uid
+    from ArknightsUID.utils.config import ArkConfig
     from ArknightsUID.utils.enduid.adapter import hide_uid
     from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
     from ArknightsUID.utils.skland import auth as ark_auth
@@ -32,7 +34,21 @@ except ModuleNotFoundError:
 # （防止插件 area 被配成 ALL 绕过 SV 级限制）
 bind_sv = SV("ArknightsUID绑定", area="DIRECT", priority=5)
 
+# 扫码登录独立 SV（无 area 限制）：群聊是否放行由 AllowGroupScanLogin
+# 开关在 handler 内实时判定——area="DIRECT" 是框架级静默拦截，开关
+# 开了也进不来，所以扫码不能挂在 bind_sv 下
+scan_sv = SV("ArknightsUID扫码登录", priority=5)
+
 _PRIVATE_ONLY_HINT = "绑定/登录涉及凭据安全，请私聊我使用本命令。"
+_GROUP_SCAN_OFF_HINT = (
+    "扫码登录默认仅私聊可用（二维码等于一次免密登录，不适合发群里）。\n"
+    "管理员可在插件配置开启「允许群聊扫码登录」（AllowGroupScanLogin）后群内使用。"
+)
+# 群内扫码的明示风险文案（开关已开）
+_GROUP_SCAN_NOTICE = (
+    "⚠️ 二维码在群内公开：100 秒内群里任何人扫码，都会把 TA 的账号"
+    "绑定到你名下。确认周围是熟人再扫。"
+)
 
 
 async def _send_text(bot: Bot, ev: Event, msg: str) -> None:
@@ -110,10 +126,12 @@ async def bind_credential(bot: Bot, ev: Event) -> None:
     await _send_login_success(bot, ev, roles or [])
 
 
-@bind_sv.on_fullmatch(("扫码登录", "扫码登陆"), block=True)
+@scan_sv.on_fullmatch(("扫码登录", "扫码登陆"), block=True)
 async def scan_login(bot: Bot, ev: Event) -> None:
-    if ev.group_id:
-        return await _send_text(bot, ev, _PRIVATE_ONLY_HINT)
+    if ev.group_id and not bool(
+        ArkConfig.get_config("AllowGroupScanLogin").data
+    ):
+        return await _send_text(bot, ev, _GROUP_SCAN_OFF_HINT)
 
     scan_id = await ark_auth.get_scan_id()
     if not scan_id:
@@ -127,7 +145,11 @@ async def scan_login(bot: Bot, ev: Event) -> None:
     except Exception:
         return await _send_text(bot, ev, "二维码生成失败，请稍后重试。")
     await bot.send(qr_img)
-    await _send_text(bot, ev, "请使用森空岛 APP 扫码确认登录（100 秒内有效）……")
+    notice = f"{_GROUP_SCAN_NOTICE}\n" if ev.group_id else ""
+    await _send_text(
+        bot, ev,
+        notice + "请使用森空岛 APP 扫码确认登录（100 秒内有效）……",
+    )
 
     # 轮询扫码状态：2s/次，最多 50 次，且整体 deadline 3 分钟
     # （审计 #33：单次请求最长 25s，无 deadline 时最坏 50×(2+25)≈22.5
