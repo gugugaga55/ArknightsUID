@@ -1187,6 +1187,22 @@ async def _enrich_icons(name: str, context: dict) -> None:
 
         for row in context.get("rows", []):
             row["icon"] = await enemy_icon_b64(row.get("key") or "")
+        # 关卡地图：假数据不含 maps，按生产同一条链路（torappu 预览图）
+        # 拉真实地图补进预览，离线/失败时保持无图降级
+        try:
+            from ArknightsUID.utils.prts.client import rogue_map_preview_urls
+            from ArknightsUID.utils.render import get_image_b64_with_cache
+            from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
+
+            for url in rogue_map_preview_urls(context.get("level_id") or ""):
+                b64 = await get_image_b64_with_cache(
+                    url, CACHE_PATH / "wiki" / "map_rogue", quality=85
+                )
+                if b64:
+                    context["maps"] = [b64]
+                    break
+        except Exception as e:
+            print(f"⚠️  ark_rogue_stage 地图拉取失败，按无图降级: {e}")
     elif name == "ark_rogue_relic.html":
         from ArknightsUID.utils.gamedata.rogue_relic import relic_icon_b64
 
