@@ -72,6 +72,52 @@ class FormatAnnPushMessageTest(unittest.TestCase):
         self.assertNotIn(f"id={_ANN_PUSH_LIMIT + 2}", message.split("……")[0])
 
 
+class BuildAnnPushPayloadTest(unittest.IsolatedAsyncioTestCase):
+    """订阅公告推送带图：文案段 + 封面图段；无封面/失败自动降级纯文字。"""
+
+    @staticmethod
+    def _data_uri() -> str:
+        # 合法 data URI 即可（只验证段构造，不校验图像内容）
+        import base64
+
+        return (
+            "data:image/webp;base64,"
+            + base64.b64encode(b"RIFFxxxxWEBP").decode()
+        )
+
+    async def test_payload_text_plus_cover_images(self) -> None:
+        import ArknightsUID.arknightsuid_push as push
+
+        anns = [
+            {**_ann("1", title="有图公告"), "cover": "https://x/c1.webp"},
+            {**_ann("2", title="纯文字公告"), "cover": ""},
+        ]
+        data_uri = self._data_uri()
+
+        async def fake_b64(url, quality=80, cover_size=None, anchor="center"):
+            return data_uri if "c1" in url else ""
+
+        with mock.patch.object(push, "_announce_image_b64", fake_b64):
+            payload = await push.build_ann_push_payload(anns)
+
+        self.assertEqual(payload[0].type, "text")
+        self.assertIn("有图公告", str(payload[0].data))
+        self.assertEqual(payload[1].type, "image")
+        # 纯文字公告不产生空图段
+        self.assertEqual(len(payload), 2)
+
+    async def test_payload_text_only_when_no_covers(self) -> None:
+        import ArknightsUID.arknightsuid_push as push
+
+        async def fail_b64(url, quality=80, cover_size=None, anchor="center"):
+            return ""
+
+        with mock.patch.object(push, "_announce_image_b64", fail_b64):
+            payload = await push.build_ann_push_payload([_ann("9")])
+        self.assertEqual(len(payload), 1)
+        self.assertEqual(payload[0].type, "text")
+
+
 class AnnStateFileTest(unittest.TestCase):
     def setUp(self) -> None:
         import ArknightsUID.arknightsuid_push as push_mod

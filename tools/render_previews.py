@@ -914,31 +914,35 @@ MOCK_CONTEXTS = {
         "version": VERSION,
     },
     "ark_recruit.html": {
-        # 大池样例（资深干员 55 人）：头像前 12 + 其余全名单 rest（生产同构）
+        # 大池样例（资深干员 55 人）：头像前 12 + 其余全名单 rest（生产同构）。
+        # 静态行为离线兜底，名单/星级须与 PRTS 公开招募池一致（2026-08
+        # 校对）；联网时 _enrich_icons 用真实数据整体重建本 context
         "tags": "资深干员",
         "total": 55,
         "rows": [
             {"rarity": 5, "name": "临光", "profession": "重装", "tags": "防护/治疗", "avatar": ""},
-            {"rarity": 5, "name": "乌有", "profession": "特种", "tags": "输出/快速复活", "avatar": ""},
+            {"rarity": 5, "name": "乌有", "profession": "特种", "tags": "快速复活/输出", "avatar": ""},
             {"rarity": 5, "name": "凛冬", "profession": "先锋", "tags": "费用回复/支援", "avatar": ""},
             {"rarity": 5, "name": "初雪", "profession": "辅助", "tags": "削弱", "avatar": ""},
-            {"rarity": 5, "name": "华法琳", "profession": "医疗", "tags": "支援/治疗", "avatar": ""},
-            {"rarity": 5, "name": "卡夫卡", "profession": "特种", "tags": "控场/输出", "avatar": ""},
-            {"rarity": 5, "name": "红", "profession": "特种", "tags": "控场/快速复活/输出", "avatar": ""},
-            {"rarity": 5, "name": "白面鸮", "profession": "医疗", "tags": "支援/治疗", "avatar": ""},
-            {"rarity": 5, "name": "蓝毒", "profession": "狙击", "tags": "输出", "avatar": ""},
-            {"rarity": 5, "name": "白金", "profession": "狙击", "tags": "输出", "avatar": ""},
-            {"rarity": 5, "name": "雷蛇", "profession": "重装", "tags": "输出/防护", "avatar": ""},
-            {"rarity": 5, "name": "赫默", "profession": "医疗", "tags": "治疗", "avatar": ""},
+            {"rarity": 5, "name": "华法琳", "profession": "医疗", "tags": "治疗/支援", "avatar": ""},
+            {"rarity": 5, "name": "卡夫卡", "profession": "特种", "tags": "快速复活/控场", "avatar": ""},
+            {"rarity": 5, "name": "可颂", "profession": "重装", "tags": "防护/位移", "avatar": ""},
+            {"rarity": 5, "name": "吽", "profession": "重装", "tags": "防护/治疗", "avatar": ""},
+            {"rarity": 5, "name": "四月", "profession": "狙击", "tags": "输出", "avatar": ""},
+            {"rarity": 5, "name": "因陀罗", "profession": "近卫", "tags": "输出/生存", "avatar": ""},
+            {"rarity": 5, "name": "夜魔", "profession": "术师", "tags": "输出/治疗/减速", "avatar": ""},
+            {"rarity": 5, "name": "奥斯塔", "profession": "狙击", "tags": "群攻", "avatar": ""},
         ],
         "rest": [
             {"rarity": 5, "name": n}
             for n in [
-                "德克萨斯", "守林人", "普罗旺斯", "火神", "诗怀雅", "食铁兽",
-                "槐琥", "狮蝎", "崖心", "绮良", "梅尔", "格劳克斯", "送葬人", "灰喉",
-                "布洛卡", "星极", "因陀罗", "月禾", "极境", "巫恋", "夜魔", "惊蛰",
-                "爱丽丝", "贾维", "苇草", "断崖", "奥斯塔", "四月", "安哲拉", "孑",
-                "陨星", "慑砂", "星熊", "可颂", "吽", "石棉", "洋灰",
+                "守林人", "安哲拉", "崖心", "巫恋", "布洛卡", "幽灵鲨", "德克萨斯",
+                "惊蛰", "慑砂", "断崖", "星极", "普罗旺斯", "月禾", "极境",
+                "格劳克斯", "梅尔", "槐琥", "火神", "灰喉", "熔泉", "燧石",
+                "爱丽丝", "狮蝎", "白金", "白面鸮", "真理", "石棉", "絮雨",
+                "红", "绮良", "羽毛笔", "苇草", "莱恩哈特", "蓝毒", "蜜蜡",
+                "诗怀雅", "贾维", "赤冬", "赫默", "送葬人", "陨星", "雷蛇",
+                "食铁兽",
             ]
         ],
         "truncated": True,
@@ -1029,6 +1033,9 @@ MOCK_CONTEXTS = {
         ],
         "version": VERSION,
     },
+    # 离线兜底静态行：必须与 recommend_combos 真实输出一致（池成员/池容
+    # 都是 PRTS 公开招募池口径，2026-08 校对）；联网时 _enrich_icons 会用
+    # 真实数据整体重建本 context，此静态版仅作断网回退
     "ark_recruit_plan.html": {
         "input_tags": "高级资深干员 / 术师 / 输出 / 远程位 / 生存",
         "unknown_tags": "",
@@ -1036,19 +1043,22 @@ MOCK_CONTEXTS = {
         "rows": [
             {"tags": "高级资深干员 + 术师 + 输出", "tier": 1, "tier_name": "6★ 保底",
              "min_rarity": 6, "max_rarity": 6, "pool_count": 2,
-             "names": ["刻俄柏", "异客"], "more": 0, "avatars": ["", ""]},
+             "names": ["刻俄柏", "异客"], "avatars": ["", ""]},
             {"tags": "高级资深干员 + 术师", "tier": 1, "tier_name": "6★ 保底",
              "min_rarity": 6, "max_rarity": 6, "pool_count": 5,
-             "names": ["伊芙利特", "刻俄柏", "卡涅利安", "异客"], "more": 1, "avatars": ["", "", "", ""]},
+             "names": ["伊芙利特", "刻俄柏", "卡涅利安", "异客", "莫斯提马"], "avatars": ["", "", "", "", ""]},
+            {"tags": "高级资深干员 + 术师 + 远程位", "tier": 1, "tier_name": "6★ 保底",
+             "min_rarity": 6, "max_rarity": 6, "pool_count": 5,
+             "names": ["伊芙利特", "刻俄柏", "卡涅利安", "异客", "莫斯提马"], "avatars": ["", "", "", "", ""]},
             {"tags": "高级资深干员 + 生存", "tier": 1, "tier_name": "6★ 保底",
-             "min_rarity": 6, "max_rarity": 6, "pool_count": 4,
-             "names": ["山", "斯卡蒂", "森蚺", "泥岩"], "more": 0, "avatars": ["", "", "", ""]},
-            {"tags": "高级资深干员 + 输出", "tier": 1, "tier_name": "6★ 保底",
-             "min_rarity": 6, "max_rarity": 6, "pool_count": 12,
-             "names": ["史尔特尔", "刻俄柏", "异客", "能天使"], "more": 8, "avatars": ["", "", "", ""]},
-            {"tags": "输出 + 远程位", "tier": 4, "tier_name": "常规",
-             "min_rarity": 3, "max_rarity": 5, "pool_count": 16,
-             "names": ["守林人", "安哲拉", "四月", "流星"], "more": 12, "avatars": ["", "", "", ""]},
+             "min_rarity": 6, "max_rarity": 6, "pool_count": 6,
+             "names": ["山", "斯卡蒂", "森蚺", "泥岩", "煌", "赫拉格"], "avatars": ["", "", "", "", "", ""]},
+            {"tags": "高级资深干员 + 输出 + 生存", "tier": 1, "tier_name": "6★ 保底",
+             "min_rarity": 6, "max_rarity": 6, "pool_count": 6,
+             "names": ["山", "斯卡蒂", "森蚺", "泥岩", "煌", "赫拉格"], "avatars": ["", "", "", "", "", ""]},
+            {"tags": "高级资深干员 + 输出 + 远程位", "tier": 1, "tier_name": "6★ 保底",
+             "min_rarity": 6, "max_rarity": 6, "pool_count": 9,
+             "names": ["刻俄柏", "异客", "早露", "空弦", "能天使", "铃兰", "阿", "麦哲伦", "黑"], "avatars": ["", "", "", "", "", "", "", "", ""]},
         ],
         "version": VERSION,
     },
@@ -1251,9 +1261,50 @@ async def _enrich_icons(name: str, context: dict) -> None:
         from ArknightsUID.utils.gamedata.charinfo import load_char_index
         from ArknightsUID.utils.player.context import char_avatar_b64
 
+        if name == "ark_recruit.html":
+            # 与生产同源：真实公招数据跑 match_recruit 重建 rows/rest——
+            # 静态 mock 曾混入错档/非池干员（孑=4★、星熊=6★、洋灰不在池）；
+            # 拉取失败退回静态行，只补头像
+            from ArknightsUID.utils.gamedata.recruit import (
+                load_recruit_data,
+                match_recruit,
+            )
+
+            try:
+                data = await load_recruit_data()
+                tags = [
+                    t.strip()
+                    for t in str(context.get("tags") or "").split("/")
+                    if t.strip()
+                ]
+                matched = match_recruit(tags, data) if data and tags else []
+            except Exception:
+                matched = []
+            if matched:
+                context["rows"] = [
+                    {
+                        "rarity": int(entry["rarity"]),
+                        "name": entry["name"],
+                        "profession": entry["profession"],
+                        "tags": (
+                            "/".join(entry["tags"][:3]) if entry["tags"] else ""
+                        ),
+                        "avatar": await char_avatar_b64(str(entry.get("id", ""))),
+                    }
+                    for entry in matched[:12]
+                ]
+                context["rest"] = [
+                    {"rarity": int(entry["rarity"]), "name": entry["name"]}
+                    for entry in matched[12:]
+                ]
+                context["total"] = len(matched)
+                context["truncated"] = len(matched) > 12
+            # 静态兜底 / gacha 卡：按名字补头像
         char_index = await load_char_index()
         rows_key = "rows" if name == "ark_recruit.html" else "recent"
         for row in context.get(rows_key, []):
+            if row.get("avatar"):
+                continue
             hit = next(
                 (cid for cid, info in char_index.items()
                  if info.get("name") == row.get("name")),
@@ -1415,7 +1466,7 @@ async def _enrich_icons(name: str, context: dict) -> None:
                         "author": ann.get("author", ""),
                         "cover": await get_image_b64_with_cache(
                             ann.get("cover", ""), CACHE_PATH / "announce",
-                            quality=60, cover_size=(400, 200),
+                            quality=60, cover_size=(400, 224), anchor="top",
                         ),
                         "avatar": await get_image_b64_with_cache(
                             ann.get("avatar", ""), CACHE_PATH / "announce",
@@ -1569,25 +1620,74 @@ async def _enrich_icons(name: str, context: dict) -> None:
         context["groups"] = assign_group_icons(HELP_GROUPS)
 
     if name == "ark_recruit_plan.html":
-        # 每个组合的池内前 4 干员头像（名称反查 charId）
-        from ArknightsUID.utils.gamedata.charinfo import load_char_index
+        # 与生产同源：真实公招数据（PRTS 公开招募池）跑 recommend_combos
+        # 重建组合行——手写 mock 曾混入非公招干员（稀音/维什戴尔/逻各斯等
+        # 寻访限定从不入公招池），池容与星级口径也对不上；拉取失败退回
+        # 静态行，只按名字补头像
+        from ArknightsUID.utils.gamedata.recruit import (
+            load_recruit_data,
+            recommend_combos,
+        )
         from ArknightsUID.utils.player.context import char_avatar_b64
 
-        char_index = await load_char_index()
+        from ArknightsUID.arknightsuid_wiki import _RECOMMEND_AVATAR_LIMIT
 
-        def _cid_of(char_name: str) -> str:
-            return next(
-                (cid for cid, info in char_index.items()
-                 if info.get("name") == char_name),
-                "",
-            )
+        input_tags = [
+            t.strip()
+            for t in str(context.get("input_tags") or "").split("/")
+            if t.strip()
+        ]
+        rebuilt = False
+        try:
+            data = await load_recruit_data()
+            combos = (
+                recommend_combos(input_tags, data).get("combos") or []
+            ) if data and input_tags else []
+            if combos:
+                rows = []
+                for combo in combos:
+                    avatars = []
+                    for entry in combo["matches"][:_RECOMMEND_AVATAR_LIMIT]:
+                        avatars.append(
+                            await char_avatar_b64(str(entry.get("id", "")))
+                        )
+                    names = combo["match_names"]
+                    rows.append(
+                        {
+                            "tags": " + ".join(combo["tags"]),
+                            "tier": combo["tier"],
+                            "tier_name": combo["tier_name"],
+                            "min_rarity": combo["min_rarity"],
+                            "max_rarity": combo["max_rarity"],
+                            "pool_count": len(names),
+                            "names": names,
+                            "avatars": avatars,
+                        }
+                    )
+                context["rows"] = rows
+                context["best"] = rows[0]["tags"]
+                rebuilt = True
+        except Exception:
+            rebuilt = False
+        if not rebuilt:
+            # 离线兜底：静态 mock 只补头像（名称反查 charId）
+            from ArknightsUID.utils.gamedata.charinfo import load_char_index
 
-        for row in context.get("rows", []):
-            avatars = []
-            for char_name in row.get("names", [])[:4]:
-                hit = _cid_of(str(char_name))
-                avatars.append(await char_avatar_b64(hit) if hit else "")
-            row["avatars"] = avatars
+            char_index = await load_char_index()
+
+            def _cid_of(char_name: str) -> str:
+                return next(
+                    (cid for cid, info in char_index.items()
+                     if info.get("name") == char_name),
+                    "",
+                )
+
+            for row in context.get("rows", []):
+                avatars = []
+                for char_name in row.get("names", [])[:_RECOMMEND_AVATAR_LIMIT]:
+                    hit = _cid_of(str(char_name))
+                    avatars.append(await char_avatar_b64(hit) if hit else "")
+                row["avatars"] = avatars
 
     if name in ("ark_gacha_sim.html", "ark_skin.html"):
         # 头像：干员名反查 charId → 初始头像（皮肤卡的 recent 用干员头像代）

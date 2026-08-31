@@ -6,9 +6,9 @@
                                末尾带「（截图识别）」标注）
     unknown_tags: str          未识别标签（可空）
     rows: [{tags, tier, tier_name, min_rarity, max_rarity, pool_count,
-            names: [str], more: int, avatars: [str]}]
+            names: [str], avatars: [str]}]
         推荐组合排行（tier 1 最优：6★ 机会 / 5★ 保底 / 4★ 保底 / 常规；
-        avatars 为池内前 4 干员头像 b64，可空）
+        names 为池内全部干员名；avatars 为池内前若干干员头像 b64，可空）
     best: str                   最优组合标签串
     version: str
 -->
@@ -60,10 +60,10 @@
                     <span style="flex: 1;"></span>
                     <span class="bar-num">保底 {{ r.min_rarity }}★ · 池 {{ r.pool_count }} 人</span>
                 </div>
-                <div class="row-value" style="display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; font-size: 12px;">
+                <div style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 6px;">
                     {% for av in r.avatars %}{% if av %}<span class="aicon"><img src="{{ av }}" alt=""></span>{% endif %}{% endfor %}
-                    <span class="u-mute">{{ r.names | join('、') }}{% if r.more > 0 %} 等{{ r.pool_count }}人{% endif %}</span>
                 </div>
+                <div class="u-mute" style="margin-top: 4px; font-size: 12px; line-height: 1.9; word-break: break-word;">{{ r.names | join('、') }}</div>
             </div>
             {% endfor %}
         </div>

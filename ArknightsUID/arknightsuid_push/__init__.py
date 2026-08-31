@@ -13,6 +13,7 @@ ann_push_state.json（公告专项订阅），条目上限防膨胀。
 from __future__ import annotations
 
 import asyncio
+import inspect
 import math
 import os
 import random
@@ -132,7 +133,10 @@ async def _deliver_per_session(
         if not pending:
             continue
         try:
-            await subscribe.send(build_message(pending))
+            built = build_message(pending)
+            if inspect.isawaitable(built):
+                built = await built
+            await subscribe.send(built)
             any_sent = True
             for key in pending:
                 delivered.setdefault(key, []).append(session)
@@ -266,6 +270,45 @@ def format_ann_push_message(fresh: list[dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
+# 推送随附封面上限：与单轮推送条数同量级（纯文本公告无封面自动跳过）
+_ANN_PUSH_IMAGE_LIMIT = 5
+
+
+def _data_uri_bytes(data_uri: str) -> bytes:
+    """data:image/xxx;base64,… → 原始 bytes（供消息段用）。"""
+    import base64
+
+    return base64.b64decode(data_uri.split(",", 1)[1])
+
+
+async def build_ann_push_payload(
+    fresh: list[dict[str, str]],
+    image_limit: int = _ANN_PUSH_IMAGE_LIMIT,
+) -> list:
+    """新公告 → 推送消息段列表：文案 + 各公告官方封面图。
+
+    封面按原比例压缩发送（竖长图就是公告本体，不裁切）；下载失败/无
+    封面自动跳过，纯文字照发。返回 [Message(text), Message(image)…]。
+    """
+    from gsuid_core.segment import MessageSegment
+
+    shown = fresh[:_ANN_PUSH_LIMIT]
+    payload: list = [MessageSegment.text(format_ann_push_message(fresh))]
+    for ann in shown[:image_limit]:
+        b64 = await _announce_image_b64(ann.get("cover", ""), quality=80)
+        if b64.startswith("data:image/"):
+            try:
+                payload.append(
+                    MessageSegment.image(_data_uri_bytes(b64))
+                )
+            except Exception as exc:
+                logger.debug(
+                    f"[ArknightsUID·公告推送] 封面转消息段失败: "
+                    f"{exc.__class__.__name__}"
+                )
+    return payload
+
+
 async def _send_text(bot: Bot, ev: Event, msg: str) -> None:
     await bot.send((" " if ev.group_id else "") + msg, at_sender=bool(ev.group_id))
 
@@ -393,11 +436,13 @@ def split_ann_images(detail: dict) -> tuple[list[dict], list[str]]:
 
 
 async def _announce_image_b64(
-    url: str, quality: int = 80, cover_size: tuple | None = None
+    url: str, quality: int = 80, cover_size: tuple | None = None,
+    anchor: str = "center",
 ) -> str:
     """公告配图直链 → base64（下载缓存 + webp 压缩；失败空串降级）。
 
-    cover_size 传 (宽, 高) 时中心裁切到该尺寸（列表封面缩略用，EndUID 同参）。
+    cover_size 传 (宽, 高) 时裁切到该尺寸（列表封面缩略用）；
+    anchor="top" 顶部锚定（竖长封面取标题区，见 show_ark_announcements）。
     """
     if not url:
         return ""
@@ -406,7 +451,8 @@ async def _announce_image_b64(
         from ..utils.resource.RESOURCE_PATH import CACHE_PATH
 
         return await get_image_b64_with_cache(
-            url, CACHE_PATH / "announce", quality=quality, cover_size=cover_size
+            url, CACHE_PATH / "announce", quality=quality,
+            cover_size=cover_size, anchor=anchor,
         )
     except Exception as e:
         logger.debug(f"[ArknightsUID] 公告配图下载失败: {e}")
@@ -579,7 +625,9 @@ async def show_ark_announcements(bot: Bot, ev: Event) -> None:
     if not anns:
         return await _send_text(bot, ev, _format_ann_list(anns))
     # 列表卡内嵌官方封面 + 作者头像（对齐 EndUID ann_list_card：
-    # 封面中心裁切 400x200 缩略；纯文本公告无封面时按空串降级为纯文字行）
+    # 封面裁切 400x224（16:9，与展示框 132x74 同比例）缩略；方舟封面
+    # 多竖长图（更新前瞻等整图为 1000x4000+），顶部锚定取标题区切片，
+    # 居中裁只会截到中段一条；纯文本公告无封面时按空串降级为纯文字行）
     ann_rows: list[dict] = []
     for ann in anns:
         ann_rows.append(
@@ -589,7 +637,8 @@ async def show_ark_announcements(bot: Bot, ev: Event) -> None:
                 "url": ann.get("url", ""),
                 "author": ann.get("author", ""),
                 "cover": await _announce_image_b64(
-                    ann.get("cover", ""), quality=60, cover_size=(400, 200)
+                    ann.get("cover", ""), quality=60, cover_size=(400, 224),
+                    anchor="top",
                 ),
                 "avatar": await _announce_image_b64(
                     ann.get("avatar", ""), quality=70
@@ -1064,8 +1113,10 @@ async def _push_new_announcements(datas) -> None:
             k: list(v) for k, v in delivered.items()
         }
 
-        def _build_ann_message(ids: list[str]) -> str:
-            return format_ann_push_message(
+        async def _build_ann_message(ids: list[str]) -> list:
+            # 文案 + 官方封面图（公告本体多为整图，推送以图为主、文字
+            # 兜底；封面下载失败自动降级纯文字）
+            return await build_ann_push_payload(
                 [a for a in fresh if str(a["id"]) in ids]
             )
 

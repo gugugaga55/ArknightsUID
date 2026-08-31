@@ -234,6 +234,22 @@ class TargetBuildersTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(t.url.startswith("https://media.prts.wiki/"))
             self.assertEqual(t.miss_marker, t.url.rsplit("/", 1)[-1] + ".miss")
 
+    async def test_enemy_targets_from_allimages(self) -> None:
+        """回归：build_enemy_targets 曾漏 import safe_url_basename，
+        敌人头像分类整类枚举失败（name 'safe_url_basename' is not defined）。"""
+        import ArknightsUID.utils.prts.client as prts_client
+
+        titles = ["头像_敌人_源石虫.png"]
+        with mock.patch.object(
+            prts_client, "all_image_titles", mock.AsyncMock(return_value=titles)
+        ):
+            targets = await bd.build_enemy_targets()
+        self.assertEqual(len(targets), 1)
+        self.assertTrue(targets[0].url.startswith("https://media.prts.wiki/"))
+        self.assertEqual(
+            targets[0].miss_marker, targets[0].url.rsplit("/", 1)[-1] + ".miss"
+        )
+
     async def test_profession_targets_cover_eight(self) -> None:
         targets = await bd.build_profession_targets()
         self.assertEqual(len(targets), 8)
@@ -367,14 +383,15 @@ class RunFlagTest(unittest.TestCase):
 
 
 class CommandSmokeTest(unittest.IsolatedAsyncioTestCase):
-    async def test_command_reports_categories_and_summary(self) -> None:
+    async def test_command_sends_forward_summary_not_per_category(self) -> None:
+        """进度不逐类刷屏：分类行 + 总结合并为一条转发消息发回。"""
         import ArknightsUID.arknightsuid_maintenance as maintenance
 
-        sent: list[str] = []
+        sent: list = []
 
         class FakeBot:
             async def send(self, msg, **kw):
-                sent.append(str(msg))
+                sent.append(msg)
 
         ev = type("Ev", (), {"text": "头像", "group_id": ""})()
 
@@ -387,13 +404,20 @@ class CommandSmokeTest(unittest.IsolatedAsyncioTestCase):
         with mock.patch.object(
             bd, "run_bulk_download", mock.AsyncMock(return_value=summary)
         ) as m_run, mock.patch.object(bd, "try_acquire_run", return_value=True), \
-             mock.patch.object(bd, "release_run") as m_release:
+            mock.patch.object(bd, "release_run") as m_release:
             await maintenance.bulk_download_resources(FakeBot(), ev)
 
         m_run.assert_awaited_once()
         self.assertEqual([k for k in m_run.await_args.args[0]], ["avatar"])
-        self.assertTrue(any("开始预下载" in s for s in sent))
-        self.assertTrue(any("资源下载完成" in s for s in sent))
+        self.assertTrue(any("开始预下载" in str(s) for s in sent))
+        # 结束后只有一条转发消息：node 段，内含分类行与总结
+        nodes = [s for s in sent if getattr(s, "type", None) == "node"]
+        self.assertEqual(len(nodes), 1)
+        node_texts = [
+            str(m.data) for m in nodes[0].data if m.type == "text"
+        ]
+        self.assertTrue(any("干员头像" in t for t in node_texts))
+        self.assertTrue(any("资源下载完成" in t for t in node_texts))
         m_release.assert_called_once()
 
     async def test_command_busy_message(self) -> None:

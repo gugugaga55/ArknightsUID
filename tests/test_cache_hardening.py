@@ -543,3 +543,91 @@ class BakeCacheIntegrityTest(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(b64.startswith("data:image/webp;base64,"))
             # 命中即原样返回好 bake 的内容
             self.assertEqual(base64.b64decode(b64.split(",", 1)[1]), good)
+
+
+class CoverCropAnchorTest(unittest.IsolatedAsyncioTestCase):
+    """公告封面裁切锚点：竖长图取顶部切片（居中裁只见中段一条）。"""
+
+    @staticmethod
+    def _tall_png(width: int = 100, height: int = 400) -> bytes:
+        """上/中/下三段纯色的竖长图。"""
+        from PIL import Image
+
+        img = Image.new("RGB", (width, height))
+        img.paste((255, 0, 0), (0, 0, width, height // 3))          # 顶红
+        img.paste((0, 255, 0), (0, height // 3, width, 2 * height // 3))
+        img.paste((0, 0, 255), (0, 2 * height // 3, width, height))
+        buf = BytesIO()
+        img.save(buf, "PNG")
+        return buf.getvalue()
+
+    async def test_top_anchor_crops_from_top(self) -> None:
+        import base64
+
+        from PIL import Image
+
+        from ArknightsUID.utils.gamedata.path_safety import cache_names_for_url
+        from ArknightsUID.utils.render import render_utils as ru
+
+        import ArknightsUID.utils.path as ark_path
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            ark_path, "BAKE_PATH", Path(tmp) / "bake"
+        ):
+            (Path(tmp) / "bake").mkdir()
+            url = "https://a.cdn.com/img/tall_cover.png"
+            new_name, _ = cache_names_for_url(url)
+            (Path(tmp) / new_name).write_bytes(self._tall_png())
+            b64 = await ru.get_image_b64_with_cache(
+                url, Path(tmp), quality=85, cover_size=(100, 50), anchor="top"
+            )
+            img = Image.open(BytesIO(base64.b64decode(b64.split(",", 1)[1])))
+            self.assertEqual(img.size, (100, 50))
+            r, g, b = img.getpixel((50, 25))
+            self.assertGreater(r, 200, "顶部锚定应截到顶部红色段")
+            self.assertLess(g, 80)
+
+    async def test_center_anchor_keeps_default_and_bake_key_differs(self) -> None:
+        import base64
+        import hashlib
+
+        from PIL import Image
+
+        from ArknightsUID.utils.gamedata.path_safety import cache_names_for_url
+        from ArknightsUID.utils.render import render_utils as ru
+
+        import ArknightsUID.utils.path as ark_path
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            ark_path, "BAKE_PATH", Path(tmp) / "bake"
+        ):
+            (Path(tmp) / "bake").mkdir()
+            url = "https://a.cdn.com/img/tall_cover2.png"
+            new_name, _ = cache_names_for_url(url)
+            local_path = Path(tmp) / new_name
+            local_path.write_bytes(self._tall_png())
+            b64 = await ru.get_image_b64_with_cache(
+                url, Path(tmp), quality=85, cover_size=(100, 50)
+            )
+            img = Image.open(BytesIO(base64.b64decode(b64.split(",", 1)[1])))
+            r, g, b = img.getpixel((50, 25))
+            self.assertGreater(g, 200, "默认居中应截到中部绿色段")
+            # 同图再取顶部锚定：锚点不同 → 烘焙缓存键不同，不互相串图
+            b64_top = await ru.get_image_b64_with_cache(
+                url, Path(tmp), quality=85, cover_size=(100, 50), anchor="top"
+            )
+            self.assertNotEqual(b64, b64_top)
+            path_hash = hashlib.md5(
+                str(local_path.resolve()).encode()
+            ).hexdigest()[:8]
+            baked = list((Path(tmp) / "bake").glob(f"{local_path.stem}_*"))
+            self.assertTrue(
+                any("_top" in p.name for p in baked), [p.name for p in baked]
+            )
+            self.assertTrue(
+                any(
+                    p.name == f"{local_path.stem}_{path_hash}_q85_100x50.webp"
+                    for p in baked
+                ),
+                [p.name for p in baked],
+            )

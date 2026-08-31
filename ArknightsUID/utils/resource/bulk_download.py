@@ -475,6 +475,7 @@ async def build_item_targets() -> list[ResourceTarget]:
 async def build_enemy_targets() -> list[ResourceTarget]:
     """PRTS 敌人头像全集（allimages 枚举）→ gamedata/item_icons。"""
     from ..gamedata.itemicon import ITEM_ICON_CACHE_DIR
+    from ..gamedata.path_safety import safe_url_basename
     from ..prts.client import all_image_titles, map_file_url
 
     titles = await all_image_titles("头像_敌人_")
