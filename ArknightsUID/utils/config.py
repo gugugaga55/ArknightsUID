@@ -66,6 +66,16 @@ CONFIG_DEFAULT: Dict[str, GSC] = {
         True,
     ),
 
+    # === 绑定/登录 ===
+    "AllowGroupScanLogin": GsBoolConfig(
+        "允许群聊扫码登录",
+        "开启后群内可使用 ark扫码登录：二维码直接发到群里，100 秒内"
+        "群里任何人扫码都会把【扫码者自己的账号】绑到发起人名下——"
+        "仅建议在熟人小群开启。每次命令实时读取，改完即时生效。"
+        "凭据输入类命令（ark绑定 <cred>）不受此开关影响，始终仅私聊可用。",
+        False,
+    ),
+
     # === 网络 ===
     "LocalProxyUrl": GsStrConfig(
         "本地代理地址",
