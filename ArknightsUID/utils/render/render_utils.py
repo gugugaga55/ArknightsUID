@@ -14,7 +14,7 @@ from gsuid_core.config import core_config, CONFIG_DEFAULT as CORE_CONFIG_DEFAULT
 from gsuid_core.app_life import app as fastapi_app
 from fastapi.staticfiles import StaticFiles
 
-from ..path import TEMPLATES_PATH, RESOURCE_PATH
+from ..path import TEMPLATES_PATH
 from ..config import ArkConfig, CONFIG_DEFAULT
 from ..http import get_client
 
@@ -341,20 +341,47 @@ async def _acquire_page():
                 break
 
         # Create shared context if needed
+        # 探测共享 context 是否已关闭：BrowserContext 的 impl 并没有
+        # _is_closed（那是 Page 的属性，playwright 1.58 实测），按它探测
+        # 恒抛 AttributeError 恒判"已关闭"——每次并发渲染都重建 context
+        # 且旧 context 永不 close，泄漏到浏览器回收点（审计 #39）。
+        # 这里按"第一个存在的布尔属性"判定（1.58 为 _closing_or_closed），
+        # 都不存在时按"未关闭"复用；真正的关闭态由下方 new_page 失败兜底。
         ctx_closed = _pool_ctx is None
         if not ctx_closed:
-            try:
-                ctx_closed = _pool_ctx._impl_obj._is_closed
-            except AttributeError:
-                ctx_closed = True
+            impl = getattr(_pool_ctx, "_impl_obj", None)
+            for attr in ("_closing_or_closed", "_is_closed"):
+                flag = getattr(impl, attr, None)
+                if isinstance(flag, bool):
+                    ctx_closed = flag
+                    break
         if ctx_closed:
+            if _pool_ctx is not None:
+                try:
+                    await _pool_ctx.close()
+                except Exception:
+                    pass
             _pool_ctx = await browser.new_context(
                 viewport={"width": 1200, "height": 1000},
                 # 截图物理分辨率 = CSS 尺寸 × 倍率（RenderScale，默认 2x 防手机端发糊）
                 device_scale_factor=_render_scale(),
             )
 
-    page = await _pool_ctx.new_page()
+    try:
+        page = await _pool_ctx.new_page()
+    except Exception:
+        # 属性探测失灵/竞态窗口里的已关 context：重建一次再试；仍失败
+        # 由 render_html 的外层兜底走文本降级
+        async with _pool_lock:
+            try:
+                await _pool_ctx.close()
+            except Exception:
+                pass
+            _pool_ctx = await browser.new_context(
+                viewport={"width": 1200, "height": 1000},
+                device_scale_factor=_render_scale(),
+            )
+        page = await _pool_ctx.new_page()
     _active_renders += 1
     return page, _pool_generation
 
@@ -484,7 +511,7 @@ async def render_html(ark_templates, template_name: str, context: dict) -> Optio
             logger.warning("[ARK·渲染] Playwright 未安装，无法渲染，将回退到 PIL 渲染（如有）")
             return None
 
-        logger.debug(f"[ARK·渲染] 使用本地 Playwright 渲染")
+        logger.debug("[ARK·渲染] 使用本地 Playwright 渲染")
 
         local_start_time = time.time()
         page, gen = None, -1
@@ -581,7 +608,6 @@ async def get_image_b64_with_cache(
         from ..image import pic_download_from_url
         from ..path import BAKE_PATH
         from PIL import Image
-        from io import BytesIO
 
         await pic_download_from_url(cache_path, url)
 
@@ -600,7 +626,15 @@ async def get_image_b64_with_cache(
             (cache_path / legacy_name).with_suffix(".webp"),
             cache_path / legacy_name,
         ]
-        local_path = next(p for p in candidates if p.exists())
+        local_path = next((p for p in candidates if p.exists()), None)
+        if local_path is None:
+            # pic_download_from_url 刚成功但候选全消失（与 cache_clean 的
+            # 删除并发，见审计 #39）：重试一次下载再找——直接放弃会把
+            # 好图当缺图，上游 itemicon/portrait 会落 1 小时负缓存
+            await pic_download_from_url(cache_path, url)
+            local_path = next((p for p in candidates if p.exists()), None)
+        if local_path is None:
+            return ""
 
         # 不压缩也不裁切，直接返回原图
         if quality is None and cover_size is None:
@@ -653,8 +687,16 @@ async def get_image_b64_with_cache(
             tmp_bake = bake_path.with_suffix(
                 f".{os.getpid()}.{threading.get_ident()}.webp.tmp"
             )
-            img.save(tmp_bake, 'WEBP', quality=quality or 80)
-            os.replace(tmp_bake, bake_path)
+            try:
+                img.save(tmp_bake, 'WEBP', quality=quality or 80)
+                os.replace(tmp_bake, bake_path)
+            except Exception:
+                # 失败清理 tmp（磁盘满/权限）：残档加剧磁盘紧张（审计 #39）
+                try:
+                    tmp_bake.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                raise
             with open(bake_path, "rb") as f:
                 return f.read()
 

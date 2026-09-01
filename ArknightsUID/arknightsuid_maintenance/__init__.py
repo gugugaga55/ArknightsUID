@@ -71,9 +71,9 @@ async def ark_cache_clean_on_startup() -> None:
 
 @maintenance_sv.on_fullmatch(("更新记录", "更新日志"), block=True)
 async def show_update_log(bot: Bot, ev: Event) -> None:
-    try:
-        from pathlib import Path
+    from pathlib import Path
 
+    try:
         plugin_dir = Path(__file__).resolve().parents[2]
         # 先确认插件目录自己就是 git 仓库根：插件以普通文件形式落在
         # core 检出里（无独立 .git）时，git 会向上命中 gsuid_core 的仓库，
@@ -111,7 +111,7 @@ async def show_update_log(bot: Bot, ev: Event) -> None:
     if proc.returncode != 0 or not stdout:
         return await _send_text(bot, ev, "更新记录获取失败（非 git 部署？）。")
     text = stdout.decode("utf-8", errors="replace").strip()
-    lines = [f"「明日方舟」ArknightsUID 最近更新："] + [
+    lines = ["「明日方舟」ArknightsUID 最近更新："] + [
         f"- {line.strip()}" for line in text.splitlines() if line.strip()
     ]
     await _send_text(bot, ev, "\n".join(lines))
@@ -127,16 +127,25 @@ async def delete_invalid_creds(bot: Bot, ev: Event) -> None:
     if not rows:
         return await _send_text(bot, ev, "没有标记为无效的本地登录。")
     uids = []
+    skipped = 0
     for row in rows:
         uid = (getattr(row, "uid", "") or "").strip()
-        if uid:
-            uids.append(uid)
+        if not uid:
+            # delete_by_user 的 uid="" 语义是"删该用户全部行"——空 uid
+            # 的异常行（手工改库等）绝不能喂进去，否则一条脏数据放大
+            # 成删光该用户所有账号（审计 #39）
+            skipped += 1
+            continue
+        uids.append(uid)
         await ArkUser.delete_by_user(
             getattr(row, "user_id", ""), getattr(row, "bot_id", ""), uid
         )
     shown = "、".join(hide_uid(u) for u in uids[:10])
     more = f" 等 {len(uids)} 个" if len(uids) > 10 else ""
-    await _send_text(bot, ev, f"已删除 {len(rows)} 条无效登录：{shown}{more}")
+    suffix = f"（跳过 {skipped} 条 uid 为空的异常行，请人工核查）" if skipped else ""
+    await _send_text(
+        bot, ev, f"已删除 {len(uids)} 条无效登录：{shown}{more}{suffix}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -145,8 +154,6 @@ async def delete_invalid_creds(bot: Bot, ev: Event) -> None:
 
 @refresh_sv.on_fullmatch(("刷新", "刷新数据", "更新数据"), block=True)
 async def refresh_gamedata_cache(bot: Bot, ev: Event) -> None:
-    from pathlib import Path
-
     try:
         from ArknightsUID.ArknightsUID.utils.path import CACHE_BASE
     except ModuleNotFoundError:

@@ -5,6 +5,7 @@ import re
 import time
 import unicodedata
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from jinja2.exceptions import TemplateNotFound
 
@@ -23,7 +24,6 @@ try:
         EnemyInfo,
         EnemyLevel,
         OperatorInfo,
-        OperatorSkill,
         SkillLevelDetail,
         StageInfo,
         WikiPageSummary,
@@ -42,11 +42,9 @@ try:
     )
 except ModuleNotFoundError:
     from ArknightsUID.utils.prts.client import (
-        ActivityInfo,
         EnemyInfo,
         EnemyLevel,
         OperatorInfo,
-        OperatorSkill,
         SkillLevelDetail,
         StageInfo,
         WikiPageSummary,
@@ -937,6 +935,29 @@ async def _build_enemy_context(enemy: EnemyInfo) -> dict:
 _ENEMY_FETCH_CONCURRENCY = 4
 
 
+async def _gather_b64(fetch, keys: list[str]) -> list[str]:
+    """并发受限批量取图 b64（信号量 4，同 _enrich_stage_enemies 口径）。
+
+    串行逐个 await 在冷缓存下是命令级卡顿（公招推荐最重 6×24=144 次，
+    见审计 #39）；单飞/负缓存在各 fetch 内部，这里只管并发上限与
+    失败降级（空串）。结果顺序与 keys 对齐。
+    """
+    if not keys:
+        return []
+    semaphore = asyncio.Semaphore(_ENEMY_FETCH_CONCURRENCY)
+
+    async def _one(key: str) -> str:
+        if not key:
+            return ""
+        async with semaphore:
+            try:
+                return await fetch(key)
+            except Exception:
+                return ""
+
+    return list(await asyncio.gather(*(_one(k) for k in keys)))
+
+
 async def _enemy_basic_stats(name: str) -> dict:
     """敌人名 → 一级基础数值 {hp, atk, defense, res}；查不到返回空 dict。
 
@@ -1152,13 +1173,25 @@ async def _get_stage_map_b64(code: str, name: str) -> str:
         if b64:
             return b64
     # 关卡级 nomap 标记：仅在 PRTS 明确无该文件（所有候选 URL 均 404）
-    # 时才写——fallback 解析失败（网络）不写，下轮重试
-    all_confirmed_missing = all(
-        _url_miss(map_file_url(title)).exists()
-        for title in map_candidate_titles(code, name)
-        if map_file_url(title)
-    )
-    if all_confirmed_missing:
+    # 时才写——fallback 解析失败（网络）不写，下轮重试。
+    # 判定输入必须校验标记新鲜度（审计 #39）：只查 exists() 会把
+    # "已过期待重查 + 本轮重查遇网络失败（非 404，标记未刷新）"的
+    # 候选也算"确认缺失"，一次网络抖动放大成关卡级 7 天无图。
+    def _confirmed_missing(url: str) -> bool:
+        marker = _url_miss(url)
+        try:
+            return marker.exists() and (
+                time.time() - marker.stat().st_mtime < _MAP_MISS_TTL
+            )
+        except OSError:
+            return False
+
+    candidate_urls = [
+        url for url in (
+            map_file_url(title) for title in map_candidate_titles(code, name)
+        ) if url
+    ]
+    if candidate_urls and all(_confirmed_missing(url) for url in candidate_urls):
         try:
             cache.mkdir(parents=True, exist_ok=True)
             miss.touch()
@@ -1177,11 +1210,14 @@ async def _build_stage_context(stage: StageInfo) -> dict:
         map_b64 = ""
 
     async def _drop_rows(names: list[str], limit: int = 8) -> list[dict]:
-        """掉落物名 → {name, icon}（PRTS 带框道具图标，失败空串降级）。"""
-        rows = []
-        for name in names[:limit]:
-            rows.append({"name": name, "icon": await item_icon_b64(name)})
-        return rows
+        """掉落物名 → {name, icon}（PRTS 带框道具图标；并发受限，
+        失败空串降级）。"""
+        picked = names[:limit]
+        icons = await _gather_b64(item_icon_b64, picked)
+        return [
+            {"name": name, "icon": icon}
+            for name, icon in zip(picked, icons, strict=True)
+        ]
 
     return {
         "title": title,
@@ -1213,7 +1249,7 @@ _RE_POT = re.compile(r"^(?:潜(\d)|满潜)$")
 _RE_SKILL = re.compile(r"^(?:技能([123])|([一二三])技能)$")
 _RE_MASTERY = re.compile(r"^专([123])$")
 _RE_SKILL_LV = re.compile(r"^([1-7])级$")
-_RE_MODULE_TYPE = re.compile(r"^([XYxyＸＹｘｙ])模组?$")
+_RE_MODULE_TYPE = re.compile(r"^([XYABDxyabdＸＹＡＢＤｘｙａｂｄ])模组?$")
 _RE_MODULE_LV = re.compile(r"^模组?([123])$")
 _CN_NUM = {"一": 1, "二": 2, "三": 3}
 
@@ -1647,22 +1683,41 @@ async def send_mastery_materials(bot: Bot, ev: Event) -> None:
     if not op or not op.skills or not any(s.mastery_costs for s in op.skills):
         return await _send_text(bot, ev, f"未找到干员专精材料：{query}")
     rarity = str(int(op.rarity) + 1) if op.rarity.isdigit() else op.rarity
+    # 材料图标先收集再并发受限拉取（3 技能 × 3 专精 × 若干材料串行下载
+    # 冷缓存会卡数十秒，审计 #39）
+    mastery_skills = [s for s in op.skills if s.mastery_costs]
+    item_names: list[str] = []
+    for s in mastery_skills:
+        for mc in s.mastery_costs:
+            for text in mc.materials:
+                name, _count = split_material_text(text)
+                if name:
+                    item_names.append(name)
+    item_icons = dict(
+        zip(item_names, await _gather_b64(item_icon_b64, item_names))
+    )
+    skill_icons = dict(
+        zip(
+            [s.name for s in mastery_skills],
+            await _gather_b64(
+                _skill_icon_b64, [s.name for s in mastery_skills]
+            ),
+        )
+    )
     skills_ctx = []
-    for s in op.skills:
-        if not s.mastery_costs:
-            continue
+    for s in mastery_skills:
         costs_ctx = []
         for mc in s.mastery_costs:
             mats = []
             for text in mc.materials:
                 name, count = split_material_text(text)
                 mats.append(
-                    {"name": name, "count": count, "icon": await item_icon_b64(name)}
+                    {"name": name, "count": count, "icon": item_icons.get(name, "")}
                 )
             costs_ctx.append({"mastery": mc.mastery, "materials": mats})
         skills_ctx.append({
             "name": s.name,
-            "icon": await _skill_icon_b64(s.name),
+            "icon": skill_icons.get(s.name, ""),
             "mastery_costs": costs_ctx,
         })
     context = {
@@ -1820,9 +1875,8 @@ async def send_recruit_recommend(bot: Bot, ev: Event) -> None:
     也支持不带标签、直接发公招界面截图：本地 rapidocr（可选依赖）识别
     标签后走同一套推荐逻辑；带文字参数时以文字为准（忽略截图）。
 
-    机制口径（PRTS 公开招募页实证）：资深干员=4★+、高级资深干员=5★+
-    （9 小时招募标签不划、必得 5★/6★ 档）；6★ 仅经高资标签追加，
-    具体名单为服务端数据，本工具不列 6★ 名单。
+    机制口径（与 utils/gamedata/recruit.py 的服务端数据一致）：
+    资深干员=5★、高级资深干员=6★（9 小时招募标签不划、必得档）。
     """
     raw = _clean_query(ev.text)
     image_sources = [
@@ -1876,14 +1930,24 @@ async def send_recruit_recommend(bot: Bot, ev: Event) -> None:
             "或用 ark公招 <标签> 查询单个组合。",
         )
 
+    # 头像仅取池内前 24 个控制渲染体量——池可到几十人，逐个头像会让
+    # 首次查询的下载量爆炸；并发受限拉取（串行时冷缓存最多 144 次逐个
+    # await，分钟级卡顿，审计 #39）
+    avatar_ids = [
+        str(entry.get("id", ""))
+        for combo in combos
+        for entry in combo["matches"][:_RECOMMEND_AVATAR_LIMIT]
+    ]
+    avatar_map = dict(
+        zip(avatar_ids, await _gather_b64(char_avatar_b64, avatar_ids), strict=True)
+    )
     rows = []
     for combo in combos:
         names = combo["match_names"]
-        # 全部干员列出（不截「等 N 人」）；头像仅取池内前 24 个控制渲染
-        # 体量——池可到几十人，逐个头像会让首次查询的下载量爆炸
-        avatars = []
-        for entry in combo["matches"][:_RECOMMEND_AVATAR_LIMIT]:
-            avatars.append(await char_avatar_b64(str(entry.get("id", ""))))
+        avatars = [
+            avatar_map[str(entry.get("id", ""))]
+            for entry in combo["matches"][:_RECOMMEND_AVATAR_LIMIT]
+        ]
         rows.append(
             {
                 "tags": " + ".join(combo["tags"]),
@@ -1952,6 +2016,10 @@ async def send_recruit_query(bot: Bot, ev: Event) -> None:
         lines.append(f"  ...共 {len(matched)} 名，已显示前 80")
     _append_source(lines, "https://prts.wiki/w/公开招募")
 
+    top_entries = matched[:12]
+    top_avatars = await _gather_b64(
+        char_avatar_b64, [str(entry.get("id", "")) for entry in top_entries]
+    )
     context = {
         "version": ArknightsUID_version,
         "tags": " + ".join(tags),
@@ -1962,9 +2030,9 @@ async def send_recruit_query(bot: Bot, ev: Event) -> None:
                 "name": entry["name"],
                 "profession": entry["profession"],
                 "tags": "/".join(entry["tags"][:3]) if entry["tags"] else "",
-                "avatar": await char_avatar_b64(str(entry.get("id", ""))),
+                "avatar": avatar,
             }
-            for entry in matched[:12]
+            for entry, avatar in zip(top_entries, top_avatars, strict=True)
         ],
         # 第 13 名起的完整名单（大池不再截断丢人头：资深 55/输出 56 人全展示）
         "rest": [
@@ -2051,6 +2119,15 @@ async def send_calendar(bot: Bot, ev: Event) -> None:
             logger.debug("[ArknightsUID] 日历横幅下载失败", exc_info=True)
             return ""
 
+    # 横幅并发受限拉取（活动 15 + 卡池 10 张串行下载冷缓存会卡住，
+    # 审计 #39）
+    activity_images = await _gather_b64(
+        _calendar_banner_b64,
+        [banner_urls.get(act.title, "") for act in activities],
+    )
+    pool_images = await _gather_b64(
+        _calendar_banner_b64, [pool.image_url for pool in pools]
+    )
     context = {
         "version": ArknightsUID_version,
         "now_str": now_str,
@@ -2063,19 +2140,17 @@ async def send_calendar(bot: Bot, ev: Event) -> None:
                 "remaining": _format_remaining(act.end_ts, now_ts),
                 "start": act.start,
                 "end": act.end,
-                "image": await _calendar_banner_b64(
-                    banner_urls.get(act.title, "")
-                ),
+                "image": image,
             }
-            for act in activities
+            for act, image in zip(activities, activity_images, strict=True)
         ],
         "pools": [
             {
                 "title": pool.title,
                 "remaining": _format_remaining(pool.end_ts, now_ts),
-                "image": await _calendar_banner_b64(pool.image_url),
+                "image": image,
             }
-            for pool in pools
+            for pool, image in zip(pools, pool_images, strict=True)
         ],
     }
     await _render_or_text(bot, ev, "ark_calendar.html", context, "\n".join(lines))

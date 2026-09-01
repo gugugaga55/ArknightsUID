@@ -30,6 +30,26 @@ from ._table_cache import (
 CHARINDEX_PATH = GAMEDATA_CACHE_DIR / "charindex.json"
 ITEMINDEX_PATH = GAMEDATA_CACHE_DIR / "itemindex.json"
 
+
+def _index_covers_sources(index_path, *sources) -> bool:
+    """派生索引是否不早于其源表（按写入时间）。
+
+    源表可能被其他入口旁路刷新（如 ark面板 走 ensure_char_table 重下
+    新版表）：旧索引存在、源表也"新鲜"，但内容已落后——只查源表 TTL
+    会继续复用旧索引，新干员/新物品最长 7 天查不到（审计 #39）。
+    """
+    try:
+        index_mtime = index_path.stat().st_mtime
+    except OSError:
+        return False
+    for source in sources:
+        try:
+            if index_mtime < source.stat().st_mtime:
+                return False
+        except OSError:
+            continue
+    return True
+
 # 内建社区别名（别名 → 中文名）。只收录广泛公认且无歧义的。
 CURATED_ALIASES: dict[str, str] = {
     "42": "史尔特尔",
@@ -72,7 +92,11 @@ def build_char_index(char_table: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 async def load_char_index() -> dict[str, dict[str, Any]]:
     """加载干员索引（精简缓存优先，TTL 同 character_table 7 天）。失败返回 {}。"""
-    if CHARINDEX_PATH.exists() and await _cache_fresh(CHAR_TABLE_PATH, CHAR_TABLE_TTL):
+    if (
+        CHARINDEX_PATH.exists()
+        and await _cache_fresh(CHAR_TABLE_PATH, CHAR_TABLE_TTL)
+        and _index_covers_sources(CHARINDEX_PATH, CHAR_TABLE_PATH)
+    ):
         cached = _read_sidecar(CHARINDEX_PATH)
         if isinstance(cached, dict) and cached:
             return cached
@@ -135,7 +159,11 @@ def build_item_index(item_table: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 async def load_item_index() -> dict[str, dict[str, Any]]:
     """加载物品索引（精简缓存优先，TTL 同 character_table）。失败返回 {}。"""
-    if ITEMINDEX_PATH.exists() and await _cache_fresh(ITEM_TABLE_PATH, CHAR_TABLE_TTL):
+    if (
+        ITEMINDEX_PATH.exists()
+        and await _cache_fresh(ITEM_TABLE_PATH, CHAR_TABLE_TTL)
+        and _index_covers_sources(ITEMINDEX_PATH, ITEM_TABLE_PATH)
+    ):
         cached = _read_sidecar(ITEMINDEX_PATH)
         if isinstance(cached, dict) and cached:
             return cached

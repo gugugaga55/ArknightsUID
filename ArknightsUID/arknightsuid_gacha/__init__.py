@@ -290,16 +290,28 @@ def _annual_report(records: list[dict], year: str) -> str | None:
     from collections import Counter
     from datetime import datetime
 
-    from ..utils.hypergryph.gacha import _legacy_one_based, _normalize_rarity
+    from ..utils.hypergryph.gacha import (
+        _legacy_one_based,
+        _normalize_rarity,
+        _safe_pos,
+        _safe_ts,
+    )
 
     _legacy = _legacy_one_based(records)
 
     def _year_of(ts: int) -> str:
-        return datetime.fromtimestamp(ts).strftime("%Y") if ts else ""
+        if not ts:
+            return ""
+        try:
+            # 脏数据时间戳可能超范围（毫秒误当秒等），fromtimestamp
+            # 会抛 Overflow/ValueError——按未知年份处理（审计 #39）
+            return datetime.fromtimestamp(ts).strftime("%Y")
+        except (OverflowError, OSError, ValueError):
+            return ""
 
     year_records = sorted(
-        [r for r in records if _year_of(int(r.get("gacha_ts") or 0)) == year],
-        key=lambda r: (r.get("gacha_ts", 0), r.get("pos", 0)),
+        [r for r in records if _year_of(_safe_ts(r)) == year],
+        key=lambda r: (_safe_ts(r), _safe_pos(r)),
     )
     if not year_records:
         return None
@@ -325,9 +337,9 @@ def _annual_report(records: list[dict], year: str) -> str | None:
                 worst_pity, worst_record = pity, record
             pity_by_cate[cate] = 0
 
+    # year_records 已按 _year_of 过滤（可解析该年），这里统一走 _safe_ts
     months = Counter(
-        datetime.fromtimestamp(int(r.get("gacha_ts") or 0)).month
-        for r in year_records
+        datetime.fromtimestamp(_safe_ts(r)).month for r in year_records
     )
     busiest = max(months.items(), key=lambda kv: kv[1])[0]
 
@@ -337,7 +349,7 @@ def _annual_report(records: list[dict], year: str) -> str | None:
         f"{six_count * 100 / total:.2f}%）",
         f"平均 {total / six_count:.1f} 抽一个六星" if six_count else "全年无六星……节哀",
         f"六星新干员：{len(new_chars)} 位"
-        + (f"（{'、'.join(str(r['name']) for r in new_chars[:8])}）"
+        + (f"（{'、'.join(str(r.get('name') or r.get('char_id') or '?') for r in new_chars[:8])}）"
            if new_chars else ""),
     ]
     if worst_record is not None:
@@ -487,25 +499,41 @@ def build_export_payload(
     """本地记录 → 自描述 JSON 存档（时间旧→新，字段名明确，含原始量纲）。"""
     from datetime import datetime, timezone
 
+    from ..utils.hypergryph.gacha import _safe_pos, _safe_ts
+
+    def _safe_int(raw: Any) -> int:
+        try:
+            return int(raw or 0)
+        except (TypeError, ValueError):
+            return 0
+
     ordered = sorted(
-        records, key=lambda r: (int(r.get("gacha_ts", 0)), int(r.get("pos", 0)))
+        records, key=lambda r: (_safe_ts(r), _safe_pos(r))
     )
     export_records = []
     for record in ordered:
-        ts = int(record.get("gacha_ts", 0))
+        ts = _safe_ts(record)
+        try:
+            time_text = (
+                datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(
+                    timespec="seconds"
+                )
+                if ts
+                else ""
+            )
+        except (OverflowError, OSError, ValueError):
+            time_text = ""
         export_records.append(
             {
-                "time": datetime.fromtimestamp(
-                    ts, tz=timezone.utc
-                ).isoformat(timespec="seconds") if ts else "",
+                "time": time_text,
                 "ts": ts,
                 "name": str(record.get("name") or ""),
                 "char_id": str(record.get("char_id") or ""),
-                "rarity": int(record.get("rarity", 0)),
+                "rarity": _safe_int(record.get("rarity")),
                 "is_new": bool(record.get("is_new")),
                 "pool": str(record.get("pool_name") or ""),
                 "category": str(record.get("category") or ""),
-                "pos": int(record.get("pos", 0)),
+                "pos": _safe_pos(record),
             }
         )
     return {

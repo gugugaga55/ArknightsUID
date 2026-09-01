@@ -216,17 +216,35 @@ def _save_image_sync(cache_dir: Path, url_last: str, content: bytes) -> None:
     PIL 打不开（非图片/损坏）时**拒绝落盘**（审计 #17）：captive portal /
     CDN 故障页是 HTTP 200 的 HTML/JSON——原样写成 .png 会成为永久坏缓存
     （存在即 skip、惰性加载也不会重下），相关卡片持续无图。
+
+    tmp + 原子替换（审计 #39）：直写最终路径时，惰性路径的并发读者
+    （_open_cached）会读到半写文件、误判坏档删掉正在写的文件（写者
+    随即把内容写进已 unlink 的 inode，返回 ok 但文件实际不存在）。
     """
+    import os
+    import threading
     from io import BytesIO
 
     raw_path = cache_dir / url_last
-    if raw_path.suffix.lower() == ".webp":
-        raw_path.write_bytes(content)
-        return
-    from PIL import Image
+    tmp_suffix = (
+        f".{os.getpid()}.{threading.get_ident()}"
+        f"{raw_path.suffix}.bulk.tmp"
+    )
+    tmp_path = raw_path.with_suffix(tmp_suffix)
+    try:
+        if raw_path.suffix.lower() == ".webp":
+            tmp_path.write_bytes(content)
+            os.replace(tmp_path, raw_path)
+            return
+        from PIL import Image
 
-    img = Image.open(BytesIO(content))
-    img.save(raw_path.with_suffix(".webp"), "WEBP", quality=85)
+        img = Image.open(BytesIO(content))
+        target = raw_path.with_suffix(".webp")
+        tmp_path = target.with_suffix(tmp_suffix)
+        img.save(tmp_path, "WEBP", quality=85)
+        os.replace(tmp_path, target)
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 _MISS_TTL = 7 * 86400  # .miss 负缓存有效期（与 wiki 地图口径一致）

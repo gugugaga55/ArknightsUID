@@ -11,7 +11,6 @@ from gsuid_core.sv import SV
 
 try:
     from ArknightsUID.ArknightsUID.utils.account_switch import (
-        clear_default_uid,
         get_default_uid,
         set_default_uid,
     )
@@ -42,7 +41,6 @@ try:
         build_daily_context,
         build_skin_context,
         build_status_context,
-        effective_ap,
         fetch_cached_player_info,
         format_training_remaining,
         parse_building,
@@ -56,7 +54,6 @@ try:
     from ArknightsUID.ArknightsUID.version import ArknightsUID_version
 except ModuleNotFoundError:
     from ArknightsUID.utils.account_switch import (
-        clear_default_uid,
         get_default_uid,
         set_default_uid,
     )
@@ -87,7 +84,6 @@ except ModuleNotFoundError:
         build_daily_context,
         build_skin_context,
         build_status_context,
-        effective_ap,
         fetch_cached_player_info,
         format_training_remaining,
         parse_building,
@@ -481,7 +477,7 @@ def _format_campaign(
     credential: ArkCredential, data: PlayerData, uid_display: str | None = None
 ) -> str:
     shown_uid = uid_display if uid_display is not None else hide_uid(credential.uid)
-    lines = [f"「明日方舟」剿灭作战", f"UID：{shown_uid}"]
+    lines = ["「明日方舟」剿灭作战", f"UID：{shown_uid}"]
     if data.campaign_total > 0:
         lines.append(f"本周合成玉：{data.campaign_current}/{data.campaign_total}")
     for zone, kills in sorted(

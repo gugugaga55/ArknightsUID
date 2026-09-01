@@ -202,6 +202,23 @@ CRED_WARN_STATE_PATH: Path = MAIN_PATH / "cred_warn_state.json"
 CRED_WARN_COOLDOWN_SECS = 7 * 86400
 
 
+class _CheckedSubscribe:
+    """订阅发送包装：把 gsuid_core send 的 -1 返回转成异常。
+
+    send 在 bot 离线（WS_BOT_ID 失效）时返回 -1 而不抛异常；各推送链
+    若直接当成功记账，"已推送"标志照常落盘，该周期永久漏发（审计 #39）。
+    统一经此包装走既有 except 失败路径（失败不落 notified / 冷却时间戳）。
+    """
+
+    def __init__(self, subscribe):
+        self._subscribe = subscribe
+
+    async def send(self, message):
+        sent = await self._subscribe.send(message)
+        if sent == -1:
+            raise RuntimeError("bot 会话不可用（send 返回 -1）")
+
+
 def _load_cred_warn_state() -> dict[str, dict]:
     try:
         state = json.loads(CRED_WARN_STATE_PATH.read_text(encoding="utf-8"))
@@ -238,7 +255,7 @@ async def maybe_warn_credential(subscribe, uid: str, error: str) -> None:
         "请重新 ark绑定 / ark扫码登录（私聊）；7 天内不重复提醒。"
     )
     try:
-        await subscribe.send(message)
+        await _CheckedSubscribe(subscribe).send(message)
         logger.info(
             f"[ArknightsUID·凭据预警] 已提醒 user={subscribe.user_id} "
             f"uid={hide_uid(uid)}"
@@ -454,7 +471,7 @@ async def check_sanity_push() -> None:
             )
             warned = new_warned
             try:
-                await subscribe.send(message)
+                await _CheckedSubscribe(subscribe).send(message)
                 notified = is_full
                 logger.info(
                     f"[ArknightsUID·理智推送] 已推送 user={subscribe.user_id} "
@@ -470,7 +487,7 @@ async def check_sanity_push() -> None:
             )
             notified = is_full
             try:
-                await subscribe.send(message)
+                await _CheckedSubscribe(subscribe).send(message)
                 warned = new_warned
                 logger.info(
                     f"[ArknightsUID·理智预警] 已推送 user={subscribe.user_id} "
@@ -795,7 +812,7 @@ async def check_training_push() -> None:
                 hide_uid(uid),
             )
             try:
-                await subscribe.send(message)
+                await _CheckedSubscribe(subscribe).send(message)
                 logger.info(
                     f"[ArknightsUID·训练推送] 已推送 user={subscribe.user_id} "
                     f"uid={hide_uid(uid)} trainee={building.training_trainee}"
@@ -817,7 +834,7 @@ async def check_training_push() -> None:
                 hide_uid(uid),
             )
             try:
-                await subscribe.send(message)
+                await _CheckedSubscribe(subscribe).send(message)
                 logger.info(
                     f"[ArknightsUID·训练预警] 已推送 user={subscribe.user_id} "
                     f"uid={hide_uid(uid)} remaining={remaining}s"
@@ -956,7 +973,7 @@ async def check_campaign_push() -> None:
                 f"还有 {remaining} 合成玉没拿，周末别忘了打剿灭！"
             )
             try:
-                await subscribe.send(message)
+                await _CheckedSubscribe(subscribe).send(message)
                 logger.info(
                     f"[ArknightsUID·剿灭提醒] 已推送 user={subscribe.user_id} "
                     f"uid={hide_uid(uid)} 剩余{remaining}"
@@ -966,10 +983,17 @@ async def check_campaign_push() -> None:
                     f"[ArknightsUID·剿灭提醒] 推送失败: {exc.__class__.__name__}"
                 )
                 continue  # 发送失败不落周标记：重启后的下次触发还能补发
-        # 无论是否需要提醒，本周已检查过就落标记（未拿满也只提醒一次）
-        state = load_push_state()
-        state[key] = {**state.get(key, {}), "campaign_week": week_key}
-        save_push_state(state)
+        # 无论是否需要提醒，本周已检查过就落标记（未拿满也只提醒一次）。
+        # 键级合并写：整文件覆盖会把轮询窗口内其他任务/进程刚写入的键
+        # （如理智推送的 notified）回滚（审计 #39）
+        # 显式绑定循环变量（B023）：闭包在本迭代内即被同步消费，
+        # 默认参绑定消除对晚绑定的依赖
+        def _merge_campaign(key=key, week_key=week_key) -> dict:
+            fresh = load_push_state()
+            fresh[key] = {**fresh.get(key, {}), "campaign_week": week_key}
+            return fresh
+
+        save_push_state({}, merge_from=_merge_campaign)
         await asyncio.sleep(random.uniform(1, 2))
 
 
@@ -1199,7 +1223,7 @@ async def check_building_push() -> None:
             )
             if labor_push:
                 try:
-                    await subscribe.send(format_labor_push_message(
+                    await _CheckedSubscribe(subscribe).send(format_labor_push_message(
                         nickname, building.labor_value, building.labor_max,
                         hide_uid(uid),
                     ))
@@ -1232,7 +1256,7 @@ async def check_building_push() -> None:
                     if room.stock_limit > 0 and room.stock_count >= room.stock_limit
                 ]
                 try:
-                    await subscribe.send(format_trading_push_message(
+                    await _CheckedSubscribe(subscribe).send(format_trading_push_message(
                         nickname, full_rows, hide_uid(uid),
                     ))
                     logger.info(
@@ -1251,7 +1275,7 @@ async def check_building_push() -> None:
             )
             if tired_push:
                 try:
-                    await subscribe.send(format_tired_push_message(
+                    await _CheckedSubscribe(subscribe).send(format_tired_push_message(
                         nickname,
                         [(c.name, c.room, c.morale) for c in building.tired_chars],
                         hide_uid(uid),
@@ -1278,7 +1302,7 @@ async def check_building_push() -> None:
         )
         if recruit_push:
             try:
-                await subscribe.send(format_recruit_push_message(
+                await _CheckedSubscribe(subscribe).send(format_recruit_push_message(
                     nickname, len(fresh_done), hide_uid(uid),
                 ))
                 logger.info(
@@ -1498,7 +1522,7 @@ async def check_sign_push() -> None:
                 credential.nickname, hide_uid(uid), outcome, message
             )
             try:
-                await subscribe.send(push)
+                await _CheckedSubscribe(subscribe).send(push)
                 logger.info(
                     f"[ArknightsUID·签到推送] {outcome} user={subscribe.user_id} "
                     f"uid={hide_uid(uid)}"

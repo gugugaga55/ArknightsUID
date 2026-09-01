@@ -63,7 +63,7 @@ class ReplyNoLeakTest(unittest.TestCase):
         raw_uid = "100000012345"
         text = _format_bind_success([{"nickname": "博士", "role_id": raw_uid}])
         self.assertNotIn(raw_uid, text)
-        self.assertIn("100***345", text)
+        self.assertIn("10***45", text)
 
     def test_push_message_uses_masked_uid(self) -> None:
         from ArknightsUID.arknightsuid_notify import format_push_message
@@ -72,7 +72,7 @@ class ReplyNoLeakTest(unittest.TestCase):
         raw_uid = "100000012345"
         text = format_push_message("博士", 130, hide_uid(raw_uid))
         self.assertNotIn(raw_uid, text)
-        self.assertIn("100***345", text)
+        self.assertIn("10***45", text)
 
 
 class StoreRoleValidationTest(unittest.IsolatedAsyncioTestCase):

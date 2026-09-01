@@ -18,9 +18,9 @@ from __future__ import annotations
 
 from typing import List, Optional
 
-from sqlmodel import Field, SQLModel, select, col
+from sqlmodel import Field, SQLModel, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import Index, UniqueConstraint, or_, update
+from sqlalchemy import Index, UniqueConstraint, update
 from sqlalchemy.exc import IntegrityError
 
 from gsuid_core.logger import logger
@@ -318,12 +318,18 @@ class ArkBind(Bind, table=True):
         user_id: str,
         bot_id: str,
     ) -> Optional[str]:
-        """取该用户绑定的第一个明日方舟 UID。"""
+        """取该用户绑定的第一个明日方舟 UID。
+
+        基类 insert_uid 把多 uid 用 "_" 拼进同一行：直接返回整串会
+        得到 "123_456" 这样的拼接值（审计 #39潜伏雷），拆回首段。
+        """
         result = await session.execute(
             select(cls).where(cls.user_id == user_id, cls.bot_id == bot_id)
         )
         data = result.scalars().all()
-        return data[0].uid if data and data[0].uid else None
+        if not data or not data[0].uid:
+            return None
+        return str(data[0].uid).split("_", 1)[0] or None
 
 
 class ArkAlias(SQLModel, table=True):

@@ -185,6 +185,43 @@ class ModuleTest(unittest.TestCase):
         self.assertIs(find_module(choices, "Y"), choices[0])  # 无 Y 回退第一个
         self.assertIs(find_module(choices, "X"), choices[0])
 
+    def test_module_types_a_b_d_not_mislabeled_x(self) -> None:
+        """审计 #39：A（特限证章）/D/B 型模组不得被 else-"X" 误标。
+
+        真实数据受害干员：Logos 只有 D 模组（查 X模 会拿 D 模组数值）、
+        Radian 有 A+B 两个模组（此前都被标 X，第二个永远选不到）。
+        """
+        uniequip = {
+            "equipDict": {
+                "uniequip_002_logos": {"charId": "logos", "typeIcon": "ccr-d",
+                                       "uniEquipName": "来自河谷的笔盒"},
+                "uniequip_003_logos": {"charId": "logos", "typeIcon": "ccr-y",
+                                       "uniEquipName": "Y模组"},
+                "uniequip_002_radian": {"charId": "radian", "typeIcon": "so-a",
+                                        "uniEquipName": "新起点"},
+                "uniequip_003_radian": {"charId": "radian", "typeIcon": "so-b",
+                                        "uniEquipName": "第二模组"},
+                "uniequip_001_upper": {"charId": "upper", "typeIcon": "WAH-Y",
+                                       "uniEquipName": "大写Y"},
+            },
+            "charEquip": {
+                "logos": ["uniequip_002_logos", "uniequip_003_logos"],
+                "radian": ["uniequip_002_radian", "uniequip_003_radian"],
+                "upper": ["uniequip_001_upper"],
+            },
+        }
+        logos = module_choices("logos", uniequip)
+        radian = module_choices("radian", uniequip)
+        self.assertEqual([m["type"] for m in logos], ["D", "Y"])
+        self.assertEqual([m["type"] for m in radian], ["A", "B"])
+        # 大写 Y 仍归 Y
+        self.assertEqual(module_choices("upper", uniequip)[0]["type"], "Y")
+        # 无 X 时回退第一个（既有契约），但类型标注如实
+        self.assertIs(find_module(logos, "X"), logos[0])
+        # D/B 可显式选中
+        self.assertIs(find_module(logos, "D"), logos[0])
+        self.assertIs(find_module(radian, "B"), radian[1])
+
 
 if __name__ == "__main__":
     unittest.main()

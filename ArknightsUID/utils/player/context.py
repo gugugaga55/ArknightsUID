@@ -408,7 +408,7 @@ async def build_building_context(
 
     manufactures = [
         {
-            "label": f"制造站" if i == 1 else f"制造站{i}",
+            "label": "制造站" if i == 1 else f"制造站{i}",
             "level": room.level,
             "formula": (
                 f"{_item_name(room.item_id)}×{room.item_count}"
@@ -424,7 +424,7 @@ async def build_building_context(
     ]
     tradings = [
         {
-            "label": f"贸易站" if i == 1 else f"贸易站{i}",
+            "label": "贸易站" if i == 1 else f"贸易站{i}",
             "level": room.level,
             "strategy": TRADING_STRATEGY_NAMES.get(
                 room.strategy, room.strategy or "未知"

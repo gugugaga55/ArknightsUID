@@ -102,8 +102,8 @@ class EnduidAdapterTest(unittest.IsolatedAsyncioTestCase):
 
     def test_hide_uid_masks_by_length(self) -> None:
         self.assertEqual(enduid_adapter.hide_uid("1234"), "1234")
-        self.assertEqual(enduid_adapter.hide_uid("12345678"), "12***78")
-        self.assertEqual(enduid_adapter.hide_uid("123456789"), "123***789")
+        self.assertEqual(enduid_adapter.hide_uid("12345678"), "1***8")
+        self.assertEqual(enduid_adapter.hide_uid("123456789"), "12***89")
 
     def test_split_uid_list_deduplicates_preserving_order(self) -> None:
         result = enduid_adapter._split_uid_list(" 11111 _22222_11111__33333 ")
@@ -201,7 +201,7 @@ class EnduidAdapterTest(unittest.IsolatedAsyncioTestCase):
 
         self.assertIsInstance(exact, enduid_adapter.ArkCredential)
         self.assertEqual(exact.uid, "222222222")
-        self.assertEqual(missing, "未找到 UID 333***333 的可用凭据。")
+        self.assertEqual(missing, "未找到 UID 33***33 的可用凭据。")
         self.assertNotIn("333333333", missing)
 
     async def test_resolve_credential_reports_only_bound_uid_without_raw_uid(self) -> None:
@@ -212,7 +212,7 @@ class EnduidAdapterTest(unittest.IsolatedAsyncioTestCase):
         result = await enduid_adapter.resolve_credential("user", "bot")
 
         self.assertIsInstance(result, str)
-        self.assertIn("123***789", result)
+        self.assertIn("12***89", result)
         self.assertNotIn("123456789", result)
         self.assertIn("没有找到对应的 EndUID 凭据记录", result)
 

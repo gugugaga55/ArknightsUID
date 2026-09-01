@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import math
 import time
-from pathlib import Path
 from typing import Any
 
 from gsuid_core.logger import logger
@@ -155,7 +154,7 @@ def format_stage_board(
         for record in rows:
             lines.append(
                 f"  {record.get('stageCode', '?')} {record.get('zoneName', '')} "
-                f"spm {float(record.get('spm') or 0):.2f} · {record.get('apCost', '?')} 理智"
+                f"spm {_num(record.get('spm')):.2f} · {record.get('apCost', '?')} 理智"
             )
     if not has_any:
         lines.append("未获取到有效关卡数据。")
@@ -211,8 +210,8 @@ def latest_matrix_by_item(
         if not isinstance(record, dict):
             continue
         key = (str(record.get("itemId", "")), str(record.get("stageId", "")))
-        if key not in best or float(record.get("end") or 0) > float(
-            best[key].get("end") or 0
+        if key not in best or _num(record.get("end")) > _num(
+            best[key].get("end")
         ):
             best[key] = record
     by_item: dict[str, list[dict[str, Any]]] = {}
@@ -235,15 +234,22 @@ def item_drop_stats(
     """
     rows: list[dict[str, Any]] = []
     for record in matrix_by_item.get(item_id, []):
-        times = float(record.get("times") or 0)
-        quantity = float(record.get("quantity") or 0)
+        # 全程 _num：裸 float() 会因 "N/A"/null 等异常形态炸整条命令
+        # （同文件 _num 的注释口径，审计 #39）
+        times = _num(record.get("times"))
+        quantity = _num(record.get("quantity"))
         if times < min_times or quantity <= 0:
             continue
         meta = stage_meta.get(str(record.get("stageId", "")))
         if not meta:
             continue
         rate = quantity / times
-        ap_cost = float(meta.get("apCost") or 0)
+        ap_cost = _num(meta.get("apCost"))
+        # apCost 缺失/为 0（活动关等）：期望理智无意义，不入推荐——
+        # 否则 ap_expect=0 会被 best_stage_cost 当"零理智最优"选中，
+        # 得出"直刷更省"的荒谬结论（审计 #39）
+        if ap_cost <= 0:
+            continue
         rows.append(
             {
                 "stage_code": str(meta.get("stageCode", "?")),
@@ -251,7 +257,7 @@ def item_drop_stats(
                 "stage_type": str(meta.get("stageType", "")),
                 "rate": rate,
                 "times": int(times),
-                "ap_expect": (ap_cost / rate) if rate > 0 else 0.0,
+                "ap_expect": ap_cost / rate if rate > 0 else 0.0,
                 "ap_cost": ap_cost,
             }
         )

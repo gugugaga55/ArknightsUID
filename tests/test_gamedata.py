@@ -199,6 +199,32 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class IndexFreshnessTest(unittest.TestCase):
+    """审计 #39：源表被旁路刷新后，派生索引必须重建（不再只看源表 TTL）。"""
+
+    def test_index_older_than_source_is_stale(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        from ArknightsUID.utils.gamedata.charinfo import _index_covers_sources
+
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "character_table.json"
+            idx = Path(tmp) / "charindex.json"
+            src.write_text("{}")
+            idx.write_text("{}")
+            # 同刻写入：os.utime 显式错开
+            import os as _os
+            _os.utime(src, (100, 100))
+            _os.utime(idx, (200, 200))
+            self.assertTrue(_index_covers_sources(idx, src))
+            # 源表后刷新（旁路重下）→ 索引视为过期
+            _os.utime(src, (300, 300))
+            self.assertFalse(_index_covers_sources(idx, src))
+            # 索引不存在 → 过期
+            self.assertFalse(_index_covers_sources(Path(tmp) / "nope", src))
+
+
 class DiskCacheConcurrentWriteTest(unittest.IsolatedAsyncioTestCase):
     """同路径并发 cache_write：tmp 名必须唯一，不得互相覆盖半成品。"""
 

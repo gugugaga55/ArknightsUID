@@ -134,6 +134,34 @@ class MapNegativeCacheTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(list(cache_dir.glob("*.miss")), [])
         self.assertEqual(list(cache_dir.glob("nomap_*")), [])
 
+    async def test_stale_marker_plus_network_failure_writes_no_stage_nomap(self) -> None:
+        """审计 #39：标记过期后重查遇网络失败（非 404）不得写关卡级 nomap。
+
+        旧版 all_confirmed_missing 只查 exists()：过期的 .miss + 网络抖动
+        （未刷新标记）也会被判"确认缺失"，一次抖动放大成 7 天无图。
+        """
+        import os
+        import time as _time
+
+        with tempfile.TemporaryDirectory() as tmp:
+            # 第一轮全 404：per-URL 标记 + 关卡级 nomap 均写入
+            await self._run({}, tmp)
+            cache_dir = Path(tmp) / "wiki" / "map"
+            nomaps = list(cache_dir.glob("nomap_*"))
+            self.assertTrue(nomaps)
+            # 全部标记回拨到 8 天前（TTL=7 天外，进入"待重查"状态）
+            stale = _time.time() - 8 * 86400
+            for marker in list(cache_dir.glob("*.miss")) + nomaps:
+                os.utime(marker, (stale, stale))
+            # 第二轮网络失败：标记不会被刷新，也不能当"确认缺失"
+            await self._run({"media.prts.wiki": (0, None)}, tmp)
+            for marker in cache_dir.glob("nomap_*"):
+                self.assertLess(
+                    marker.stat().st_mtime,
+                    _time.time() - 86400,
+                    "网络失败不得刷新/新写关卡级 nomap 标记",
+                )
+
     async def test_confirmed_404_writes_url_markers_only(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             result = await self._run({}, tmp)  # 全部 404
@@ -157,6 +185,7 @@ class ImageSingleFlightTest(unittest.IsolatedAsyncioTestCase):
         async def fake_download(url, path, name, tag=None, **kwargs):
             calls["n"] += 1
             (Path(path) / name).write_bytes(_png_bytes(), )
+            return 200
 
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
             "gsuid_core.utils.download_resource.download_file.download",
@@ -337,6 +366,7 @@ class CacheKeyUrlHashTest(unittest.IsolatedAsyncioTestCase):
 
         async def fake_download(url, path, name, sess=None, tag=None, **kw):
             (Path(path) / name).write_bytes(downloads[url])
+            return 200
 
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
             "gsuid_core.utils.download_resource.download_file.download",
@@ -421,6 +451,7 @@ class LazyCacheSelfHealTest(unittest.IsolatedAsyncioTestCase):
         async def fake_download(url, path, name, sess=None, tag=None, **kw):
             calls["n"] += 1
             (Path(path) / name).write_bytes(_png_bytes())
+            return 200
 
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
             "gsuid_core.utils.download_resource.download_file.download",
@@ -454,6 +485,22 @@ class LazyCacheSelfHealTest(unittest.IsolatedAsyncioTestCase):
                 p for p in Path(tmp).iterdir() if not p.name.endswith(".tmp")
             ]
             self.assertEqual(leftovers, [], f"毒药文件应被清理: {leftovers}")
+
+    async def test_http_failure_raises_and_writes_nothing(self) -> None:
+        """审计 #39：download 失败（非 200/None）显式抛错——旧版静默返回
+        后 Image.open 才 FileNotFoundError；且最终路径上不留任何文件。"""
+        import ArknightsUID.utils.image as img_mod
+
+        async def fake_download(url, path, name, sess=None, tag=None, **kw):
+            return 403  # 真实 download 失败时返回非 200 且不写文件
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch(
+            "gsuid_core.utils.download_resource.download_file.download",
+            new=fake_download,
+        ):
+            with self.assertRaises(FileNotFoundError):
+                await img_mod.pic_download_from_url(Path(tmp), "https://x/deny.png")
+            self.assertEqual(list(Path(tmp).iterdir()), [])
 
 
 class BakeCacheIntegrityTest(unittest.IsolatedAsyncioTestCase):

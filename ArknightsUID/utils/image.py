@@ -72,6 +72,7 @@ async def pic_download_from_url(
 
         存在即信任的读法会让一张坏缓存（旧版本直写半文件/磁盘坏块）
         把对应卡片永久卡成无图——PIL 打不开即判损坏，删掉自愈。
+        （同步函数，经 asyncio.to_thread 调用——解码不在事件循环上跑）
         """
         for existing in _candidates():
             if not existing.exists():
@@ -88,13 +89,13 @@ async def pic_download_from_url(
                     pass
         return None
 
-    cached = _open_cached()
+    cached = await asyncio.to_thread(_open_cached)
     if cached is not None:
         return cached
 
     async with await _path_lock(_path):
         # 锁内复查：等锁期间其他协程可能已完成下载/修复
-        cached = _open_cached()
+        cached = await asyncio.to_thread(_open_cached)
         if cached is not None:
             return cached
 
@@ -103,12 +104,31 @@ async def pic_download_from_url(
         from .http import get_client
         from gsuid_core.utils.download_resource.download_file import download
 
-        await download(
-            pic_url, path, new_name, sess=await get_client(), tag="[Ark]"
+        # 先落 tmp 再原子替换（审计 #39）：download 直写最终路径时，
+        # 锁外预检的并发读者会读到半写文件、误判坏档删掉正在写的文件
+        # （写者随即 FileNotFoundError）。原子替换后读者要么看不到、
+        # 要么看到完整文件。失败时显式抛错——download 失败只返回
+        # 非 200/None，静默会让下游拿着不存在的文件当下载成功
+        tmp_name = (
+            f".{new_name}.{os.getpid()}.{threading.get_ident()}.download.tmp"
         )
+        tmp_download = path / tmp_name
+        retcode = await download(
+            pic_url, path, tmp_name, sess=await get_client(), tag="[Ark]"
+        )
+        try:
+            if retcode != 200 or not tmp_download.exists():
+                raise FileNotFoundError(
+                    f"下载失败 HTTP {retcode}: {pic_url[:80]}"
+                )
+            os.replace(tmp_download, _path)
+        finally:
+            tmp_download.unlink(missing_ok=True)
 
         try:
-            img = Image.open(_path).convert("RGBA")
+            img = await asyncio.to_thread(
+                lambda: Image.open(_path).convert("RGBA")
+            )
         except Exception as e:
             # 刚下载的文件打不开（CDN 错误页/半截响应）：删掉毒药文件，
             # 否则下次调用在候选里命中它、永远失败
@@ -118,16 +138,24 @@ async def pic_download_from_url(
 
         # 原文件已经是 webp 则跳过转换
         if _path != webp_path:
+            tmp_webp = _path.with_suffix(
+                f".{os.getpid()}.{threading.get_ident()}.webp.tmp"
+            )
             try:
-                # 唯一 tmp + 原子替换：并发读者不会拿到半写的 webp
-                tmp_path = _path.with_suffix(
-                    f".{os.getpid()}.{threading.get_ident()}.webp.tmp"
+                # 唯一 tmp + 原子替换：并发读者不会拿到半写的 webp；
+                # 编码下放线程，不在事件循环上跑
+                await asyncio.to_thread(
+                    img.save, tmp_webp, "WEBP", quality=85
                 )
-                img.save(tmp_path, "WEBP", quality=85)
-                os.replace(tmp_path, webp_path)
+                os.replace(tmp_webp, webp_path)
                 _path.unlink(missing_ok=True)
                 logger.debug(f"[ARK·图像] 已将图片转为webp: {webp_path.name}")
             except Exception as e:
+                # 失败也要清掉 tmp：磁盘紧张时残档只会加剧紧张
+                try:
+                    tmp_webp.unlink(missing_ok=True)
+                except OSError:
+                    pass
                 logger.warning(f"[ARK·图像] 转换webp失败: {e}")
 
     return img

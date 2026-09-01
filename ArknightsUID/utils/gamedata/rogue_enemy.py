@@ -626,7 +626,6 @@ def stage_panel_rows(
             count = "波次"
         else:
             count = f"{lo}-{hi}"
-        elite_lo = int(item.get("elite_min_count") or 0)
         elite_hi = int(item.get("elite_max_count") or 0)
         extra_note = ""
         if elite_hi > hi:

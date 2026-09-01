@@ -17,7 +17,6 @@ import inspect
 import math
 import os
 import random
-import time
 
 from gsuid_core.aps import scheduler
 from gsuid_core.bot import Bot
@@ -89,6 +88,9 @@ ANN_TASK_NAME = "订阅方舟公告"
 _ANN_STATE_PATH: Path = MAIN_PATH / "ann_push_state.json"
 # 公告推送单轮上限：超过的留下轮增量推（与活动合并推送同款防刷屏）
 _ANN_PUSH_LIMIT = 5
+# 公告检测窗口：拉取比单轮上限更宽的列表——两次轮询间新发超过窗口数时，
+# 最老的会被新条目顶出窗口且分页拉不到，静默漏推（审计 #39）。
+_ANN_FETCH_LIMIT = 30
 
 
 def _activity_key(kind: str, title: str) -> str:
@@ -102,10 +104,16 @@ _push_state_lock = asyncio.Lock()
 
 
 def _session_key(subscribe) -> str:
-    """订阅会话标识：群聊按群、私聊按用户。"""
+    """订阅会话标识：群聊按群、私聊按用户。
+
+    私聊必须用 user_id：session 模式订阅不写 uid（恒 None），
+    按 uid 拼键会让所有私聊订阅者共用 "direct:None"，首个用户投递
+    成功后其余私聊订阅者对该公告永久跳过（审计 #39）。
+    """
     if getattr(subscribe, "group_id", None):
         return f"group:{subscribe.group_id}"
-    return f"direct:{getattr(subscribe, 'uid', '')}"
+    user_id = str(getattr(subscribe, "user_id", "") or "")
+    return f"direct:{user_id or getattr(subscribe, 'uid', '') or 'unknown'}"
 
 
 async def _deliver_per_session(
@@ -136,7 +144,16 @@ async def _deliver_per_session(
             built = build_message(pending)
             if inspect.isawaitable(built):
                 built = await built
-            await subscribe.send(built)
+            sent = await subscribe.send(built)
+            if sent == -1:
+                # gsuid_core 的 send 在 bot 离线时返回 -1 而不抛异常：
+                # 按失败记账（不记 delivered），否则该会话这批条目
+                # 被标记已投递后永久漏推（审计 #39）
+                logger.warning(
+                    f"[ArknightsUID·{log_tag}] 推送失败 session={session}: "
+                    "bot 会话不可用（send 返回 -1）"
+                )
+                continue
             any_sent = True
             for key in pending:
                 delivered.setdefault(key, []).append(session)
@@ -180,6 +197,23 @@ def _merge_seen_state(current_state: dict, incoming: dict) -> dict:
                     seen_set.add(str(key))
                     seen_list.append(key)
             merged["seen"] = seen_list
+        # delivered 只对"未晋升 seen"的条目有意义；已见键的进度是死数据。
+        # 并集合并无法表达删除——调用方"清掉 done 键进度"的意图会被磁盘
+        # 态复活，状态文件只增不减（审计 #39）。这里按最终 seen 集合过滤，
+        # 既让删除生效，也天然约束 delivered 只保留在途条目。
+        seen_keys = {str(key) for key in (merged.get("seen") or [])}
+        merged_delivered = merged.get("delivered")
+        if isinstance(merged_delivered, dict):
+            merged_delivered = {
+                str(k): v
+                for k, v in merged_delivered.items()
+                if str(k) not in seen_keys and isinstance(v, list)
+            }
+            if len(merged_delivered) > _STATE_LIMIT:
+                merged_delivered = dict(
+                    list(merged_delivered.items())[-_STATE_LIMIT:]
+                )
+            merged["delivered"] = merged_delivered
     return merged
 
 
@@ -1040,7 +1074,7 @@ async def subscribe_ark_announcements(bot: Bot, ev: Event) -> None:
     # 首次订阅建基线：存量公告不当新公告轰炸（已有基线则不动）
     if not _load_ann_state().get("seen"):
         try:
-            current = await get_ark_ann_list(limit=10)
+            current = await get_ark_ann_list(limit=_ANN_FETCH_LIMIT)
         except Exception as exc:
             logger.warning(
                 f"[ArknightsUID·公告推送] 基线拉取失败: {exc.__class__.__name__}"
@@ -1074,19 +1108,29 @@ async def subscribe_ark_announcements(bot: Bot, ev: Event) -> None:
 )
 async def unsubscribe_ark_announcements(bot: Bot, ev: Event) -> None:
     data = await gs_subscribe.get_subscribe(ANN_TASK_NAME) or []
-    # session 模式：群聊按 group_id 定位本群订阅，私聊按 user_id
+    # session 模式：群聊按 group_id 定位本群订阅；私聊只匹配"私聊行"
+    # （group_id 为空的行）。不能按 user_id 匹配——群订阅行的 user_id 存
+    # 的是发起人，私聊按 user_id 匹配/删除会连带删掉该用户创建的群订阅，
+    # 整群推送静默消失（审计 #39）。
+    if ev.group_id:
+        mine = [s for s in data if s.group_id == ev.group_id]
+        if not mine:
+            return await _send_text(bot, ev, "未曾订阅官方公告。")
+        await gs_subscribe.delete_subscribe("session", ANN_TASK_NAME, ev)
+        return await _send_text(bot, ev, "已取消官方公告推送。")
+
     mine = [
-        subscribe
-        for subscribe in data
-        if (
-            ev.group_id and subscribe.group_id == ev.group_id
-        ) or (
-            not ev.group_id and subscribe.user_id == ev.user_id
-        )
+        s for s in data
+        if not getattr(s, "group_id", None) and s.user_id == ev.user_id
     ]
     if not mine:
         return await _send_text(bot, ev, "未曾订阅官方公告。")
-    await gs_subscribe.delete_subscribe("session", ANN_TASK_NAME, ev)
+    # delete_subscribe 私聊分支按 user_id 整删，无法区分私聊行与该用户
+    # 创建的群订阅行——按行 id 精确删（ Subscribe.delete_row 支持任意列过滤）
+    from gsuid_core.utils.database.models import Subscribe
+
+    for row in mine:
+        await Subscribe.delete_row(id=row.id)
     await _send_text(bot, ev, "已取消官方公告推送。")
 
 
@@ -1110,7 +1154,7 @@ async def collect_current_entries() -> dict[str, list[dict[str, str]]]:
     except Exception as exc:
         logger.warning(f"[ArknightsUID·推送] 卡池拉取失败: {exc.__class__.__name__}")
     try:
-        for ann in await get_ark_ann_list(limit=10):
+        for ann in await get_ark_ann_list(limit=_ANN_FETCH_LIMIT):
             if ann.get("id"):
                 key = _activity_key("公告", ann["id"])
                 entries.setdefault(key, []).append(
@@ -1152,7 +1196,7 @@ def _push_enabled() -> bool:
 async def _push_new_announcements(datas) -> None:
     """公告专项订阅：新公告 → 逐订阅推送（独立 seen 基线，与活动订阅互不影响）。"""
     try:
-        anns = await get_ark_ann_list(limit=10)
+        anns = await get_ark_ann_list(limit=_ANN_FETCH_LIMIT)
     except Exception as exc:
         logger.warning(
             f"[ArknightsUID·公告推送] 公告拉取失败: {exc.__class__.__name__}"

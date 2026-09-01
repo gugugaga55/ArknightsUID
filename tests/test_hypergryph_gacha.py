@@ -489,6 +489,80 @@ class SyncIntegrityTest(unittest.IsolatedAsyncioTestCase):
         # 无锁时两协程基于同一份空本地日志各写各的，先写者被覆盖
         self.assertEqual(names, {"并发1", "并发2"}, f"并发同步丢记录: {names}")
 
+    async def test_fuse_exhaustion_continues_next_round(self) -> None:
+        """审计 #39：保险丝（50 页）耗尽不再被当"完整"——段内无断层的
+        记录像常入库并留续拉游标；下轮从游标继续翻到底后清除游标。
+        旧版把耗尽当完整落盘，断层以下历史永久拉不到且无警告。"""
+        base_ts = 1_700_000_000
+        total = (gacha_svc._MAX_PAGES + 2) * 2  # 52 页 × 2 条
+        items = [
+            _raw((base_ts - i) * 1000, i % 90 + 1, f"干员{i:03d}", 3 + i % 3)
+            for i in range(total)
+        ]
+        pages_data = [
+            {"list": items[i : i + 2], "hasMore": True}
+            for i in range(0, total, 2)
+        ]
+        pages_data[-1]["hasMore"] = False
+        # 游标（上页末条 ts）→ 下一页索引
+        next_by_cursor = {
+            gacha_svc._norm_ts(page["list"][-1]["gachaTs"]): i + 1
+            for i, page in enumerate(pages_data)
+        }
+
+        async def fake_cate(credential: Any, auth: Any) -> list[dict[str, Any]]:
+            return [{"id": 1, "name": "限定寻访"}]
+
+        async def fake_page(
+            credential: Any, auth: Any, category: str,
+            gacha_ts: int | None = None, pos: int | None = None,
+        ) -> Any:
+            idx = 0 if gacha_ts is None else next_by_cursor.get(
+                gacha_ts, len(pages_data)
+            )
+            if idx >= len(pages_data):
+                return {"list": [], "hasMore": False}
+            return pages_data[idx]
+
+        hg.get_gacha_categories = fake_cate  # type: ignore[assignment]
+        hg.get_gacha_history_page = fake_page  # type: ignore[assignment]
+
+        # 第一轮：50 页保险丝耗尽，records（100 条）入库 + 游标落盘 + 警告
+        records, warning = await gacha_svc.sync_gacha_logs(_cred())
+        self.assertEqual(len(records), gacha_svc._MAX_PAGES * 2)
+        self.assertIn("补拉", warning)
+        floors = await gacha_svc._load_sync_floors("123456789")
+        self.assertIn("1", floors, "保险丝耗尽必须留下续拉游标")
+
+        # 第二轮：增量段快速衔接 + 补拉段从游标翻到底 → 全量 104 条、
+        # 游标清除、无警告
+        records, warning = await gacha_svc.sync_gacha_logs(_cred())
+        self.assertEqual(len(records), total)
+        self.assertEqual(warning, "")
+        floors = await gacha_svc._load_sync_floors("123456789")
+        self.assertEqual(floors, {}, "翻到底后游标应清除")
+
+    async def test_dirty_timestamps_do_not_crash_commands(self) -> None:
+        """审计 #39：本地日志字段级脏数据（null/"abc"）不得拖垮排序/统计。"""
+        dirty = [
+            {"category": "1", "gacha_ts": None, "pos": None, "rarity": 5,
+             "name": "坏时间"},
+            {"category": "1", "gacha_ts": "abc", "pos": "x", "rarity": 3,
+             "name": "坏字符串"},
+        ]
+        await gacha_svc.save_local_logs("123456789", dirty)
+
+        def pages():
+            return {
+                "list": [_raw(1700000200000, 2, "新六", 5)],
+                "hasMore": False,
+            }
+
+        self._patch(pages)
+        records, warning = await gacha_svc.sync_gacha_logs(_cred())
+        names = {r["name"] for r in records}
+        self.assertEqual(names, {"坏时间", "坏字符串", "新六"})
+
     def test_mixed_basis_rarity_normalized_per_record(self) -> None:
         """审计 #13：0 基与 1 基记录混存时六星逐条判定。"""
         records = [
