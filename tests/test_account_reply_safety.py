@@ -70,8 +70,8 @@ class AccountReplySafetyTest(unittest.TestCase):
 
         self.assertIn("Rhodes", reply)
         self.assertIn("Expired", reply)
-        self.assertIn("123***789", reply)
-        self.assertIn("987***321", reply)
+        self.assertIn("12***89", reply)
+        self.assertIn("98***21", reply)
         self.assertIn("可用", reply)
         self.assertIn("凭据失效/缺失", reply)
         self.assertNotIn("123456789", reply)
@@ -82,7 +82,7 @@ class AccountReplySafetyTest(unittest.TestCase):
         reply = _format_accounts(["123456789"], [])
 
         self.assertIn("已找到 UID", reply)
-        self.assertIn("123***789", reply)
+        self.assertIn("12***89", reply)
         self.assertNotIn("123456789", reply)
         assert_reply_safe(self, reply)
 
@@ -118,7 +118,7 @@ class AccountReplySafetyTest(unittest.TestCase):
         )
 
         self.assertIn("「明日方舟」Amiya", reply)
-        self.assertIn("UID：123***789", reply)
+        self.assertIn("UID：12***89", reply)
         self.assertIn("等级：120", reply)
         self.assertIn("主线进度：14-21", reply)
         self.assertIn("理智：42/135", reply)
@@ -162,7 +162,7 @@ class AccountReplySafetyTest(unittest.TestCase):
         )
 
         self.assertIn("「明日方舟」FallbackDoctor", reply)
-        self.assertIn("UID：123***789", reply)
+        self.assertIn("UID：12***89", reply)
         self.assertIn("森空岛请求成功，但当前版本尚未识别详细字段。", reply)
         self.assertNotIn("123456789", reply)
         assert_reply_safe(self, reply)
@@ -174,9 +174,9 @@ class AccountReplySafetyTest(unittest.TestCase):
         failure = _format_attendance(account, {"code": 10001, "msg": "今日已签到"})
         missing = _format_attendance(account, {"code": 10002})
 
-        self.assertEqual(success, "「明日方舟」签到请求成功\nUID：123***789\n签到完成")
-        self.assertEqual(failure, "「明日方舟」签到失败\nUID：123***789\ncode=10001，message=今日已签到")
-        self.assertEqual(missing, "「明日方舟」签到失败\nUID：123***789\ncode=10002，message=无")
+        self.assertEqual(success, "「明日方舟」签到请求成功\nUID：12***89\n签到完成")
+        self.assertEqual(failure, "「明日方舟」签到失败\nUID：12***89\ncode=10001，message=今日已签到")
+        self.assertEqual(missing, "「明日方舟」签到失败\nUID：12***89\ncode=10002，message=无")
         for reply in (success, failure, missing):
             self.assertNotIn("123456789", reply)
             assert_reply_safe(self, reply)
@@ -265,6 +265,32 @@ class AccountReplySafetyTest(unittest.TestCase):
             "password",
             "passwd",
             "secret",
+        ):
+            self.assertNotIn(leaked, redacted)
+        self.assertIn("正常文本保留", redacted)
+        assert_reply_safe(self, redacted)
+
+    def test_safe_external_message_redacts_json_quoted_keys_and_fullwidth_separators(self) -> None:
+        # 审计 #38：字段名与分隔符之间隔一个闭合引号（JSON 键值
+        # '"token": "xxx"'）或分隔符为全角（：＝）时，赋值分支此前整条
+        # 不匹配、兜底只换字段名导致值原文泄漏。
+        raw = (
+            "上游异常 "
+            '"token": "SECRET_JSON" '
+            '{"cred":"SECRET_JSON_COMPACT"} '
+            '"data":{"hg_token":"SECRET_NESTED"} '
+            "skland_user_id：SECRET_FULLWIDTH_COLON "
+            "password＝SECRET_FULLWIDTH_EQ "
+            "正常文本保留"
+        )
+        redacted = _safe_external_message(raw)
+
+        for leaked in (
+            "SECRET_JSON",
+            "SECRET_JSON_COMPACT",
+            "SECRET_NESTED",
+            "SECRET_FULLWIDTH_COLON",
+            "SECRET_FULLWIDTH_EQ",
         ):
             self.assertNotIn(leaked, redacted)
         self.assertIn("正常文本保留", redacted)

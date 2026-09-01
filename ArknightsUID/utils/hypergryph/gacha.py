@@ -35,6 +35,43 @@ _KEEP_LIMIT = 20000
 PITY_DISPLAY_MAX = 80
 
 _LOGS_NAME = "gacha_logs.json"
+# 历史补拉游标状态（保险丝中断处，按类别记下一页起点）
+_SYNC_STATE_NAME = "gacha_sync_state.json"
+
+
+def _sync_state_path(uid: str) -> Path:
+    # 挂在 _logs_path 同目录：测试替换 _logs_path 时状态文件随之隔离
+    return _logs_path(uid).parent / _SYNC_STATE_NAME
+
+
+async def _load_sync_floors(uid: str) -> dict[str, dict[str, Any]]:
+    """读取每类别的续拉游标；空/坏文件按无游标处理（读路径不抛）。"""
+    data = await read_player_json(_sync_state_path(uid))
+    floors = data.get("floors") if isinstance(data, dict) else None
+    if not isinstance(floors, dict):
+        return {}
+    return {
+        str(cate): cursor
+        for cate, cursor in floors.items()
+        if isinstance(cursor, dict) and _norm_ts(cursor.get("ts")) > 0
+    }
+
+
+async def _save_sync_floors(uid: str, floors: dict[str, dict[str, Any]]) -> None:
+    if not floors:
+        # 全部翻到底：清掉状态文件，不留空壳
+        try:
+            _sync_state_path(uid).unlink(missing_ok=True)
+        except OSError:
+            pass
+        return
+    try:
+        await write_player_json(_sync_state_path(uid), {"floors": floors})
+    except Exception as exc:
+        logger.warning(
+            f"[ArknightsUID·抽卡] 补拉游标写入失败 uid={uid}: "
+            f"{exc.__class__.__name__}"
+        )
 
 # 同 UID 同步 single-flight（审计 #11）：两个同步任务并发读同一份旧日志、
 # 各自拉取合并写回，后写者会覆盖先写者新增的记录且检查点已推进、永久丢失
@@ -62,6 +99,24 @@ def _norm_ts(raw: Any) -> int:
     except (TypeError, ValueError):
         return 0
     return value // 1000 if value > 10**12 else value
+
+
+def _safe_ts(record: dict[str, Any]) -> int:
+    """记录时间戳（秒）：脏数据（null/"N/A"/超范围）按 0，绝不抛异常。
+
+    审计 #39：本地日志的威胁模型含手工编辑/半损坏写盘（见 load_local_logs），
+    此前排序键 `-r.get("gacha_ts", 0)` 在键存在但值为 null 时得 -None，
+    一条脏记录就把抽卡记录/年度报告整条命令拖垮且无从自救。
+    """
+    return _norm_ts(record.get("gacha_ts") or 0)
+
+
+def _safe_pos(record: dict[str, Any]) -> int:
+    """记录位次：脏数据按 0（口径同 _safe_ts）。"""
+    try:
+        return int(record.get("pos") or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _record_key(record: dict[str, Any]) -> tuple:
@@ -134,7 +189,7 @@ def merge_records(
     for record in incoming:
         merged[_record_key(record)] = record
     result = sorted(
-        merged.values(), key=lambda r: (-r.get("gacha_ts", 0), -r.get("pos", 0))
+        merged.values(), key=lambda r: (-_safe_ts(r), -_safe_pos(r))
     )
     return result[:_KEEP_LIMIT]
 
@@ -199,45 +254,44 @@ async def _sync_gacha_logs_locked(
         return [], "抽卡接口请求失败。"
 
     local = await load_local_logs(credential.uid)
+    floors = await _load_sync_floors(credential.uid)
 
-    async def fetch_category(
+    async def _page_category(
         category: str,
-    ) -> tuple[list[dict[str, Any]], bool]:
-        """单类别增量翻页 → (记录, 是否完整)。
+        start: dict[str, Any] | None,
+        stop_below_ts: int,
+    ) -> tuple[str, list[dict[str, Any]], dict[str, Any] | None]:
+        """单段翻页 → (结局, 记录, 续拉游标)。
 
-        停止阈值取**本类别**的本地最新时间戳——若拿全类别最大值当
-        阈值，某类目会被另一类目的更新记录过早截断（单周期新增超过
-        一页 100 条时，第二页起的新增记录永久丢失且不自愈）。
-
-        完整性（审计 #12）：只有"翻到底（hasMore=false）"或"触到本地
-        检查点"才算完整；中途失败（请求失败/空页/游标失效）返回
-        incomplete，调用方整批丢弃——保存部分结果会把检查点推进到
-        断层位置，失败页的历史从此永久拉不到。
+        结局：
+        - "done"    翻到底（hasMore=false / 空页）
+        - "overlap" 已翻到比 stop_below_ts 更旧的记录（与本地检查点衔接）
+        - "cursor"  游标失效（末条无时间戳）：保留前缀（旧版契约）
+        - "fused"   保险丝（_MAX_PAGES）耗尽：段内无断层但历史没翻完
+        - "failed"  中途请求失败：调用方整批丢弃（审计 #12）
         """
-        local_max_ts = max(
-            (r.get("gacha_ts", 0) for r in local if r.get("category") == category),
-            default=0,
-        )
         records: list[dict[str, Any]] = []
-        gacha_ts: int | None = None
-        pos: int | None = None
+        gacha_ts: int | None = _norm_ts(start.get("ts")) if start else None
+        if gacha_ts is None or gacha_ts <= 0:
+            gacha_ts = None
+        pos = start.get("pos") if start else None
         for _ in range(_MAX_PAGES):
             page = await get_gacha_history_page(
                 credential, auth, category, gacha_ts=gacha_ts, pos=pos
             )
             if page is None:
-                return records, False  # 中途请求失败：不完整
+                return "failed", records, None
             items = page.get("list") or []
             if not items:
-                break
+                return "done", records, None
             stop = False
             for raw in items:
                 if not isinstance(raw, dict):
                     continue
                 record = _normalize_record(raw, category)
                 records.append(record)
-                # 已翻到比本地最新更旧的记录 → 后面全是旧的，停止
-                if local_max_ts and record["gacha_ts"] < local_max_ts:
+                # 已翻到比停止线更旧的记录 → 后面全是已同步的旧数据
+                if stop_below_ts and record["gacha_ts"] < stop_below_ts:
                     stop = True
             last = items[-1] if isinstance(items[-1], dict) else {}
             next_ts = _norm_ts(last.get("gachaTs"))
@@ -246,12 +300,62 @@ async def _sync_gacha_logs_locked(
                 # 问题、重试无益——已拉前缀连续有效，保留（与旧版行为
                 # 一致，见 test_backend_fixes 的游标失效契约）；缺失的
                 # 旧页无论保不保留都翻不到
-                return records, True
+                return "cursor", records, None
             gacha_ts = next_ts
             pos = last.get("pos")
-            if stop or not page.get("hasMore"):
-                break
-        return records, True
+            if stop:
+                return "overlap", records, None
+            if not page.get("hasMore"):
+                return "done", records, None
+        return "fused", records, {"ts": gacha_ts, "pos": pos}
+
+    async def fetch_category(
+        category: str,
+    ) -> tuple[list[dict[str, Any]], bool, dict[str, Any] | None]:
+        """单类别同步 → (记录, 是否完整入批, 续拉游标)。
+
+        停止阈值取**本类别**的本地最新时间戳——若拿全类别最大值当
+        阈值，某类目会被另一类目的更新记录过早截断（单周期新增超过
+        一页 100 条时，第二页起的新增记录永久丢失且不自愈）。
+
+        审计 #39：保险丝（50 页）耗尽不再当"完整"。旧版把耗尽当完整
+        落盘，检查点推进后断层以下的历史永久拉不到且无警告。现在
+        中断处留**续拉游标**（下一页起点），段内记录从最新/上次游标
+        连续翻下来、无内部断层，照常并入；下轮从游标继续补拉，
+        翻到底自动清除游标。
+        """
+        local_max_ts = max(
+            (_safe_ts(r) for r in local if r.get("category") == category),
+            default=0,
+        )
+        floor = floors.get(category)
+
+        outcome, records, cursor = await _page_category(
+            category, None, local_max_ts
+        )
+        if outcome == "failed":
+            return [], False, floor  # 增量段失败：本类整批丢弃，游标不动
+        complete = True
+        if outcome == "fused":
+            if floor is not None:
+                # 单轮新增超 5000 且没衔接到旧游标（中间可能有未拉
+                # 断层）：保守丢弃，下轮重试；新抽记录晚一轮并入
+                return [], False, floor
+            # 首轮即超量：记录从最新连续下来，无断层，入批并留游标
+            return records, True, cursor
+
+        if floor is not None:
+            # 补拉段：从游标继续往旧翻（无停止线，只认 hasMore/保险丝）
+            outcome_b, records_b, cursor_b = await _page_category(
+                category, floor, 0
+            )
+            if outcome_b != "failed":
+                records = records + records_b
+                floor = cursor_b if outcome_b == "fused" else None
+                # 补拉失败（failed）：增量段照常并入，游标不动，下轮再补
+        else:
+            floor = None
+        return records, complete, floor
 
     category_ids = [
         str(cate.get("id") or "") for cate in categories if cate.get("id")
@@ -260,18 +364,23 @@ async def _sync_gacha_logs_locked(
     # 不完整类目整批丢弃（审计 #12），完整类目照常合并
     incoming: list[dict[str, Any]] = []
     incomplete: list[str] = []
-    for category, (records, complete) in zip(
+    new_floors: dict[str, dict[str, Any]] = dict(floors)
+    for category, (records, complete, floor) in zip(
         category_ids,
         await asyncio.gather(
             *(fetch_category(category) for category in category_ids)
         ),
     ):
-        if complete:
-            incoming.extend(records)
-        else:
+        if not complete:
             # 首页就失败（records 为空）同样算未并入——统计静默变旧
             # 比报一声"中断"更误导用户
             incomplete.append(category)
+            continue
+        incoming.extend(records)
+        if floor is None:
+            new_floors.pop(category, None)
+        else:
+            new_floors[category] = floor
 
     if not incoming and not local:
         if incomplete:
@@ -290,11 +399,18 @@ async def _sync_gacha_logs_locked(
 
     merged = merge_records(local, incoming)
     await save_local_logs(credential.uid, merged)
+    await _save_sync_floors(credential.uid, new_floors)
     warning = ""
     if incomplete:
         warning = (
             f"部分卡池（{'、'.join(incomplete)}）拉取中断，本次未并入，"
             "下轮自动补齐；统计可能不是最新。"
+        )
+    elif new_floors:
+        backfilling = "、".join(sorted(new_floors))
+        warning = (
+            f"卡池（{backfilling}）历史记录较多，正在分批补拉"
+            f"（每轮最多 {_MAX_PAGES} 页），期间统计不含最早期记录。"
         )
     return merged, warning
 
@@ -315,7 +431,7 @@ def analyze_gacha(records: list[dict[str, Any]]) -> dict[str, Any]:
 
     # 按时间旧→新，按类别计数：六星的垫刀数 = 同类别内上一个六星之后的抽数
     ordered = sorted(
-        records, key=lambda r: (r.get("gacha_ts", 0), r.get("pos", 0))
+        records, key=lambda r: (_safe_ts(r), _safe_pos(r))
     )
     pulls_in_cate: dict[str, int] = {}
     last_six_in_cate: dict[str, int] = {}
@@ -332,7 +448,7 @@ def analyze_gacha(records: list[dict[str, Any]]) -> dict[str, Any]:
             "name": r.get("name") or r.get("char_id", "?"),
             "pool": (r.get("pool_name") or "")[:10] or "—",
             "pull": pull,
-            "ts": r.get("gacha_ts", 0),
+            "ts": _safe_ts(r),
             "category": str(r.get("category", "")),
         }
         for r, pull in reversed(pull_of_six[-6:])
@@ -377,7 +493,7 @@ def format_gacha_text(
     name: str, uid_masked: str, records: list[dict[str, Any]], warning: str
 ) -> str:
     stats = analyze_gacha(records)
-    lines = [f"「明日方舟」抽卡统计", f"UID：{uid_masked}"]
+    lines = ["「明日方舟」抽卡统计", f"UID：{uid_masked}"]
     if not stats:
         lines.append("暂无抽卡记录。")
     else:

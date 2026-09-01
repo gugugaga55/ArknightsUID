@@ -27,7 +27,7 @@ class HideUidSemanticsTest(unittest.TestCase):
         with mock.patch.object(
             enduid_adapter.ArkConfig, "get_config", return_value=_cfg(True)
         ):
-            self.assertEqual(enduid_adapter.hide_uid("123456789"), "123***789")
+            self.assertEqual(enduid_adapter.hide_uid("123456789"), "12***89")
         with mock.patch.object(
             enduid_adapter.ArkConfig, "get_config", return_value=_cfg(False)
         ):
@@ -38,7 +38,7 @@ class HideUidSemanticsTest(unittest.TestCase):
             enduid_adapter.ArkConfig, "get_config", return_value=_cfg(False)
         ):
             self.assertEqual(
-                enduid_adapter.hide_uid("123456789", user_pref="on"), "123***789"
+                enduid_adapter.hide_uid("123456789", user_pref="on"), "12***89"
             )
         with mock.patch.object(
             enduid_adapter.ArkConfig, "get_config", return_value=_cfg(True)
@@ -53,7 +53,7 @@ class HideUidSemanticsTest(unittest.TestCase):
             "get_config",
             side_effect=RuntimeError("boom"),
         ):
-            self.assertEqual(enduid_adapter.hide_uid("123456789"), "123***789")
+            self.assertEqual(enduid_adapter.hide_uid("123456789"), "12***89")
 
 
 class HideUidPrefLookupTest(unittest.IsolatedAsyncioTestCase):

@@ -12,7 +12,7 @@ from gsuid_core.models import Event
 from gsuid_core.sv import SV
 
 try:
-    from ArknightsUID.ArknightsUID.utils.arg_utils import extract_index, extract_uid
+    from ArknightsUID.ArknightsUID.utils.arg_utils import extract_uid
     from ArknightsUID.ArknightsUID.utils.card import send_card_or_text
     from ArknightsUID.ArknightsUID.utils.cultivate import calculate_cultivation
     from ArknightsUID.ArknightsUID.utils.enduid.adapter import (
@@ -28,7 +28,7 @@ try:
     from ArknightsUID.ArknightsUID.utils.player.context import char_portrait_b64
     from ArknightsUID.ArknightsUID.version import ArknightsUID_version
 except ModuleNotFoundError:
-    from ArknightsUID.utils.arg_utils import extract_index, extract_uid
+    from ArknightsUID.utils.arg_utils import extract_uid
     from ArknightsUID.utils.card import send_card_or_text
     from ArknightsUID.utils.cultivate import calculate_cultivation
     from ArknightsUID.utils.enduid.adapter import (
@@ -161,11 +161,7 @@ async def show_cultivation_plan(bot: Bot, ev: Event) -> None:
     uid = extract_uid(text)
     if uid:
         text = text.replace(uid, "", 1).strip()
-    index = extract_index(text)
-    if index:
-        import re as _re
-
-        text = _re.sub(r"\s(?:第)?\d{1,2}(?:号)?\s*$", "", text).strip()
+    text, index = _split_index(text)
 
     names = _split_plan_names(text)
     if not names:
@@ -245,11 +241,7 @@ async def show_cultivation(bot: Bot, ev: Event) -> None:
     uid = extract_uid(query)
     if uid:
         query = query.replace(uid, "", 1).strip()
-    index = extract_index(query)
-    if index:
-        import re as _re
-
-        query = _re.sub(r"\s(?:第)?\d{1,2}(?:号)?\s*$", "", query).strip()
+    query, index = _split_index(query)
 
     if not query:
         return await _send_text(
@@ -297,6 +289,24 @@ async def show_cultivation(bot: Bot, ev: Event) -> None:
 # ---------------------------------------------------------------------------
 
 _PLAN_MAX_CHARS = 6
+
+# 尾部账号序号：带「第/号」标记，或一位数字（1-9）。两位裸数字
+# （如 42=史尔特尔，帮助文案明示支持）在干员语境里是数字别名，
+# 不当序号——否则 resolve_credential(index=N) 必然报"未找到第 N
+# 个账号"（审计 #39）。要多位序号请用「第 N / N号」显式标记。
+_TRAILING_INDEX_RE = re.compile(r"\s(第?\d{1,2}号?)\s*$")
+
+
+def _split_index(text: str) -> tuple[str, int]:
+    """拆出尾部账号序号 → (剩余文本, 序号)；无序号返回 (原文, 0)。"""
+    match = _TRAILING_INDEX_RE.search(text or "")
+    if not match:
+        return text, 0
+    token = match.group(1)
+    num = token.replace("第", "").replace("号", "")
+    if len(num) > 1 and "第" not in token and "号" not in token:
+        return text, 0
+    return text[: match.start()].strip(), int(num)
 
 
 def _split_plan_names(text: str) -> list[str]:

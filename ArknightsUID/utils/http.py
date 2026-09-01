@@ -241,7 +241,13 @@ async def assert_public_http_url(url: str) -> str:
     注意解析与实际连接之间存在 DNS 重绑定 TOCTOU 窗口，由调用方
     （safe_download_bytes）的"逐跳校验 + 禁自动重定向"收窄。
     """
-    parts = urlsplit(url)
+    try:
+        parts = urlsplit(url)
+    except ValueError as exc:
+        # urlsplit 对 authority 含裸 [ ] 等畸形 URL 抛裸 ValueError
+        # （如 http://[evil.com]/x.png）。转成 UnsafeUrlError，让
+        # "校验失败返回 None 不抛"的契约对所有调用方成立（审计 #39）
+        raise UnsafeUrlError(f"malformed url: {exc}") from exc
     if parts.scheme not in ("http", "https"):
         raise UnsafeUrlError(f"scheme not allowed: {parts.scheme!r}")
     host = parts.hostname or ""
@@ -250,13 +256,13 @@ async def assert_public_http_url(url: str) -> str:
     try:
         infos = await asyncio.to_thread(socket.getaddrinfo, host, None)
     except OSError as exc:
-        raise UnsafeUrlError(f"DNS resolve failed: {exc.__class__.__name__}")
+        raise UnsafeUrlError(f"DNS resolve failed: {exc.__class__.__name__}") from exc
     for info in infos:
         addr = info[4][0]
         try:
             ip = ipaddress.ip_address(addr.split("%")[0])
         except ValueError:
-            raise UnsafeUrlError(f"unparseable address: {addr!r}")
+            raise UnsafeUrlError(f"unparseable address: {addr!r}") from None
         # is_global 不含多播/保留段的判定（224.0.0.1 等 is_global=True），显式拒绝
         if (
             not ip.is_global

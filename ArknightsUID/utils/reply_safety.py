@@ -19,8 +19,12 @@ _sensitive_fields = (
 # 成立导致整条漏脱敏。这里要求字段名两侧不是 ASCII 字母数字/下划线，
 # 汉字与标点都视为合法边界。
 _FIELD_EDGE = r"(?<![A-Za-z0-9_])(?:{})(?![A-Za-z0-9_])"
+# 赋值分隔符：字段名与分隔符之间允许一个闭合引号（JSON 键值
+# `"token": "xxx"` 中间隔着 '"'，否则赋值分支整条不匹配、值原样泄漏）；
+# 分隔符同时覆盖全角冒号/等号（中文报错消息常用）。
+_ASSIGN_SEP = r"\s*['\"]?\s*[:：=＝]\s*"
 _SENSITIVE_ASSIGNMENT_RE = re.compile(
-    rf"(?i){_FIELD_EDGE.format(_sensitive_fields)}\s*[:=]\s*"
+    rf"(?i)['\"]?{_FIELD_EDGE.format(_sensitive_fields)}{_ASSIGN_SEP}"
     rf"(?:\"[^\"]*\"|'[^']*'|[^,，;；\s]+)"
 )
 _SENSITIVE_FIELD_RE = re.compile(rf"(?i){_FIELD_EDGE.format(_sensitive_fields)}")

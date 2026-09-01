@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from gsuid_core.logger import logger
@@ -29,6 +30,22 @@ async def list_local_accounts(user_id: str, bot_id: str) -> list[ArkUser]:
     """读取该用户在自有表里的全部明日方舟（game_id==1）账号。"""
     users = await ArkUser.select_data_list(user_id=user_id, bot_id=bot_id) or []
     return [u for u in users if (u.game_id or 1) == 1]
+
+
+# ArkBind.insert_uid 是"查列表 → 拼接 → 整行覆盖"的非原子读改写：
+# 同一用户并发两次登录（扫码轮询期间又发 ark绑定）会互相整行覆盖、
+# 丢 uid（审计 #39）。按 (bot_id, user_id) 串行化绑定写入。
+_bind_locks: dict[tuple[str, str], asyncio.Lock] = {}
+_bind_locks_guard = asyncio.Lock()
+
+
+async def _bind_write_lock(bot_id: str, user_id: str) -> asyncio.Lock:
+    async with _bind_locks_guard:
+        lock = _bind_locks.get((bot_id, user_id))
+        if lock is None:
+            lock = asyncio.Lock()
+            _bind_locks[(bot_id, user_id)] = lock
+        return lock
 
 
 async def persist_ark_login(
@@ -101,8 +118,12 @@ async def persist_ark_login(
                 "中止本轮保存（已写入的 role 保留，凭据未落库的账号请重试登录）"
             )
             return None, "登录信息保存失败（数据库写入异常），请稍后重试。"
-        # insert_uid 自动去重（多 uid 用 _ 拼接），重复绑返回 -2 无害
-        await ArkBind.insert_uid(user_id, bot_id, role["role_id"], group_id=group_id)
+        # insert_uid 自动去重（多 uid 用 _ 拼接），重复绑返回 -2 无害；
+        # 与并发登录/退订互斥，防整行覆盖丢 uid
+        async with await _bind_write_lock(bot_id, user_id):
+            await ArkBind.insert_uid(
+                user_id, bot_id, role["role_id"], group_id=group_id
+            )
     logger.info(
         f"[ArknightsUID·绑定] 用户 {user_id} 写入 {len(valid_roles)} 个方舟角色"
     )
@@ -124,13 +145,24 @@ async def remove_ark_login(user_id: str, bot_id: str, uid: str = "") -> int:
             )
             deleted = 0
         if deleted:
-            await ArkBind.delete_uid(user_id, bot_id, uid)
+            async with await _bind_write_lock(bot_id, user_id):
+                await ArkBind.delete_uid(user_id, bot_id, uid)
             return 1
         return 0
 
     users = await list_local_accounts(user_id, bot_id)
-    for u in users:
-        if u.uid:
-            await ArkBind.delete_uid(user_id, bot_id, u.uid)
+    async with await _bind_write_lock(bot_id, user_id):
+        for u in users:
+            if u.uid:
+                await ArkBind.delete_uid(user_id, bot_id, u.uid)
     count = await ArkUser.delete_by_user(user_id, bot_id)
+    # 与 uid 分支同口径：DB 三次重试耗尽时 delete_by_user 隐式返回
+    # None，按 0 处理并落 error——否则用户会看到"已删除 None 个"的
+    # 误导性成功文案（审计 #39）
+    if count is None:
+        logger.error(
+            f"[ArknightsUID·绑定] 删除登录时数据库不可用 user={user_id}: "
+            "删除未确认完成"
+        )
+        count = 0
     return count

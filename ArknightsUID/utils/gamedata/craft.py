@@ -15,7 +15,6 @@ from __future__ import annotations
 
 from typing import Any
 
-from .charinfo import load_item_index
 from ._table_cache import ensure_building_table
 
 # 防御：配方环（数据异常时兜底）

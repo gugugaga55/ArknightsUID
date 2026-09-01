@@ -69,8 +69,12 @@ def hide_uid(uid: str, user_pref: str = "") -> str:
     if len(uid_str) <= 4:
         return uid_str
     if len(uid_str) <= 8:
-        return f"{uid_str[:2]}***{uid_str[-2:]}"
-    return f"{uid_str[:3]}***{uid_str[-3:]}"
+        # 5-8 位只露首尾各 1 位：旧的"首2+尾2"对 5 位 UID 只遮 1 位，
+        # 10 个候选即可复原（审计 #39）
+        return f"{uid_str[:1]}***{uid_str[-1:]}"
+    # 主流方舟 UID 9-10 位：首尾各 2 位（旧口径暴露 6/10 位，配合
+    # 昵称/区服可枚举复原）
+    return f"{uid_str[:2]}***{uid_str[-2:]}"
 
 
 async def get_hide_uid_pref(uid: str, user_id: str, bot_id: str) -> str:

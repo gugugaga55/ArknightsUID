@@ -29,9 +29,12 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from ..dict_utils import path
+
+if TYPE_CHECKING:
+    from .parse import PlayerData
 
 # 满心情哨兵/换算（见模块头注释）
 MORALE_FULL_AP = 8640000

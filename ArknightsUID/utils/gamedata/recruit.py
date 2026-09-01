@@ -99,7 +99,13 @@ async def _fetch_pool() -> list[dict[str, Any]]:
     from ..prts.client import _smw_ask
 
     data = await _smw_ask(_POOL_QUERY)
-    results = ((data or {}).get("query") or {}).get("results") or {}
+    # v3 响应的 results 可能是 list（异常/改版）——prts client 同模式
+    # 已加守卫（审计 #26g），此处漏改会让 .items() 直接崩掉
+    # ark公招/公招推荐 整条命令（审计 #39）
+    payload = data if isinstance(data, dict) else {}
+    query = payload.get("query") if isinstance(payload.get("query"), dict) else {}
+    results = query.get("results")
+    results = results if isinstance(results, dict) else {}
     return entries_from_smw(results)
 
 

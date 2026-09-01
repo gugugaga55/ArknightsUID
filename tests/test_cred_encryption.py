@@ -83,6 +83,31 @@ class CryptoRoundTripTest(unittest.TestCase):
         self.assertTrue(stored.startswith(ENC_PREFIX))
         self.assertEqual(decrypt_secret(stored), CRED)
 
+    def test_empty_or_corrupt_key_file_self_heals(self) -> None:
+        """审计 #39：空/半截密钥文件自动重建，不再永久砖化。
+
+        旧版：空文件 → O_EXCL 撞 FileExistsError → 重试读空 →
+        _fernet_failed 粘滞，所有登录/凭据回写被拒，须人工删文件。
+        """
+        os.environ["ARK_UID_ENC_KEY"] = ""
+        with tempfile.TemporaryDirectory() as tmp:
+            key_path = Path(tmp) / "k"
+            with mock.patch.object(ark_crypto, "_key_file", new=lambda: key_path):
+                # 场景 1：0 字节残骸（上次首建写穿失败）
+                key_path.write_bytes(b"")
+                ark_crypto._reset_cache()
+                self.assertIsNotNone(ark_crypto._get_fernet())
+                self.assertGreater(key_path.stat().st_size, 0)
+
+                # 场景 2：非空但非法的半截内容
+                ark_crypto._reset_cache()
+                key_path.write_bytes(b"not-a-fernet-key!!")
+                self.assertIsNotNone(ark_crypto._get_fernet())
+                # 重建后加解密闭环正常
+                stored = encrypt_secret(CRED)
+                self.assertTrue(stored.startswith(ENC_PREFIX))
+                self.assertEqual(decrypt_secret(stored), CRED)
+
     def test_cred_equals_matching(self) -> None:
         stored = encrypt_secret(CRED)
         self.assertTrue(cred_equals(stored, CRED))

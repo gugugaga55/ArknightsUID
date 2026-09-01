@@ -241,6 +241,89 @@ class PushStateMergeTest(unittest.TestCase):
         )
 
 
+class SessionKeyAndDeliverTest(unittest.IsolatedAsyncioTestCase):
+    """审计 #39：私聊会话键按 user_id 区分；send 返回 -1 不记已投递；
+    已晋升 seen 的键其投递进度可被真正清理。"""
+
+    def test_direct_session_keys_distinct_per_user(self) -> None:
+        import ArknightsUID.arknightsuid_push as push
+
+        class Sub:
+            def __init__(self, group_id=None, user_id="", uid=None):
+                self.group_id = group_id
+                self.user_id = user_id
+                self.uid = uid
+
+        # session 模式订阅不写 uid（恒 None）：此前全部塌缩成 direct:None
+        a = Sub(user_id="10001", uid=None)
+        b = Sub(user_id="10002", uid=None)
+        self.assertEqual(push._session_key(a), "direct:10001")
+        self.assertEqual(push._session_key(b), "direct:10002")
+        self.assertNotEqual(push._session_key(a), push._session_key(b))
+        self.assertEqual(push._session_key(Sub(group_id="777")), "group:777")
+
+    async def test_send_returning_minus_one_not_recorded_delivered(self) -> None:
+        import ArknightsUID.arknightsuid_push as push
+
+        class Sub:
+            group_id = None
+            user_id = "10001"
+
+            async def send(self, message):
+                return -1  # gsuid_core：bot 离线时返回 -1 而非抛异常
+
+        async def _no_sleep(_secs):
+            return None
+
+        with mock.patch.object(push.asyncio, "sleep", _no_sleep):
+            delivered, any_sent = await push._deliver_per_session(
+                [Sub()], ["k1"], lambda ids: f"msg-{ids}", {}, "测试"
+            )
+        self.assertFalse(any_sent)
+        self.assertEqual(delivered, {}, "bot 离线不得记为已投递")
+
+    async def test_send_success_recorded_delivered(self) -> None:
+        import ArknightsUID.arknightsuid_push as push
+
+        class Sub:
+            group_id = "777"
+            user_id = "10001"
+
+            async def send(self, message):
+                return None
+
+        async def _no_sleep(_secs):
+            return None
+
+        with mock.patch.object(push.asyncio, "sleep", _no_sleep):
+            delivered, any_sent = await push._deliver_per_session(
+                [Sub()], ["k1"], lambda ids: f"msg-{ids}", {}, "测试"
+            )
+        self.assertTrue(any_sent)
+        self.assertEqual(delivered, {"k1": ["group:777"]})
+
+    def test_merge_drops_delivered_for_seen_keys(self) -> None:
+        import ArknightsUID.arknightsuid_push as push
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ann_path = Path(tmp) / "ann_state.json"
+            with mock.patch.object(push, "_ANN_STATE_PATH", ann_path):
+                # 条目 k1 部分投递后落盘
+                push._save_ann_state(
+                    {"seen": [], "delivered": {"k1": ["group:1"]}}
+                )
+                # k1 对全部会话投递完成 → 晋升 seen，调用方从 delivered 移除：
+                # 并集合并此前会把这个删除复活，状态文件只增不减
+                push._save_ann_state({"seen": ["k1"], "delivered": {}})
+                final = json.loads(ann_path.read_text(encoding="utf-8"))
+        self.assertEqual([str(k) for k in final["seen"]], ["k1"])
+        self.assertEqual(
+            final.get("delivered"),
+            {},
+            "已见键的投递进度是死数据，落盘时应当清理",
+        )
+
+
 class AnnImageSizeSafetyTest(unittest.TestCase):
     """审计 P2-4：公告宽高 malformed 输入不抛异常。"""
 

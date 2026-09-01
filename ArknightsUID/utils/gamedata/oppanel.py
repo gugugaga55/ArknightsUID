@@ -13,7 +13,6 @@
 from __future__ import annotations
 
 import re
-from typing import Any
 
 try:
     from ArknightsUID.ArknightsUID.utils.gamedata._table_cache import (
@@ -120,6 +119,8 @@ async def load_char_entry(char_id: str) -> dict | None:
 
 def max_level_at(char_entry: dict, phase: int) -> int:
     phases = char_entry.get("phases") or []
+    if not phases:
+        return 1  # 缺 phases 的异常条目按初始档兜底，不 IndexError
     if phase >= len(phases):
         phase = len(phases) - 1
     return int((phases[phase] or {}).get("maxLevel") or 1)
@@ -257,6 +258,9 @@ def compute_panel(
     返回 {attrs: {hp/atk/...: 展示值}, parts: {field: {base/potential/favor/module}}}
     """
     phases = char_entry.get("phases") or []
+    if not phases:
+        # 缺 phases 的异常条目：无成长档可插值，返回空面板由调用方降级
+        return {"attrs": {}, "parts": {}}
     phase = max(0, min(phase, len(phases) - 1))
     frames = phases[phase].get("attributesKeyFrames") or []
     base = interpolate(frames, level)
@@ -304,7 +308,7 @@ async def _gather_tables() -> tuple[dict, dict]:
 def module_choices(
     char_id: str, uniequip: dict
 ) -> list[dict]:
-    """干员可用模组（除基础证章）：[{id, name, type: 'X'|'Y'}]。"""
+    """干员可用模组（除基础证章）：[{id, name, type: 'X'|'Y'|'A'|'B'|'D'}]。"""
     equip_dict = uniequip.get("equipDict") or {}
     char_equips = (uniequip.get("charEquip") or {}).get(char_id) or []
     result = []
@@ -313,8 +317,12 @@ def module_choices(
         type_icon = str(entry.get("typeIcon") or "")
         if type_icon == "original":
             continue  # 基础证章无数值面板，不参与模拟
-        # typeIcon 大小写不定（流明的 Y 模组是 "WAH-Y" 大写），统一小写判定
-        module_type = "Y" if type_icon.lower().endswith("y") else "X"
+        # typeIcon 大小写不定（流明的 Y 模组是 "WAH-Y" 大写），统一按
+        # 尾段字母小写判定。模组类型不止 X/Y：特限证章=A、D/B 型同存
+        # （Logos 只有 D 模组、Radian 有 A+B）——一律归 "X" 会让
+        # find_module 查 X 时静默返回别的模组的数值（审计 #39）
+        tail = type_icon.rsplit("-", 1)[-1].lower()
+        module_type = tail.upper() if tail in ("x", "y", "a", "b", "d") else "X"
         result.append(
             {
                 "id": equip_id,

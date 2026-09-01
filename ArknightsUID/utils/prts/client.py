@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import re
 import json
 import time
-import calendar
 import html
 import hashlib
 from datetime import datetime, timedelta, timezone
@@ -62,7 +62,6 @@ _request_gap_lock: "asyncio.Lock | None" = None
 async def _throttle() -> None:
     """保证本模块发出的相邻两个 PRTS 请求之间至少隔 _MIN_REQUEST_INTERVAL。"""
     global _last_request_at, _request_gap_lock
-    import asyncio
 
     if _request_gap_lock is None:
         _request_gap_lock = asyncio.Lock()

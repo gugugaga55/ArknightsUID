@@ -57,7 +57,14 @@ def _key_file() -> Path:
 
 
 def _load_or_create_key_file() -> bytes | None:
-    """读密钥文件；不存在则 O_EXCL 原子创建，避免并发双写互相覆盖。"""
+    """读密钥文件；不存在则 O_EXCL 原子创建，避免并发双写互相覆盖。
+
+    空/半截文件自愈（审计 #39）：首建时进程在 open 与 write 之间被杀
+    会留下 0 字节文件，此后每次启动 O_EXCL 都撞 FileExistsError、重试
+    也只读到空——加密永久不可用，必须人工删文件。现在等待窗结束仍为
+    空才判"上次写穿失败的残骸"安全重建；等待窗内绝不 unlink（另一
+    进程可能持有 fd 正在写，unlink 会让双方各持一把不同的钥匙）。
+    """
     path = _key_file()
     try:
         data = path.read_bytes().strip()
@@ -69,18 +76,10 @@ def _load_or_create_key_file() -> bytes | None:
         logger.warning(f"[ArknightsUID·加密] 读取密钥文件失败: {exc.__class__.__name__}")
         return None
 
-    from cryptography.fernet import Fernet
-
-    key = Fernet.generate_key()
-    try:
-        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "wb") as f:
-            f.write(key)
-        return key
-    except FileExistsError:
-        # 并发首建（另一进程刚建了还没写完）：短暂重试读取。
-        # 一次读到空就放弃会让本进程永久落入明文模式（_fernet_failed 粘滞），
-        # 宁可多等 150ms 也不能粘住。
+    if path.exists():
+        # 并发首建（另一进程刚 O_EXCL 建了还没写完）：短暂重试读取。
+        # 一次读到空就放弃会让本进程永久落入明文模式（_fernet_failed
+        # 粘滞），宁可多等 150ms 也不能粘住。
         for _ in range(3):
             time.sleep(0.05)
             try:
@@ -89,11 +88,66 @@ def _load_or_create_key_file() -> bytes | None:
                 return None
             if data:
                 return data
-        return None
+        # 仍为空：上次写穿失败的残骸，安全重建
+        try:
+            path.unlink()
+        except OSError:
+            return None
+        logger.warning(
+            "[ArknightsUID·加密] 检测到空密钥文件（上次写入未完成？），已重建"
+        )
+
+    from cryptography.fernet import Fernet
+
+    key = Fernet.generate_key()
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(key)
+            f.flush()
+            os.fsync(f.fileno())
+        return key
+    except FileExistsError:
+        # 重建窗口里被并发者抢先：以对方的钥匙为准
+        try:
+            return path.read_bytes().strip() or None
+        except OSError:
+            return None
     except OSError as exc:
         logger.warning(
             f"[ArknightsUID·加密] 创建密钥文件失败: {exc.__class__.__name__}"
         )
+        return None
+
+
+def _rebuild_corrupt_key_file() -> bytes | None:
+    """密钥文件内容非法（非空但不是合法 Fernet key）时安全重建。
+
+    非法的 key 材料本就解不开任何密文，替换无损失（受影响密文会
+    解密为空串，下游引导重新登录自愈）。返回新 key；失败返回 None。
+    """
+    from cryptography.fernet import Fernet
+
+    path = _key_file()
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except OSError:
+        return None
+    logger.warning(
+        "[ArknightsUID·加密] 密钥文件内容损坏，已重建（历史密文将无法解开，"
+        "受影响账号需重新登录）"
+    )
+    key = Fernet.generate_key()
+    try:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as f:
+            f.write(key)
+            f.flush()
+            os.fsync(f.fileno())
+        return key
+    except OSError:
         return None
 
 
@@ -122,6 +176,19 @@ def _get_fernet():
             if not file_key:
                 raise ValueError("无可用密钥")
             _fernet = Fernet(file_key)
+        except ValueError:
+            # 内容非空但不是合法 Fernet key（半截写/手工损坏）：这样的
+            # 内容本就解不开任何密文，安全重建一次（审计 #39）；重建
+            # 后仍失败才落粘滞失败
+            rebuilt = _rebuild_corrupt_key_file()
+            if rebuilt is not None:
+                _fernet = Fernet(rebuilt)
+            else:
+                _fernet_failed = True
+                logger.warning(
+                    "[ArknightsUID·加密] 凭据加密初始化失败，登录/凭据回写将被拒绝"
+                    f"（检查 {ENV_KEY_NAME} 或 {_key_file()} 可写性）"
+                )
         except Exception as exc:
             _fernet_failed = True
             logger.warning(

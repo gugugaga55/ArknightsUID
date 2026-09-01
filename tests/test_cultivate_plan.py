@@ -212,6 +212,29 @@ class PlanHelpersTest(unittest.TestCase):
         self.assertEqual(_split_plan_names(""), [])
         self.assertEqual(_split_plan_names("银灰 银灰"), ["银灰"])
 
+    def test_split_index_numeric_alias_not_hijacked(self) -> None:
+        """审计 #39：数字干员别名（42=史尔特尔）不得被当账号序号劫持。
+
+        帮助文案明示支持「ark养成 42」「ark养成计划 银灰 史尔特尔 42」，
+        旧逻辑按 index=42 解析必然报"未找到第 42 个明日方舟账号"。
+        """
+        from ArknightsUID.arknightsuid_cultivate import _split_index
+
+        # 两位裸数字：干员名，不是序号
+        self.assertEqual(_split_index("42"), ("42", 0))
+        self.assertEqual(_split_index("银灰 42"), ("银灰 42", 0))
+        self.assertEqual(
+            _split_index("银灰 史尔特尔 42"), ("银灰 史尔特尔 42", 0)
+        )
+        # 一位数字 / 显式「第 N / N号」标记：账号序号
+        self.assertEqual(_split_index("银灰 2"), ("银灰", 2))
+        self.assertEqual(_split_index("银灰 3号"), ("银灰", 3))
+        self.assertEqual(_split_index("银灰 第42号"), ("银灰", 42))
+        # 无尾部数字 / UID（5 位以上）/ 空输入
+        self.assertEqual(_split_index("银灰"), ("银灰", 0))
+        self.assertEqual(_split_index("123456789"), ("123456789", 0))
+        self.assertEqual(_split_index(""), ("", 0))
+
     def test_farm_advice_direct_vs_craft(self) -> None:
         from ArknightsUID.arknightsuid_cultivate import _farm_advice_text
 
