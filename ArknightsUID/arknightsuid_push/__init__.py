@@ -270,10 +270,6 @@ def format_ann_push_message(fresh: list[dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
-# 推送随附封面上限：与单轮推送条数同量级（纯文本公告无封面自动跳过）
-_ANN_PUSH_IMAGE_LIMIT = 5
-
-
 def _data_uri_bytes(data_uri: str) -> bytes:
     """data:image/xxx;base64,… → 原始 bytes（供消息段用）。"""
     import base64
@@ -281,32 +277,80 @@ def _data_uri_bytes(data_uri: str) -> bytes:
     return base64.b64decode(data_uri.split(",", 1)[1])
 
 
-async def build_ann_push_payload(
-    fresh: list[dict[str, str]],
-    image_limit: int = _ANN_PUSH_IMAGE_LIMIT,
-) -> list:
-    """新公告 → 推送消息段列表：文案 + 各公告官方封面图。
+async def _safe_ann_detail(ann_id: str) -> dict | None:
+    """公告详情拉取（推送链路用）：任何异常/空结果静默降级为 None。"""
+    if not ann_id:
+        return None
+    try:
+        detail = await get_ann_detail(ann_id)
+        return detail if isinstance(detail, dict) and detail else None
+    except Exception:
+        logger.debug("[ArknightsUID·公告推送] 详情拉取失败", exc_info=True)
+        return None
 
-    封面按原比例压缩发送（竖长图就是公告本体，不裁切）；下载失败/无
-    封面自动跳过，纯文字照发。返回 [Message(text), Message(image)…]。
+
+async def _build_ann_push_segments(
+    fresh: list[dict[str, str]],
+    index_by_id: dict[str, int] | None = None,
+) -> dict[str, list]:
+    """每条新公告 → 消息段列表：公告详情卡图片（+ 超长原图）。
+
+    对齐 EndUID 订阅推送：公告本体直接出图（与 ark公告 N 同版式），
+    不再发链接文本。某条详情拉取/渲染失败 → 回退官方封面图；封面也
+    没有 → 文字行兜底（任何情况下不漏公告）。
     """
     from gsuid_core.segment import MessageSegment
 
     shown = fresh[:_ANN_PUSH_LIMIT]
-    payload: list = [MessageSegment.text(format_ann_push_message(fresh))]
-    for ann in shown[:image_limit]:
+    details = await asyncio.gather(
+        *(_safe_ann_detail(str(ann.get("id") or "")) for ann in shown)
+    )
+    segments: dict[str, list] = {}
+    for ann, detail in zip(shown, details):
+        ann_id = str(ann.get("id") or "")
+        card: bytes | None = None
+        longs: list[bytes] = []
+        if detail:
+            card, longs = await _render_ann_detail_card(
+                detail, (index_by_id or {}).get(ann_id)
+            )
+        if card:
+            segs = [MessageSegment.image(card)]
+            segs.extend(MessageSegment.image(b) for b in longs)
+            segments[ann_id] = segs
+            continue
+        # 降级链：官方封面图 → 文字行（标题+日期+链接）
         b64 = await _announce_image_b64(ann.get("cover", ""), quality=80)
         if b64.startswith("data:image/"):
             try:
-                payload.append(
+                segments[ann_id] = [
                     MessageSegment.image(_data_uri_bytes(b64))
-                )
+                ]
+                continue
             except Exception as exc:
                 logger.debug(
                     f"[ArknightsUID·公告推送] 封面转消息段失败: "
                     f"{exc.__class__.__name__}"
                 )
-    return payload
+        date = f"（{ann['date']}）" if ann.get("date") else ""
+        text = f"「明日方舟」新公告：《{ann['title']}》{date}"
+        if ann.get("url"):
+            text += f"\n{ann['url']}"
+        segments[ann_id] = [MessageSegment.text(text)]
+    return segments
+
+
+async def build_ann_push_payload(
+    fresh: list[dict[str, str]],
+    index_by_id: dict[str, int] | None = None,
+) -> list:
+    """新公告 → 扁平消息段列表（按公告顺序展开各条的卡图/超长图/兜底）。"""
+    segments = await _build_ann_push_segments(fresh, index_by_id)
+    return [
+        seg
+        for ann in fresh[:_ANN_PUSH_LIMIT]
+        for seg in segments.get(str(ann.get("id") or ""), [])
+    ]
 
 
 async def _send_text(bot: Bot, ev: Event, msg: str) -> None:
@@ -478,6 +522,78 @@ async def _announce_long_image_bytes(url: str) -> bytes:
         return b""
 
 
+async def _build_ann_detail_context(
+    detail: dict, index: int | None
+) -> tuple[dict, list[bytes]]:
+    """公告详情 → (详情卡上下文, 超长图列表)。
+
+    配图/视频封面/作者头像/超长图并发下载（此前全串行，首查要等几十次
+    网络请求）；单张失败静默剔除。命令（ark公告 N）与订阅推送共用。
+    """
+    # 配图三路（对齐 EndUID）：普通图全部内嵌卡片、视频封面作封面位、
+    # 超长图（维护整图）下载后按原画质在卡片后单独追发
+    normal_images, long_urls = split_ann_images(detail)
+
+    async def _card_image(img: dict) -> dict | None:
+        b64 = await _announce_image_b64(img["url"])
+        if not b64:
+            return None
+        return {"b64": b64, "width": img["width"], "height": img["height"]}
+
+    async def _video_cover(video: dict) -> dict | None:
+        b64 = await _announce_image_b64(str(video.get("coverUrl") or ""))
+        return {"b64": b64} if b64 else None
+
+    (
+        card_images_raw,
+        video_covers_raw,
+        avatar_b64,
+        long_images_raw,
+    ) = await asyncio.gather(
+        asyncio.gather(*(_card_image(img) for img in normal_images)),
+        asyncio.gather(*(_video_cover(v) for v in detail.get("videos") or [])),
+        _announce_image_b64(str(detail.get("userAvatar") or ""), quality=70),
+        asyncio.gather(*(_announce_long_image_bytes(u) for u in long_urls)),
+    )
+    long_images = [b for b in long_images_raw if b]
+    context = {
+        "version": ArknightsUID_version,
+        "index": index,
+        "title": detail.get("title", ""),
+        "date": detail.get("date", ""),
+        "author": detail.get("userName", ""),
+        "avatar": avatar_b64,
+        "ip": detail.get("userIpLocation", ""),
+        "url": f"https://www.skland.com/article?id={detail.get('id', '')}",
+        "paragraphs": [
+            p[:400] for p in (detail.get("paragraphs") or [])[:30]
+        ],
+        "images": [c for c in card_images_raw if c],
+        "videos": [v for v in video_covers_raw if v],
+        "longImageCount": len(long_images),
+        "imageCount": len(detail.get("images") or []),
+        "videoCount": len(detail.get("videos") or []),
+    }
+    return context, long_images
+
+
+async def _render_ann_detail_card(
+    detail: dict, index: int | None
+) -> tuple[bytes | None, list[bytes]]:
+    """公告详情 → (详情卡图片, 超长图列表)；渲染失败 (None, []) 由调用方降级。"""
+    try:
+        from ..utils.render import ark_templates, render_html
+
+        context, long_images = await _build_ann_detail_context(detail, index)
+        img = await render_html(ark_templates, "ark_announce_detail.html", context)
+        if not img:
+            return None, []
+        return img, long_images
+    except Exception:
+        logger.debug("[ArknightsUID·公告推送] 详情卡渲染失败", exc_info=True)
+        return None, []
+
+
 async def _show_ann_detail(bot: Bot, ev: Event, index: int) -> None:
     anns = await get_ark_ann_list()
     if not anns:
@@ -492,46 +608,7 @@ async def _show_ann_detail(bot: Bot, ev: Event, index: int) -> None:
         return await _send_text(
             bot, ev, f"公告详情获取失败：{ann['title']}\n{ann.get('url', '')}"
         )
-    # 配图三路（对齐 EndUID）：普通图全部内嵌卡片、视频封面作封面位、
-    # 超长图（维护整图）下载后按原画质在卡片后单独追发
-    normal_images, long_urls = split_ann_images(detail)
-    card_images: list[dict] = []
-    for img in normal_images:
-        b64 = await _announce_image_b64(img["url"])
-        if b64:
-            card_images.append(
-                {"b64": b64, "width": img["width"], "height": img["height"]}
-            )
-    video_covers: list[dict] = []
-    for video in detail.get("videos") or []:
-        b64 = await _announce_image_b64(str(video.get("coverUrl") or ""))
-        if b64:
-            video_covers.append({"b64": b64})
-    avatar_b64 = await _announce_image_b64(
-        str(detail.get("userAvatar") or ""), quality=70
-    )
-    long_images = [
-        await _announce_long_image_bytes(url) for url in long_urls
-    ]
-    long_images = [img for img in long_images if img]
-    context = {
-        "version": ArknightsUID_version,
-        "index": index,
-        "title": detail.get("title", ""),
-        "date": detail.get("date", ""),
-        "author": detail.get("userName", ""),
-        "avatar": avatar_b64,
-        "ip": detail.get("userIpLocation", ""),
-        "url": f"https://www.skland.com/article?id={detail.get('id', '')}",
-        "paragraphs": [
-            p[:400] for p in (detail.get("paragraphs") or [])[:30]
-        ],
-        "images": card_images,
-        "videos": video_covers,
-        "longImageCount": len(long_images),
-        "imageCount": len(detail.get("images") or []),
-        "videoCount": len(detail.get("videos") or []),
-    }
+    context, long_images = await _build_ann_detail_context(detail, index)
     await send_card_or_text(
         bot, ev,
         "ark_announce_detail.html",
@@ -1113,10 +1190,23 @@ async def _push_new_announcements(datas) -> None:
             k: list(v) for k, v in delivered.items()
         }
 
+        # 公告本体直接出图（对齐 EndUID 订阅推送）：每条新公告渲染详情卡，
+        # 与 ark公告 N 同版式；一轮只构建一次，各订阅会话复用同一批消息段
+        index_by_id = {
+            str(a["id"]): i + 1 for i, a in enumerate(anns) if a.get("id")
+        }
+        segments_by_id = await _build_ann_push_segments(
+            [a for a in fresh if str(a["id"]) in fresh_ids], index_by_id
+        )
+
         async def _build_ann_message(ids: list[str]) -> list:
-            # 文案 + 官方封面图（公告本体多为整图，推送以图为主、文字
-            # 兜底；封面下载失败自动降级纯文字）
-            return await build_ann_push_payload(
+            segs = [
+                seg for ann_id in ids for seg in segments_by_id.get(ann_id, [])
+            ]
+            if segs:
+                return segs
+            # 构建阶段整批失败（理论兜底）：退回纯文字清单
+            return format_ann_push_message(
                 [a for a in fresh if str(a["id"]) in ids]
             )
 

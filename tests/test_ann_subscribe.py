@@ -73,7 +73,10 @@ class FormatAnnPushMessageTest(unittest.TestCase):
 
 
 class BuildAnnPushPayloadTest(unittest.IsolatedAsyncioTestCase):
-    """订阅公告推送带图：文案段 + 封面图段；无封面/失败自动降级纯文字。"""
+    """订阅公告推送：每条新公告直接发详情卡图片（对齐 EndUID，不发链接）。
+
+    降级链：详情拉取/渲染失败 → 官方封面图 → 文字行（不漏公告）。
+    """
 
     @staticmethod
     def _data_uri() -> str:
@@ -85,37 +88,89 @@ class BuildAnnPushPayloadTest(unittest.IsolatedAsyncioTestCase):
             + base64.b64encode(b"RIFFxxxxWEBP").decode()
         )
 
-    async def test_payload_text_plus_cover_images(self) -> None:
+    async def test_payload_sends_detail_card_images(self) -> None:
+        """正常路径：每条公告 = 详情卡图 + 超长图，全 image 段、无文字/链接。"""
         import ArknightsUID.arknightsuid_push as push
 
-        anns = [
-            {**_ann("1", title="有图公告"), "cover": "https://x/c1.webp"},
-            {**_ann("2", title="纯文字公告"), "cover": ""},
-        ]
+        anns = [_ann("1", title="公告一"), _ann("2", title="公告二")]
+
+        async def fake_detail(ann_id):
+            return {"id": ann_id, "title": f"公告{ann_id}"}
+
+        async def fake_render(detail, index):
+            return f"card-{detail['id']}".encode(), [b"long-img"]
+
+        with mock.patch.object(push, "get_ann_detail", fake_detail), \
+             mock.patch.object(push, "_render_ann_detail_card", fake_render):
+            payload = await push.build_ann_push_payload(anns)
+
+        # 每条公告：1 张详情卡 + 1 张超长图，共 4 个 image 段
+        self.assertEqual([seg.type for seg in payload], ["image"] * 4)
+        self.assertNotIn("text", [seg.type for seg in payload])
+
+    async def test_payload_fallback_cover_when_render_fails(self) -> None:
+        """详情渲染失败 → 该条降级为官方封面图。"""
+        import ArknightsUID.arknightsuid_push as push
+
+        anns = [{**_ann("1", title="有封面"), "cover": "https://x/c1.webp"}]
         data_uri = self._data_uri()
+
+        async def fake_detail(ann_id):
+            return {"id": ann_id}
+
+        async def fail_render(detail, index):
+            return None, []
 
         async def fake_b64(url, quality=80, cover_size=None, anchor="center"):
             return data_uri if "c1" in url else ""
 
-        with mock.patch.object(push, "_announce_image_b64", fake_b64):
+        with mock.patch.object(push, "get_ann_detail", fake_detail), \
+             mock.patch.object(push, "_render_ann_detail_card", fail_render), \
+             mock.patch.object(push, "_announce_image_b64", fake_b64):
             payload = await push.build_ann_push_payload(anns)
 
-        self.assertEqual(payload[0].type, "text")
-        self.assertIn("有图公告", str(payload[0].data))
-        self.assertEqual(payload[1].type, "image")
-        # 纯文字公告不产生空图段
-        self.assertEqual(len(payload), 2)
+        self.assertEqual([seg.type for seg in payload], ["image"])
 
-    async def test_payload_text_only_when_no_covers(self) -> None:
+    async def test_payload_text_line_when_no_card_no_cover(self) -> None:
+        """详情失败且无封面 → 文字行兜底（含标题与链接，不漏公告）。"""
         import ArknightsUID.arknightsuid_push as push
+
+        anns = [_ann("9", title="纯文字公告")]
+
+        async def fake_detail(ann_id):
+            return None
 
         async def fail_b64(url, quality=80, cover_size=None, anchor="center"):
             return ""
 
-        with mock.patch.object(push, "_announce_image_b64", fail_b64):
-            payload = await push.build_ann_push_payload([_ann("9")])
+        with mock.patch.object(push, "get_ann_detail", fake_detail), \
+             mock.patch.object(push, "_announce_image_b64", fail_b64):
+            payload = await push.build_ann_push_payload(anns)
+
         self.assertEqual(len(payload), 1)
         self.assertEqual(payload[0].type, "text")
+        self.assertIn("纯文字公告", str(payload[0].data))
+        self.assertIn("id=9", str(payload[0].data))
+
+    async def test_payload_card_index_from_list_position(self) -> None:
+        """推送场景卡片的列表编号：index_by_id 传入渲染器（与 ark公告 N 一致）。"""
+        import ArknightsUID.arknightsuid_push as push
+
+        anns = [_ann("7", title="公告七")]
+        seen_index: list = []
+
+        async def fake_detail(ann_id):
+            return {"id": ann_id}
+
+        async def fake_render(detail, index):
+            seen_index.append(index)
+            return b"card", []
+
+        with mock.patch.object(push, "get_ann_detail", fake_detail), \
+             mock.patch.object(push, "_render_ann_detail_card", fake_render):
+            await push.build_ann_push_payload(anns, {"7": 3})
+
+        self.assertEqual(seen_index, [3])
 
 
 class AnnStateFileTest(unittest.TestCase):

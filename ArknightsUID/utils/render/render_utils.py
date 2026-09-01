@@ -86,10 +86,14 @@ _local_font_bytes: Optional[list] = None
 
 
 def _local_cjk_fonts() -> list:
-    """缓存读取系统 Noto Sans CJK（存在才返回），作为远程字体失败的兜底。"""
+    """缓存读取系统 Noto Sans CJK + 彩色 Emoji（存在才返回）。
+
+    CJK 是远程字体失败的兜底；Emoji 字体解决公告正文 📮/✅ 等字符
+    在 takumi 下渲染成豆腐块（playwright 走系统 fontconfig 不受影响）。
+    """
     global _local_font_bytes
     if _local_font_bytes is None:
-        _local_font_bytes = []
+        fonts = []
         for candidate in (
             Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
             Path("/usr/share/fonts/opentype/noto/NotoSansCJK.ttc"),
@@ -97,10 +101,21 @@ def _local_cjk_fonts() -> list:
         ):
             try:
                 if candidate.exists():
-                    _local_font_bytes = [candidate.read_bytes()]
+                    fonts.append(candidate.read_bytes())
                     break
             except OSError:
                 continue
+        for candidate in (
+            Path("/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf"),
+            Path("/System/Library/Fonts/Apple Color Emoji.ttc"),
+        ):
+            try:
+                if candidate.exists():
+                    fonts.append(candidate.read_bytes())
+                    break
+            except OSError:
+                continue
+        _local_font_bytes = fonts
     return _local_font_bytes
 
 

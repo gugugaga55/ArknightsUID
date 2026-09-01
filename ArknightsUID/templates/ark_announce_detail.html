@@ -3,7 +3,7 @@
   设计语言：罗德岛终端（见 ark_base.css 头部注释）
   上下文（由 arknightsuid_push._show_ann_detail 组装，对齐 EndUID ann_detail_card）：
     index: int              列表编号
-    title / date / author / avatar / ip / url: str   avatar 为发布者头像 b64（可空串）
+    title / date / author / avatar / ip: str   avatar 为发布者头像 b64（可空串）
     paragraphs: [str]       正文段落（format 还原阅读顺序，已截断）
     images: [{b64, width, height}]   全部普通配图（高宽比≤5，内嵌卡片；下载失败项已剔除）
     videos: [{b64}]         视频封面 b64（卡片内只展示封面+播放角标）
@@ -34,14 +34,18 @@
         margin: 0; font-size: 13px; line-height: 1.8; color: var(--tx-1);
         word-break: break-word; white-space: pre-wrap;
     }
-    /* 配图画廊：按原帖顺序纵向堆叠（EndUID content-image 同布局） */
+    /* 配图画廊：按原帖顺序纵向堆叠（EndUID content-image 同布局）。
+       注意不能用 grid——takumi 的隐式 auto 轨道按内容 max-content 撑宽，
+       1920px 宽图会把轨道顶到 1920px，width:100% 随之溢出被裁 */
     .ann-images {
-        margin-top: var(--space-4); display: grid; gap: var(--space-3);
+        margin-top: var(--space-4);
     }
     .ann-images img {
         display: block; width: 100%;
+        margin-top: var(--space-3);
         border: 1px solid var(--hairline);
     }
+    .ann-images img:first-child { margin-top: 0; }
     /* 视频封面：播放角标提示点击链接观看 */
     .ann-video {
         position: relative; margin-top: var(--space-3);
@@ -65,17 +69,13 @@
         border-left: 2px solid var(--yellow-deep);
         font-size: 12px; color: var(--tx-2);
     }
-    .ann-url {
-        margin-top: var(--space-3); font-size: 11px; color: var(--tx-3);
-        word-break: break-all;
-    }
 </style>
 </head>
 <body>
     <div class="container" data-ghost="NOTICE">
         <div class="mast">
             <span class="mast-brand">ArknightsUID <em>// 官方公告 NOTICES</em></span>
-            <span class="mast-meta"><span class="idx">#{{ "%02d" | format(index) }}</span>SKLAND</span>
+            <span class="mast-meta">{% if index %}<span class="idx">#{{ "%02d" | format(index) }}</span>{% endif %}SKLAND</span>
         </div>
 
         <div class="titleblock">
@@ -134,11 +134,9 @@
         </div>
         {% elif imageCount or videoCount %}
         <div class="ann-media">
-            本帖含 {{ imageCount }} 张图片{% if videoCount %}、{{ videoCount }} 个视频{% endif %}，完整内容见链接
+            本帖含 {{ imageCount }} 张图片{% if videoCount %}、{{ videoCount }} 个视频（站内可播放）{% endif %}
         </div>
         {% endif %}
-
-        <div class="ann-url">{{ url }}</div>
 
         <div class="foot">
             <span class="foot-brand">ArknightsUID · 公告</span>
