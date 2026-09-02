@@ -450,52 +450,48 @@ body {
 
 .bignum .red { color: var(--yellow-deep); }
 
-/* === 进度条：浅灰轨道 + 信号黄斜纹填充 + 黑端帽 + 刻度线（寻访语言）=== */
+/* === 进度条：浅灰细框轨道 + 信号黄填充 + 斜切刃口（极简量规语言）===
+   渲染约束（takumi/Chromium 双引擎一致）：
+   · 勿在 .bar 上放 ::before/::after 装饰——takumi 不画伪元素背景；
+     同理填充刃口用 clip-path 而非伪元素（.bar 无伪元素时 clip-path 安全）
+   · 勿用边框拼角代替 clip-path——0% 填充时会在左端漏出残片 */
 .bar {
     position: relative;
     height: 8px;
     background: var(--panel-2);
-    border: 1px solid var(--hairline);
+    border: 1px solid var(--line);
     overflow: hidden;
 }
 
 .bar > i {
     display: block;
     height: 100%;
-    background: repeating-linear-gradient(
-        -45deg, var(--yellow) 0 5px, var(--yellow-deep) 5px 10px
-    );
-    border-right: 2px solid var(--ink-block);
+    background: var(--yellow);
+    /* 端部斜切：与面板切角同一母题，读数尽头是刃口 */
+    clip-path: polygon(0 0, 100% 0, calc(100% - 3px) 100%, 0 100%);
 }
 
-/* 刻度线：每 10% 一道（任务界面进度条的刻度语言）*/
-.bar::after {
-    content: "";
-    position: absolute;
-    inset: 0;
-    background: repeating-linear-gradient(90deg,
-        transparent 0 calc(10% - 1px),
-        rgba(22, 24, 29, 0.14) calc(10% - 1px) 10%);
-    pointer-events: none;
-}
-
-/* 加高变体：数字内嵌（理智条/剿灭条的大读数语言）*/
+/* 加高变体：读数内嵌（理智条/剿灭条/训练条的大读数语言）*/
 .bar--lg { height: 18px; }
 
-.bar--lg > i { border-right-width: 3px; }
+.bar--lg > i {
+    clip-path: polygon(0 0, 100% 0, calc(100% - 8px) 100%, 0 100%);
+}
 
+/* 内嵌读数：墨色等宽浮于条上，黄段与浅轨道上都清晰 */
 .bar-txt {
     position: absolute;
-    inset: 0;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
     z-index: 2;
-    display: flex;
-    align-items: center;
-    justify-content: center;
     font-family: var(--mono);
     font-size: 10px;
     font-weight: 700;
     letter-spacing: 0.05em;
+    line-height: 1.5;
     color: var(--tx-0);
+    white-space: nowrap;
 }
 
 .bar-row {
