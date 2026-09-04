@@ -11,6 +11,7 @@
 2. ``resolve_inside``：落盘前 resolve 并校验目标仍位于基准目录内
    （纵深防御，拦截任何残余的穿越构造）。
 """
+
 from __future__ import annotations
 
 import hashlib

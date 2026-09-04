@@ -16,8 +16,10 @@
       头：X-Account-Token=<hg_token>，X-Role-Token=<u8_token>，Cookie ak-user-center
 
 注意 as.hypergryph.com 系列成功字段是 status==0；ak.hypergryph.com 系列是 code==0。
-真实凭据 联调待做（单测全 mock httpx）。
+单测全 mock httpx，未做过独立真实凭据联调；生产 ark抽卡记录/ark兑换码 在用
+此链（回归见 tests/test_hypergryph_gacha.py），异常时按上方流程逐跳核对字段族。
 """
+
 from __future__ import annotations
 
 import re
@@ -25,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 
 from gsuid_core.logger import logger
 
+from ..api.request_util import envelope_ok, require_envelope
 from ..http import request_json
 from ..skland.auth import list_ark_roles_by_cred
 
@@ -37,8 +40,7 @@ ARK_APP_CODE = "be36d44aa36bfb5b"
 
 GRANT_API = "https://as.hypergryph.com/user/oauth2/v2/grant"
 U8_TOKEN_API = (
-    "https://binding-api-account-prod.hypergryph.com"
-    "/account/binding/v1/u8_token_by_uid"
+    "https://binding-api-account-prod.hypergryph.com/account/binding/v1/u8_token_by_uid"
 )
 AK_ROLE_LOGIN_API = "https://ak.hypergryph.com/user/api/role/login"
 GACHA_CATE_API = "https://ak.hypergryph.com/user/api/inquiry/gacha/cate"
@@ -82,8 +84,15 @@ async def get_grant_token(hg_token: str) -> str:
         GRANT_API,
         body={"appCode": ARK_APP_CODE, "token": hg_token, "type": 1},
     )
-    if not isinstance(data, dict) or data.get("status") != 0:
-        logger.warning("[ArknightsUID·hypergryph] OAuth grant 失败")
+    if (
+        require_envelope(
+            data,
+            key="status",
+            action="OAuth grant 失败",
+            log_prefix="[ArknightsUID·hypergryph]",
+        )
+        is None
+    ):
         return ""
     return str((data.get("data") or {}).get("token") or "")
 
@@ -96,8 +105,15 @@ async def get_u8_token(record_uid: str, hg_token: str) -> str:
     _, data, _ = await _request(
         "POST", U8_TOKEN_API, body={"uid": record_uid, "token": grant_token}
     )
-    if not isinstance(data, dict) or data.get("status") != 0:
-        logger.warning("[ArknightsUID·hypergryph] u8_token_by_uid 失败")
+    if (
+        require_envelope(
+            data,
+            key="status",
+            action="u8_token_by_uid 失败",
+            log_prefix="[ArknightsUID·hypergryph]",
+        )
+        is None
+    ):
         return ""
     return str((data.get("data") or {}).get("token") or "")
 
@@ -107,8 +123,12 @@ async def get_ak_cookie(u8_token: str) -> str:
     _, data, cookies = await _request(
         "POST", AK_ROLE_LOGIN_API, body={"token": u8_token}
     )
-    if not isinstance(data, dict) or data.get("code") != 0:
-        logger.warning("[ArknightsUID·hypergryph] role/login 失败")
+    if (
+        require_envelope(
+            data, action="role/login 失败", log_prefix="[ArknightsUID·hypergryph]"
+        )
+        is None
+    ):
         return ""
     for header in cookies:
         match = _AK_COOKIE_RE.search(header)
@@ -139,7 +159,7 @@ class ArkGachaAuth:
         }
 
 
-async def resolve_record_uid(credential: "ArkCredential") -> str:
+async def resolve_record_uid(credential: ArkCredential) -> str:
     """取森空岛账号 uid：优先 credential.record_id，缺则拉 binding 反查。
 
     绑定列表解析复用 auth.list_ark_roles_by_cred（带 gameId==1 过滤）——
@@ -168,7 +188,7 @@ async def resolve_record_uid(credential: "ArkCredential") -> str:
     return ""
 
 
-async def login_gacha_chain(credential: "ArkCredential") -> ArkGachaAuth | str:
+async def login_gacha_chain(credential: ArkCredential) -> ArkGachaAuth | str:
     """跑完整条登录链。失败返回中文提示（str）。"""
     hg_token = credential.hg_token
     if not hg_token:
@@ -189,7 +209,7 @@ async def login_gacha_chain(credential: "ArkCredential") -> ArkGachaAuth | str:
 
 
 async def get_gacha_categories(
-    credential: "ArkCredential", auth: ArkGachaAuth
+    credential: ArkCredential, auth: ArkGachaAuth
 ) -> list[dict[str, Any]] | None:
     """抽卡卡池类别列表（cate）。元素至少含 id；name/count 有则透传。"""
     _, data, _ = await _request(
@@ -198,14 +218,14 @@ async def get_gacha_categories(
         params={"uid": credential.uid},
         headers=auth.headers(),
     )
-    if not isinstance(data, dict) or data.get("code") != 0:
+    if not envelope_ok(data):
         return None
     payload = data.get("data")
     return payload if isinstance(payload, list) else []
 
 
 async def get_gacha_history_page(
-    credential: "ArkCredential",
+    credential: ArkCredential,
     auth: ArkGachaAuth,
     category: str,
     gacha_ts: int | None = None,
@@ -227,7 +247,7 @@ async def get_gacha_history_page(
     _, data, _ = await _request(
         "GET", GACHA_HISTORY_API, params=params, headers=auth.headers()
     )
-    if not isinstance(data, dict) or data.get("code") != 0:
+    if not envelope_ok(data):
         return None
     payload = data.get("data") or {}
     if not isinstance(payload, dict):
@@ -236,7 +256,7 @@ async def get_gacha_history_page(
 
 
 async def exchange_gift_code(
-    credential: "ArkCredential", auth: ArkGachaAuth, gift_code: str
+    credential: ArkCredential, auth: ArkGachaAuth, gift_code: str
 ) -> dict[str, Any] | None:
     """礼包码兑换。成功/业务失败都返回响应 dict（调用方按 code 提示）。"""
     _, data, _ = await _request(

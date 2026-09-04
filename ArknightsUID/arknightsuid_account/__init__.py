@@ -9,124 +9,63 @@ from gsuid_core.logger import logger
 from gsuid_core.models import Event
 from gsuid_core.sv import SV
 
-try:
-    from ArknightsUID.ArknightsUID.utils.account_switch import (
-        get_default_uid,
-        set_default_uid,
-    )
-    from ArknightsUID.ArknightsUID.utils.card import send_card_or_text
-    from ArknightsUID.ArknightsUID.utils.enduid.adapter import (
-        ArkCredential,
-        ark_attendance,
-        fetch_player_info,
-        hide_uid,
-        hide_uid_for,
-        resolve_accounts,
-        resolve_credential,
-    )
-    from ArknightsUID.ArknightsUID.utils.gamedata.charinfo import (
-        load_char_index,
-        match_entries,
-    )
-    from ArknightsUID.ArknightsUID.utils.player import (
-        BuildingData,
-        CharEntry,
-        PlayerData,
-        TRADING_STRATEGY_NAMES,
-        build_box_context,
-        build_building_context,
-        build_campaign_context,
-        build_char_card_context,
-        build_char_stat_context,
-        build_daily_context,
-        build_skin_context,
-        build_status_context,
-        fetch_cached_player_info,
-        format_training_remaining,
-        parse_building,
-        parse_player_info,
-        recruit_done_count,
-        recruit_next_remaining,
-        training_remaining_secs,
-        training_status_text,
-    )
-    from ArknightsUID.ArknightsUID.utils.reply_safety import safe_external_message
-    from ArknightsUID.ArknightsUID.version import ArknightsUID_version
-except ModuleNotFoundError:
-    from ArknightsUID.utils.account_switch import (
-        get_default_uid,
-        set_default_uid,
-    )
-    from ArknightsUID.utils.card import send_card_or_text
-    from ArknightsUID.utils.enduid.adapter import (
-        ArkCredential,
-        ark_attendance,
-        fetch_player_info,
-        hide_uid,
-        hide_uid_for,
-        resolve_accounts,
-        resolve_credential,
-    )
-    from ArknightsUID.utils.gamedata.charinfo import (
-        load_char_index,
-        match_entries,
-    )
-    from ArknightsUID.utils.player import (
-        BuildingData,
-        CharEntry,
-        PlayerData,
-        TRADING_STRATEGY_NAMES,
-        build_box_context,
-        build_building_context,
-        build_campaign_context,
-        build_char_card_context,
-        build_char_stat_context,
-        build_daily_context,
-        build_skin_context,
-        build_status_context,
-        fetch_cached_player_info,
-        format_training_remaining,
-        parse_building,
-        parse_player_info,
-        recruit_done_count,
-        recruit_next_remaining,
-        training_remaining_secs,
-        training_status_text,
-    )
-    from ArknightsUID.utils.reply_safety import safe_external_message
-    from ArknightsUID.version import ArknightsUID_version
+from ArknightsUID.utils.account_switch import (
+    get_default_uid,
+    set_default_uid,
+)
+from ArknightsUID.utils.card import send_card_or_text
+from ArknightsUID.utils.enduid.adapter import (
+    ArkCredential,
+    ark_attendance,
+    fetch_player_info,
+    hide_uid,
+    hide_uid_for,
+    resolve_accounts,
+    resolve_credential,
+)
+from ArknightsUID.utils.player import (
+    BuildingData,
+    CharEntry,
+    PlayerData,
+    TRADING_STRATEGY_NAMES,
+    build_box_context,
+    build_building_context,
+    build_campaign_context,
+    build_char_card_context,
+    build_char_stat_context,
+    build_daily_context,
+    build_skin_context,
+    build_status_context,
+    drop_cached_player_info,
+    fetch_cached_player_info,
+    format_training_remaining,
+    parse_building,
+    parse_player_info,
+    recruit_done_count,
+    recruit_next_remaining,
+    training_remaining_secs,
+    training_status_text,
+)
+from ArknightsUID.utils.reply_safety import safe_external_message
+from ArknightsUID.version import ArknightsUID_version
 
 account_sv = SV("ArknightsUID账号", priority=5)
-
 # 外部消息脱敏统一实现在 utils/reply_safety；保留旧名供既有调用/测试使用
 _safe_external_message = safe_external_message
 
 
-def _extract_uid(text: str) -> str:
-    match = re.search(r"\d{5,}", text)
-    if match is None:
-        return ""
-    return match.group(0)
+# 公共参数解析在 utils.arg_utils（单一事实源）；保留旧名供既有调用/测试引用
+from ArknightsUID.utils.arg_utils import (
+    extract_index as _extract_index,
+    extract_uid as _extract_uid,
+)  # noqa: E402
 
 
-def _extract_index(text: str) -> int:
-    if _extract_uid(text):
-        return 0
-    normalized = text.strip().replace("第", "").replace("号", "")
-    match = re.search(r"(?:^|\s|#)(\d{1,2})(?:\s*)$", normalized)
-    if match is None:
-        return 0
-    return int(match.group(1))
+# 文本回复公共实现在 utils.card.send_text；保留模块级别名供调用点/测试 patch
+from ArknightsUID.utils.card import send_text as _send_text  # noqa: E402
 
-
-async def _send_text(bot: Bot, ev: Event, msg: str) -> None:
-    await bot.send((" " if ev.group_id else "") + msg, at_sender=bool(ev.group_id))
-
-
-def _value(data: Any, key: str) -> Any:
-    if isinstance(data, dict) and key in data:
-        return data[key]
-    return None
+# 凭据解析 + 失败即回复的统一入口（原各处四行样板）
+from ArknightsUID.utils.card import resolve_or_reply  # noqa: E402
 
 
 def _clip(text: Any, limit: int) -> str:
@@ -135,21 +74,11 @@ def _clip(text: Any, limit: int) -> str:
     return s if len(s) <= limit else s[: limit - 1] + "…"
 
 
-def _path(data: Any, *keys: str) -> Any:
-    current = data
-    for key in keys:
-        if not isinstance(current, dict) or key not in current:
-            return None
-        current = current[key]
-    return current
-
-
-def _first_path(data: Any, paths: tuple[tuple[str, ...], ...]) -> Any:
-    for path in paths:
-        value = _path(data, *path)
-        if value is not None and value != "":
-            return value
-    return None
+# 安全取值三件套迁往 utils.dict_utils（本模块保留别名供调用点/测试 patch）
+from ArknightsUID.utils.dict_utils import (
+    first_path as _first_path,
+    value as _value,
+)  # noqa: E402
 
 
 def _find_first(data: Any, keys: tuple[str, ...], depth: int = 0) -> Any:
@@ -385,7 +314,10 @@ async def show_ark_accounts(bot: Bot, ev: Event) -> None:
         ),
     }
     await send_card_or_text(
-        bot, ev, "ark_accounts.html", context,
+        bot,
+        ev,
+        "ark_accounts.html",
+        context,
         _format_accounts(
             result.uids, result.accounts, default_uid, shown_uids=shown_uids
         ),
@@ -418,7 +350,8 @@ async def switch_ark_account(bot: Bot, ev: Event) -> None:
                     f"（UID {await hide_uid_for(account.uid, ev.user_id, ev.bot_id)}）"
                 )
         return await _send_text(
-            bot, ev,
+            bot,
+            ev,
             f"当前默认账号：{current}\n"
             f"用法：ark切换 序号 / ark切换 UID（序号见 ark账号）",
         )
@@ -444,14 +377,17 @@ async def switch_ark_account(bot: Bot, ev: Event) -> None:
         index = int(match.group(1))
         if not 1 <= index <= len(result.accounts):
             return await _send_text(
-                bot, ev, f"序号超出范围（1-{len(result.accounts)}），可用账号见 ark账号。"
+                bot,
+                ev,
+                f"序号超出范围（1-{len(result.accounts)}），可用账号见 ark账号。",
             )
         target = result.accounts[index - 1]
 
     if set_default_uid(ev.bot_id, ev.user_id, target.uid):
         shown = await hide_uid_for(target.uid, ev.user_id, ev.bot_id)
         await _send_text(
-            bot, ev,
+            bot,
+            ev,
             f"已切换默认账号：{target.nickname or '未记录昵称'}（UID {shown}）\n"
             f"之后 ark理智 / ark基建 等查询默认走该账号；ark切换 序号 可再改。",
         )
@@ -473,6 +409,27 @@ async def _load_player_data(credential: ArkCredential) -> PlayerData | str:
     return data
 
 
+async def _load_account_query(
+    ev: Event,
+) -> tuple[ArkCredential, PlayerData, str] | str:
+    """查询类命令的统一前置：解析账号（文本里的 UID/序号）→ 加载玩家数据
+    → 脱敏 UID。失败返回中文文案，调用方直接发送即可。
+
+    理智/日常/剿灭/练度统计/BOX/基建/训练室/皮肤 等 8 个 handler 此前
+    逐字重复这 12 行，收敛到一处（练度卡的参数解析不同，仍走自定义路径）。
+    """
+    credential = await resolve_credential(
+        ev.user_id, ev.bot_id, _extract_uid(ev.text), _extract_index(ev.text)
+    )
+    if isinstance(credential, str):
+        return credential
+    loaded = await _load_player_data(credential)
+    if isinstance(loaded, str):
+        return loaded
+    shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
+    return credential, loaded, shown
+
+
 def _format_campaign(
     credential: ArkCredential, data: PlayerData, uid_display: str | None = None
 ) -> str:
@@ -480,9 +437,7 @@ def _format_campaign(
     lines = ["「明日方舟」剿灭作战", f"UID：{shown_uid}"]
     if data.campaign_total > 0:
         lines.append(f"本周合成玉：{data.campaign_current}/{data.campaign_total}")
-    for zone, kills in sorted(
-        data.campaign_records.items(), key=lambda kv: -kv[1]
-    )[:6]:
+    for zone, kills in sorted(data.campaign_records.items(), key=lambda kv: -kv[1])[:6]:
         lines.append(f"{zone}：击杀 {kills}")
     if len(lines) <= 2:
         lines.append("未识别到剿灭详细字段（等待数据补全）。")
@@ -533,18 +488,16 @@ def _format_box(
 
 
 async def _char_skill_effects(entry: CharEntry) -> dict[str, dict]:
-    """练度卡技能效果增强：PRTS 当前级/满级描述（页面缓存 24h）。
+    """练度卡技能效果增强：PRTS 当前级/满级描述 + 初动/消耗/持续（页面缓存 24h）。
 
     练度卡是玩家数据卡，wiki 只是增强信息：任何失败返回空 dict，
-    模板对缺省只展示专精点，不阻塞出卡。
+    模板对缺省只展示专精点，不阻塞出卡。等级选择/SP 口径与 ark干员
+    共用 utils.skillfx（此前两处各写一份，练度卡长期缺 SP 数值）。
     """
     try:
-        from ..utils.gamedata.charinfo import load_skill_names
-        from ..utils.prts.client import (
-            final_level,
-            query_operator,
-            select_owner_level,
-        )
+        from ArknightsUID.utils.gamedata.charinfo import load_skill_names
+        from ArknightsUID.utils.prts.client import query_operator
+        from ArknightsUID.utils.skillfx import owner_skill_effects
 
         skill_names = await load_skill_names()
         op = await query_operator(entry.name or entry.char_id)
@@ -554,27 +507,7 @@ async def _char_skill_effects(entry: CharEntry) -> dict[str, dict]:
             skill_names.get(sk.skill_id) or sk.skill_id: sk.specialize_level
             for sk in entry.skills
         }
-        effects: dict[str, dict] = {}
-        for s in op.skills:
-            if s.name not in specialize_by_name:
-                continue
-            current = select_owner_level(
-                s.levels, specialize_by_name[s.name], entry.main_skill_lvl
-            )
-            final = final_level(s.levels)
-            effects[s.name] = {
-                "current": current.description if current else "",
-                "current_level": current.level if current else "",
-                "final": (
-                    final.description
-                    if final is not None and final is not current
-                    else ""
-                ),
-                "final_level": (
-                    final.level if final is not None and final is not current else ""
-                ),
-            }
-        return effects
+        return owner_skill_effects(op, specialize_by_name, entry.main_skill_lvl)
     except Exception:
         logger.debug("[ArknightsUID] 练度卡技能效果获取失败", exc_info=True)
         return {}
@@ -593,28 +526,23 @@ def _format_char_card_text(
         spec = "/".join(str(s.specialize_level) for s in entry.skills)
         lines.append(f"技能专精：{spec}")
     if skill_effects:
+        # current/final 为 utils.skillfx 上下文（描述 + 初动/消耗/持续 meta）
         for name, eff in skill_effects.items():
-            if eff.get("current"):
-                lines.append(
-                    f"  {name} 当前{eff['current_level']}：{_clip(eff['current'], 120)}"
-                )
-            if eff.get("final"):
-                lines.append(
-                    f"  {name} {eff['final_level']}：{_clip(eff['final'], 120)}"
-                )
+            for key, prefix in (("current", "当前"), ("final", "")):
+                lv = eff.get(key)
+                if not lv:
+                    continue
+                meta = f"（{lv['meta']}）" if lv.get("meta") else ""
+                label = f"{prefix}{lv['level']}" if prefix else lv["level"]
+                lines.append(f"  {name} {label}：{_clip(lv['description'], 120)}{meta}")
     if entry.equips:
         equips = "、".join(f"{eq.equip_id} Lv{eq.level}" for eq in entry.equips)
         lines.append(f"模组：{equips}")
     return "\n".join(lines)
 
 
-# 阿米娅三形态直查（社区习惯叫法 → charId，客观角色事实）
-_AMIYA_FORM_IDS = {
-    "近卫阿米娅": "char_1001_amiya2",
-    "阿米娅近卫": "char_1001_amiya2",
-    "医疗阿米娅": "char_1037_amiya3",
-    "阿米娅医疗": "char_1037_amiya3",
-}
+# 阿米娅三形态直查（公共表在 gamedata.charinfo，与养成计算共用）
+from ArknightsUID.utils.gamedata.charinfo import AMIYA_FORM_IDS as _AMIYA_FORM_IDS  # noqa: E402
 
 
 def _find_char_offline(data: PlayerData, query: str) -> CharEntry | None:
@@ -643,23 +571,35 @@ async def _resolve_char_entry(data: PlayerData, query: str) -> CharEntry | str:
                 return char
         return "你还没有获得该形态的阿米娅。"
 
-    index = await load_char_index()
-    if index:
-        matched = match_entries(query, index)
-        if len(matched) == 1:
-            char_id = str(matched[0]["char_id"])
-            for char in data.chars:
-                if char.char_id == char_id:
-                    return char
-            return f"你还没有获得干员「{matched[0].get('name', query)}」。"
-        if len(matched) > 1:
-            names = "、".join(str(m.get("name", "")) for m in matched[:8])
-            return f"「{query}」匹配到多名干员：{names}，请写全名。"
+    from ArknightsUID.utils.gamedata.charinfo import resolve_query
+
+    res = await resolve_query(query)
+    if res.unique:
+        for char in data.chars:
+            if char.char_id == res.char_id:
+                return char
+        return f"你还没有获得干员「{res.name or query}」。"
+    if res.candidates:
+        return res.ambiguous_message(query)
 
     offline = _find_char_offline(data, query)
     if offline is not None:
         return offline
     return f"未找到干员「{query}」（首次使用会下载干员数据，可稍后重试）。"
+
+
+@account_sv.on_command(("理智推送",), block=True)
+async def subscribe_sanity_push_alias(bot: Bot, ev: Event) -> None:
+    """README 承诺的触发词「ark理智推送」= 订阅理智回满推送。
+
+    处理逻辑在 notify 模块；本模块按字母序先于 notify 导入，必须把
+    长命令注册在裸命令「理智」之前（core 分发为 startswith+注册序，
+    先注册者胜，见 tests/test_trigger_order），否则「ark理智推送」
+    会被「ark理智」状态查询抢走。
+    """
+    from ArknightsUID import arknightsuid_notify as _notify
+
+    await _notify.subscribe_sanity_push(bot, ev)
 
 
 @account_sv.on_command(
@@ -672,17 +612,10 @@ async def _resolve_char_entry(data: PlayerData, query: str) -> CharEntry | str:
     block=True,
 )
 async def show_ark_status(bot: Bot, ev: Event) -> None:
-    uid = _extract_uid(ev.text)
-    index = _extract_index(ev.text)
-    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-    if isinstance(credential, str):
-        return await _send_text(bot, ev, credential)
-
-    loaded = await _load_player_data(credential)
+    loaded = await _load_account_query(ev)
     if isinstance(loaded, str):
         return await _send_text(bot, ev, loaded)
-    data = loaded
-    shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
+    credential, data, shown = loaded
 
     context = build_status_context(data, ArknightsUID_version, shown)
     if context is not None:
@@ -692,9 +625,7 @@ async def show_ark_status(bot: Bot, ev: Event) -> None:
             ev,
             "ark_status.html",
             context,
-            _format_player_info(
-                credential, {"data": data.raw}, uid_display=shown
-            ),
+            _format_player_info(credential, {"data": data.raw}, uid_display=shown),
         )
     # 数据不足（缺昵称/理智）回退旧文本格式：用原始响应走既有格式化
     response = await fetch_player_info(credential)
@@ -716,17 +647,10 @@ async def show_ark_status(bot: Bot, ev: Event) -> None:
     block=True,
 )
 async def show_ark_daily(bot: Bot, ev: Event) -> None:
-    uid = _extract_uid(ev.text)
-    index = _extract_index(ev.text)
-    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-    if isinstance(credential, str):
-        return await _send_text(bot, ev, credential)
-
-    loaded = await _load_player_data(credential)
+    loaded = await _load_account_query(ev)
     if isinstance(loaded, str):
         return await _send_text(bot, ev, loaded)
-    data = loaded
-    shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
+    credential, data, shown = loaded
 
     context = build_daily_context(data, ArknightsUID_version, shown)
     text = (
@@ -749,22 +673,18 @@ async def show_ark_daily(bot: Bot, ev: Event) -> None:
     block=True,
 )
 async def show_ark_campaign(bot: Bot, ev: Event) -> None:
-    uid = _extract_uid(ev.text)
-    index = _extract_index(ev.text)
-    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-    if isinstance(credential, str):
-        return await _send_text(bot, ev, credential)
-
-    loaded = await _load_player_data(credential)
+    loaded = await _load_account_query(ev)
     if isinstance(loaded, str):
         return await _send_text(bot, ev, loaded)
-    data = loaded
-    shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
+    credential, data, shown = loaded
 
     context = build_campaign_context(data, ArknightsUID_version, shown)
     if context is not None:
         return await send_card_or_text(
-            bot, ev, "ark_campaign.html", context,
+            bot,
+            ev,
+            "ark_campaign.html",
+            context,
             _format_campaign(credential, data, uid_display=shown),
         )
     await _send_text(bot, ev, _format_campaign(credential, data, uid_display=shown))
@@ -782,14 +702,17 @@ async def show_ark_campaign(bot: Bot, ev: Event) -> None:
 async def show_ark_char_card(bot: Bot, ev: Event) -> None:
     name, uid, index = _parse_char_query(ev.text)
     try:
-        from ..utils.user_alias import apply_user_alias
+        from ArknightsUID.utils.user_alias import apply_user_alias
 
         name = await apply_user_alias(ev.bot_id, ev.user_id, name)
-    except Exception:
-        pass
-    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-    if isinstance(credential, str):
-        return await _send_text(bot, ev, credential)
+    except Exception as exc:
+        logger.debug(
+            f"[ArknightsUID·干员卡] 用户别名应用失败，按原名查询: "
+            f"{exc.__class__.__name__}"
+        )
+    credential = await resolve_or_reply(bot, ev, uid, index)
+    if credential is None:
+        return
 
     loaded = await _load_player_data(credential)
     if isinstance(loaded, str):
@@ -805,11 +728,12 @@ async def show_ark_char_card(bot: Bot, ev: Event) -> None:
 
     # PRTS 技能效果增强（当前级/满级描述；失败静默降级为纯专精点展示）
     skill_effects = await _char_skill_effects(entry)
-    context = await build_char_card_context(
-        entry, ArknightsUID_version, skill_effects
-    )
+    context = await build_char_card_context(entry, ArknightsUID_version, skill_effects)
     await send_card_or_text(
-        bot, ev, "ark_char_card.html", context,
+        bot,
+        ev,
+        "ark_char_card.html",
+        context,
         _format_char_card_text(entry, skill_effects),
     )
 
@@ -822,35 +746,29 @@ async def show_ark_char_card(bot: Bot, ev: Event) -> None:
     block=True,
 )
 async def show_ark_char_stat(bot: Bot, ev: Event) -> None:
-    uid = _extract_uid(ev.text)
-    index = _extract_index(ev.text)
-    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-    if isinstance(credential, str):
-        return await _send_text(bot, ev, credential)
-
-    loaded = await _load_player_data(credential)
+    loaded = await _load_account_query(ev)
     if isinstance(loaded, str):
         return await _send_text(bot, ev, loaded)
-    data = loaded
-    shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
+    credential, data, shown = loaded
 
     context = build_char_stat_context(data, ArknightsUID_version, shown)
     if context is not None:
         # 职业行挂 PRTS 职业图标（失败空串降级）
         try:
-            from ..utils.gamedata.itemicon import profession_icon_b64
+            from ArknightsUID.utils.gamedata.itemicon import profession_icon_b64
 
             for p in context.get("professions", []):
                 p["icon"] = await profession_icon_b64(str(p.get("name", "")))
         except Exception:
             pass
         return await send_card_or_text(
-            bot, ev, "ark_char_stat.html", context,
+            bot,
+            ev,
+            "ark_char_stat.html",
+            context,
             _format_char_stat(credential, data, uid_display=shown),
         )
-    await _send_text(
-        bot, ev, _format_char_stat(credential, data, uid_display=shown)
-    )
+    await _send_text(bot, ev, _format_char_stat(credential, data, uid_display=shown))
 
 
 @account_sv.on_command(
@@ -864,25 +782,18 @@ async def show_ark_char_stat(bot: Bot, ev: Event) -> None:
     block=True,
 )
 async def show_ark_box(bot: Bot, ev: Event) -> None:
-    uid = _extract_uid(ev.text)
-    index = _extract_index(ev.text)
-    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-    if isinstance(credential, str):
-        return await _send_text(bot, ev, credential)
-
-    loaded = await _load_player_data(credential)
+    loaded = await _load_account_query(ev)
     if isinstance(loaded, str):
         return await _send_text(bot, ev, loaded)
-    data = loaded
-    shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
+    credential, data, shown = loaded
 
     context = build_box_context(data, ArknightsUID_version, shown)
     if context is not None:
         # 六星头像墙：等级前 10 的六星（当前穿戴皮肤头像），失败降级为空不显示
         try:
-            from ..utils.path import AVATAR_CACHE_PATH
-            from ..utils.player.context import skin_avatar_url
-            from ..utils.render import get_image_b64_with_cache
+            from ArknightsUID.utils.path import AVATAR_CACHE_PATH
+            from ArknightsUID.utils.player.context import skin_avatar_url
+            from ArknightsUID.utils.render import get_image_b64_with_cache
 
             top_six = sorted(
                 (c for c in data.chars if c.rarity_display == 6),
@@ -898,7 +809,10 @@ async def show_ark_box(bot: Bot, ev: Event) -> None:
         except Exception:
             context["six_rows"] = []
         return await send_card_or_text(
-            bot, ev, "ark_box_analysis.html", context,
+            bot,
+            ev,
+            "ark_box_analysis.html",
+            context,
             _format_box(credential, data, uid_display=shown),
         )
     await _send_text(bot, ev, _format_box(credential, data, uid_display=shown))
@@ -933,13 +847,15 @@ def _parse_char_query(text: str) -> tuple[str, str, int]:
 async def send_ark_attendance(bot: Bot, ev: Event) -> None:
     uid = _extract_uid(ev.text)
     index = _extract_index(ev.text)
-    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-    if isinstance(credential, str):
-        return await _send_text(bot, ev, credential)
+    credential = await resolve_or_reply(bot, ev, uid, index)
+    if credential is None:
+        return
 
     response = await ark_attendance(credential)
     if isinstance(response, str):
         return await _send_text(bot, ev, response)
+    # 签到改变账号状态：清 player_info 本地缓存，避免 TTL 窗口内查旧数据
+    await drop_cached_player_info(credential.uid)
     shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
     await _send_text(
         bot, ev, _format_attendance(credential, response, uid_display=shown)
@@ -994,11 +910,25 @@ def _format_building(
         names = "、".join(
             f"{c.name}({c.room} {c.morale})" for c in building.tired_chars[:6]
         )
-        more = f" 等{len(building.tired_chars)}人" if len(building.tired_chars) > 6 else ""
+        more = (
+            f" 等{len(building.tired_chars)}人" if len(building.tired_chars) > 6 else ""
+        )
         lines.append(f"待换班：{names}{more}")
     else:
         lines.append("待换班：无（在岗干员心情充足）")
     return "\n".join(lines)
+
+
+@account_sv.on_command(("基建推送",), block=True)
+async def subscribe_building_push_alias(bot: Bot, ev: Event) -> None:
+    """README 承诺的触发词「ark基建推送」= 订阅基建事件推送。
+
+    同 subscribe_sanity_push_alias：长命令必须先于裸命令「基建」注册
+    （注册序遮蔽），逻辑在 notify 模块。
+    """
+    from ArknightsUID import arknightsuid_notify as _notify
+
+    await _notify.subscribe_building_push(bot, ev)
 
 
 @account_sv.on_command(
@@ -1009,39 +939,36 @@ def _format_building(
     block=True,
 )
 async def show_ark_building(bot: Bot, ev: Event) -> None:
-    uid = _extract_uid(ev.text)
-    index = _extract_index(ev.text)
-    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-    if isinstance(credential, str):
-        return await _send_text(bot, ev, credential)
-
-    loaded = await _load_player_data(credential)
+    loaded = await _load_account_query(ev)
     if isinstance(loaded, str):
         return await _send_text(bot, ev, loaded)
-    data = loaded
+    credential, data, shown = loaded
 
     building = parse_building(data)
     if building is None:
         return await _send_text(
             bot, ev, "未识别到基建数据（森空岛返回缺失 building 字段）。"
         )
-    shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
 
-    context = await build_building_context(
-        data, building, ArknightsUID_version, shown
-    )
+    context = await build_building_context(data, building, ArknightsUID_version, shown)
     if context is not None:
         # 房间成员挂初始头像（EndUID 基建卡同款展示），失败空串降级
         try:
-            from ..utils.player.context import char_avatar_b64
+            from ArknightsUID.utils.player.context import char_avatar_b64
 
             for room in context.get("manufactures", []) + context.get("tradings", []):
                 for m in room.get("members", []):
                     m["avatar"] = await char_avatar_b64(str(m.get("char_id", "")))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug(
+                f"[ArknightsUID·基建] 房间成员头像挂载失败（降级无头像）: "
+                f"{exc.__class__.__name__}"
+            )
     await send_card_or_text(
-        bot, ev, "ark_building.html", context or {},
+        bot,
+        ev,
+        "ark_building.html",
+        context or {},
         _format_building(credential, data, building, uid_display=shown),
     )
 
@@ -1049,16 +976,10 @@ async def show_ark_building(bot: Bot, ev: Event) -> None:
 @account_sv.on_command(("训练室", "训练进度"), block=True)
 async def show_ark_training(bot: Bot, ev: Event) -> None:
     """ark训练室：训练室专精进度卡（受训干员/剩余时间/预计完成时刻）。"""
-    uid = _extract_uid(ev.text)
-    index = _extract_index(ev.text)
-    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-    if isinstance(credential, str):
-        return await _send_text(bot, ev, credential)
-
-    loaded = await _load_player_data(credential)
+    loaded = await _load_account_query(ev)
     if isinstance(loaded, str):
         return await _send_text(bot, ev, loaded)
-    data = loaded
+    credential, data, shown = loaded
 
     building = parse_building(data)
     if building is None:
@@ -1067,14 +988,9 @@ async def show_ark_training(bot: Bot, ev: Event) -> None:
         )
     shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
 
-    try:
-        from ..utils.player.context import build_training_context
-    except ModuleNotFoundError:
-        from ArknightsUID.utils.player.context import build_training_context
+    from ArknightsUID.utils.player.context import build_training_context
 
-    context = await build_training_context(
-        data, building, ArknightsUID_version, shown
-    )
+    context = await build_training_context(data, building, ArknightsUID_version, shown)
     lines = [f"「明日方舟」训练室（UID：{shown}）"]
     if context and context.get("trainee"):
         lines.append(f"受训干员：{context['trainee']}（{context['state']}）")
@@ -1097,11 +1013,7 @@ async def show_ark_training(bot: Bot, ev: Event) -> None:
             )
             lines.append(f"剩余时间：{context['remain_text']}{tail}")
         if context.get("pct") is not None:
-            basis = (
-                "目标档基准"
-                if context.get("base_exact")
-                else "24h 档兜底估算"
-            )
+            basis = "目标档基准" if context.get("base_exact") else "24h 档兜底估算"
             lines.append(f"进度：约 {context['pct']}%（{basis}）")
         lines.append("ark订阅训练：完成前 1 小时预警 + 完成提醒。")
     else:
@@ -1145,27 +1057,24 @@ def _format_skin_collection(
 )
 async def show_ark_skins(bot: Bot, ev: Event) -> None:
     """ark皮肤 → 皮肤收集进度卡（player_info.skins × skin_table 目录）。"""
-    uid = _extract_uid(ev.text)
-    index = _extract_index(ev.text)
-    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-    if isinstance(credential, str):
-        return await _send_text(bot, ev, credential)
-
-    loaded = await _load_player_data(credential)
+    loaded = await _load_account_query(ev)
     if isinstance(loaded, str):
         return await _send_text(bot, ev, loaded)
-    data = loaded
-    shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
+    credential, data, shown = loaded
 
     context = await build_skin_context(data, ArknightsUID_version, shown)
     if context is None:
         # 目录不可用（skin_table 拉取失败）时仍可给出持有计数的降级文案
         return await _send_text(
-            bot, ev,
+            bot,
+            ev,
             f"皮肤目录不可用（游戏数据拉取失败），请稍后再试。\n"
             f"当前记录持有时装 {len(data.owned_skin_ids)} 件。",
         )
     await send_card_or_text(
-        bot, ev, "ark_skin.html", context,
+        bot,
+        ev,
+        "ark_skin.html",
+        context,
         _format_skin_collection(credential, context, uid_display=shown),
     )

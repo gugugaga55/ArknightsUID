@@ -4,6 +4,7 @@
 避免散落在各模块导致路径不一致。基础目录复用 GsCore 的 get_res_path，
 保证插件数据落在 GsCore 的统一资源目录下。
 """
+
 from __future__ import annotations
 
 import os
@@ -19,12 +20,12 @@ PLAYER_PATH: Path = MAIN_PATH / "players"
 
 # 缓存根目录及子目录
 CACHE_BASE: Path = MAIN_PATH / "cache"
-AVATAR_CACHE_PATH: Path = CACHE_BASE / "avatar"        # 干员头像
-CHAR_CACHE_PATH: Path = CACHE_BASE / "char"            # 干员立绘
-SKILL_CACHE_PATH: Path = CACHE_BASE / "skill"          # 技能图标
-EQUIP_CACHE_PATH: Path = CACHE_BASE / "equip"          # 模组图标
-BAKE_PATH: Path = CACHE_BASE / "bake"                  # 图片烘焙缓存（webp）
-WIKI_CACHE_PATH: Path = CACHE_BASE / "wiki"            # PRTS Wiki 查询缓存
+AVATAR_CACHE_PATH: Path = CACHE_BASE / "avatar"  # 干员头像
+CHAR_CACHE_PATH: Path = CACHE_BASE / "char"  # 干员立绘
+SKILL_CACHE_PATH: Path = CACHE_BASE / "skill"  # 技能图标
+EQUIP_CACHE_PATH: Path = CACHE_BASE / "equip"  # 模组图标
+BAKE_PATH: Path = CACHE_BASE / "bake"  # 图片烘焙缓存（webp）
+WIKI_CACHE_PATH: Path = CACHE_BASE / "wiki"  # PRTS Wiki 查询缓存
 
 # 配置文件
 CONFIG_PATH: Path = MAIN_PATH / "config.json"

@@ -10,6 +10,7 @@ pyproject 主 dependencies，缺什么自动 pip 安装（阿里→字节→清�
 任意包名。目标包在插件内全部运行时惰性导入（rapidocr / pytakumi），装
 完无需重启或热重载即可生效。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -39,9 +40,9 @@ _FALLBACK_SPECS: list[tuple[str, str]] = [
 
 
 class DepEntry(NamedTuple):
-    keys: list[str]     # 可用匹配名（含别名/组名，小写）
-    spec: str           # pip 安装规格
-    module: str         # 导入验证用的模块名
+    keys: list[str]  # 可用匹配名（含别名/组名，小写）
+    spec: str  # pip 安装规格
+    module: str  # 导入验证用的模块名
     installed: bool
 
 
@@ -56,9 +57,7 @@ def _declared_specs() -> list[tuple[str, str]]:
         pairs: list[tuple[str, str]] = []
         for spec in project.get("dependencies", []):
             pairs.append((Requirement(spec).name.lower(), str(spec)))
-        for group, group_specs in (
-            project.get("optional-dependencies") or {}
-        ).items():
+        for group, group_specs in (project.get("optional-dependencies") or {}).items():
             for spec in group_specs:
                 pairs.append((str(group).lower(), str(spec)))
                 pairs.append((Requirement(spec).name.lower(), str(spec)))
@@ -117,8 +116,14 @@ def dependency_status() -> list[DepEntry]:
 
 def _pip_install_and_verify(spec: str, module: str) -> bool:
     """同步执行：core 同款多镜像 pip 安装 + 导入验证（放线程里跑）。"""
-    from gsuid_core.server import install_packages
-
+    try:
+        from gsuid_core.server import install_packages
+    except ImportError as exc:
+        # gsuid_core 内部安装器路径变动时的可读降级（不静默假成功）
+        logger.warning(
+            f"[ArknightsUID·依赖] core 安装器不可用: {exc.__class__.__name__}"
+        )
+        return False
     install_packages([spec])
     importlib.invalidate_caches()
     return importlib.util.find_spec(module) is not None
@@ -128,9 +133,7 @@ async def install_dependency(name: str) -> tuple[bool, str]:
     """装一个白名单依赖。返回 (成功?, 面向用户的消息)。"""
     resolved = resolve_dependency(name)
     if resolved is None:
-        known = "、".join(
-            "/".join(entry.keys) for entry in dependency_status()
-        )
+        known = "、".join("/".join(entry.keys) for entry in dependency_status())
         return False, f"未知依赖名「{name.strip()}」。可用：{known}"
     spec, module = resolved
     if importlib.util.find_spec(module) is not None:

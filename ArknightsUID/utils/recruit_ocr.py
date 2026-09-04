@@ -20,6 +20,7 @@ small，约 15MB）。真机 720p 公招截图实测：0.3s 出全部文本，
 不匹配任何标签的碎片按界面杂讯丢弃。匹配是纯函数，不装 rapidocr
 也能测试；未安装时 ocr_available() 返回 False，命令层回退文字输入。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -60,10 +61,11 @@ _B64_RE = re.compile(r"^[A-Za-z0-9+/=\s]+$")
 
 # 常见图片格式魔数（下载/base64 内容必须命中其一，HTML/JSON 错误页拒绝）
 _IMAGE_SIGNATURES = (
-    b"\x89PNG\r\n\x1a\n",   # PNG
-    b"\xff\xd8\xff",         # JPEG
-    b"GIF87a", b"GIF89a",    # GIF
-    b"BM",                   # BMP
+    b"\x89PNG\r\n\x1a\n",  # PNG
+    b"\xff\xd8\xff",  # JPEG
+    b"GIF87a",
+    b"GIF89a",  # GIF
+    b"BM",  # BMP
 )
 
 
@@ -79,9 +81,9 @@ class TagOcrResult(NamedTuple):
     error 为空表示 OCR 流程成功（tags 可能为空 = 截图里没有公招标签）。
     """
 
-    tags: list[str]        # 匹配到的标签（按出现顺序去重）
-    raw_texts: list[str]   # OCR 全部文本（排查误识别用）
-    error: str             # 非空 = 流程失败，内容为面向用户的中文提示
+    tags: list[str]  # 匹配到的标签（按出现顺序去重）
+    raw_texts: list[str]  # OCR 全部文本（排查误识别用）
+    error: str  # 非空 = 流程失败，内容为面向用户的中文提示
 
 
 def ocr_available() -> bool:
@@ -185,7 +187,7 @@ async def _materialize(source: str) -> bytes | None:
             source, max_bytes=_MAX_IMAGE_BYTES, timeout=SAFE_DOWNLOAD_TIMEOUT
         )
     if source.startswith("base64://"):
-        b64 = source[len("base64://"):]
+        b64 = source[len("base64://") :]
     elif source.startswith("data:image/"):
         _, _, b64 = source.partition(",")
     elif len(source) > 256 and _B64_RE.match(source):
@@ -214,7 +216,8 @@ async def extract_recruit_tags(
     """
     if not ocr_available():
         return TagOcrResult(
-            [], [],
+            [],
+            [],
             "截图识别需要 OCR 组件（可选依赖）：发送 ark安装依赖 ocr 安装"
             "（装完即时生效，无需重启）；或直接文字输入 ark公招推荐 标签…",
         )

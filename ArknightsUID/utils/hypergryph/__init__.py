@@ -1,4 +1,5 @@
 """鹰角官网 OAuth 链（抽卡/兑换码）客户端。"""
+
 from __future__ import annotations
 
 from .client import (

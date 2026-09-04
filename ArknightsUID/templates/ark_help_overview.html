@@ -1,0 +1,81 @@
+<!--
+  ark_help_overview.html —— 指令帮助总览卡（#01 的两级帮助上层）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  分层：ark帮助 → 本卡（核心命令 + 分组目录）；ark帮助 <分组> → ark_help.html
+  单组明细；ark帮助 全部 → ark_help.html 全量（逐命令 Q 版图标）。
+  上下文（由 arknightsuid_help._overview_context 组装）：
+    version: str
+    total: int                 命令总数
+    core_cmds: [{cmd, desc}]   「从这里开始」核心命令
+    groups: [{idx, name, en, blurb, count, icon}]   分组目录（icon=组代表 Q 版图标 b64）
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="HELP">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 使用说明 MANUAL</em></span>
+            <span class="mast-meta"><span class="idx">01</span>OVERVIEW</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">ArknightsUID · 使用说明</div>
+                <h1 class="title">指令<em>帮助</em></h1>
+                <div class="title-rule"><span class="en">COMMAND MANUAL</span></div>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_help.b64" %}" alt="阿米娅">
+        </div>
+
+        <div class="chip-flow" style="margin-top: var(--space-4);">
+            <span class="chip chip--ink">{{ total }} 条命令</span>
+            <span class="chip chip--blue">{{ groups | length }} 个分组</span>
+            <span class="chip chip--ghost">ark帮助 &lt;分组名&gt; 看明细</span>
+        </div>
+
+        <div class="sect" style="margin-top: var(--space-4);">
+            <span class="sect-label bk">从这里开始</span>
+            <span class="sect-en">CORE COMMANDS</span>
+        </div>
+        <div class="grid grid-2">
+            {% for c in core_cmds %}
+            <div class="cell">
+                <div class="cell-cmd mono">{{ c.cmd }}</div>
+                <div class="cell-desc">{{ c.desc }}</div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="sect" style="margin-top: var(--space-5);">
+            <span class="sect-label bk">全部分组</span>
+            <span class="sect-en">GROUPS // {{ groups | length }}</span>
+        </div>
+        <div class="grid grid-2">
+            {% for g in groups %}
+            <div class="cell cell--chibi">
+                <div class="cell-label">{{ g.idx }} · {{ g.en }}</div>
+                <div class="cell-value" style="font-size: 17px;">{{ g.name }}<span style="font-size: 11px; font-weight: 400; color: var(--tx-3);">（{{ g.count }}）</span></div>
+                <div class="cell-sub">{{ g.blurb }}</div>
+                <div class="cell-eg">ark帮助 {{ g.name }}</div>
+                <img class="cell-chibi" src="data:image/png;base64,{% include g.icon %}" alt="">
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="chip-flow" style="margin-top: var(--space-4);">
+            <span class="chip chip--ghost">ark帮助 全部 · 全量命令</span>
+            <span class="chip chip--ghost">ark帮助搜索 &lt;关键词&gt; · 按词检索</span>
+        </div>
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 帮助</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// COMMAND MANUAL</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

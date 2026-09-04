@@ -7,18 +7,11 @@ from typing import Any
 
 from gsuid_core.logger import logger
 
-try:
-    from ArknightsUID.ArknightsUID.utils.config import ArkConfig
-    from ArknightsUID.ArknightsUID.utils.crypto import decrypt_secret
-    from ArknightsUID.ArknightsUID.utils.database.models import ArkUser
-    from ArknightsUID.ArknightsUID.utils.skland import client as local_skland
-    from ArknightsUID.ArknightsUID.utils.skland import store as ark_store
-except ModuleNotFoundError:
-    from ArknightsUID.utils.config import ArkConfig
-    from ArknightsUID.utils.crypto import decrypt_secret
-    from ArknightsUID.utils.database.models import ArkUser
-    from ArknightsUID.utils.skland import client as local_skland
-    from ArknightsUID.utils.skland import store as ark_store
+from ..config import ArkConfig
+from ..crypto import decrypt_secret
+from ..database.models import ArkUser
+from ..skland import client as local_skland
+from ..skland import store as ark_store
 
 # 复用 skland 模块定义的游戏 ID，避免双处维护导致的不一致。
 ARKNIGHTS_GAME_ID = local_skland.ARKNIGHTS_GAME_ID
@@ -80,9 +73,7 @@ def hide_uid(uid: str, user_pref: str = "") -> str:
 async def get_hide_uid_pref(uid: str, user_id: str, bot_id: str) -> str:
     """读 ArkUser.hide_uid_self_value；无记录/异常回空（跟随全局）。"""
     try:
-        user = await ArkUser.base_select_data(
-            uid=uid, user_id=user_id, bot_id=bot_id
-        )
+        user = await ArkUser.base_select_data(uid=uid, user_id=user_id, bot_id=bot_id)
         return (getattr(user, "hide_uid_self_value", "") or "") if user else ""
     except Exception:
         return ""
@@ -128,8 +119,7 @@ def _import_first(module_names: tuple[str, ...]) -> ModuleType | None:
             return import_module(module_name)
         except ModuleNotFoundError as exc:
             logger.debug(
-                "[ArknightsUID] 可选模块未找到: "
-                f"{module_name} ({_exception_type(exc)})"
+                f"[ArknightsUID] 可选模块未找到: {module_name} ({_exception_type(exc)})"
             )
         except Exception as exc:
             logger.warning(
@@ -221,7 +211,12 @@ async def resolve_accounts(user_id: str, bot_id: str) -> AccountResolveResult:
         )
 
     if not uids and not accounts:
-        return AccountResolveResult(True, "未找到 EndUID 记录的明日方舟账号，请先使用 EndUID 登录森空岛。", [], [])
+        return AccountResolveResult(
+            True,
+            "未找到 EndUID 记录的明日方舟账号，请先使用 EndUID 登录森空岛。",
+            [],
+            [],
+        )
 
     order = {uid: index for index, uid in enumerate(uids)}
     accounts.sort(key=lambda item: order.get(item.uid, len(order)))
@@ -282,6 +277,8 @@ async def resolve_credential(
             return account
 
     return "已找到明日方舟账号，但 EndUID 凭据为空或已失效，请重新使用 EndUID 登录。"
+
+
 async def fetch_player_info(credential: ArkCredential) -> dict[str, Any] | str:
     """玩家信息（核心富数据 dump）。本地 Skland 客户端直连。
 
@@ -307,9 +304,7 @@ async def fetch_cultivate_character(
     credential: ArkCredential, character_id: str
 ) -> dict[str, Any] | str:
     """单干员养成材料（按 characterId）。"""
-    response = await local_skland.get_cultivate_character(
-        credential, character_id
-    )
+    response = await local_skland.get_cultivate_character(credential, character_id)
     if response is None:
         return "森空岛单干员养成材料接口请求失败。"
     return response
@@ -320,4 +315,14 @@ async def fetch_cultivate_player(credential: ArkCredential) -> dict[str, Any] | 
     response = await local_skland.get_cultivate_player(credential)
     if response is None:
         return "森空岛玩家养成进度接口请求失败。"
+    return response
+
+
+async def fetch_rogue_records(
+    credential: ArkCredential, topic_id: str = ""
+) -> dict[str, Any] | str:
+    """肉鸽战绩（森空岛 App 战绩查询页同源；topic_id 空串=服务端默认期）。"""
+    response = await local_skland.get_rogue_records(credential, topic_id)
+    if response is None:
+        return "森空岛肉鸽战绩接口请求失败。"
     return response

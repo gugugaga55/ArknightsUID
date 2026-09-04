@@ -1,4 +1,5 @@
 """player_info 富数据层（P1）：解析、context 组装、缓存获取。"""
+
 from __future__ import annotations
 
 from .building import (

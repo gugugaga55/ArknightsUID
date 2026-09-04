@@ -25,6 +25,7 @@ training.remainSecs 训练中语义尚无一手样本（dump 为空闲态 -1）�
 「lastUpdateTime 快照时刻的剩余秒」折算（见 training_remaining_secs），
 与 labor.remainSecs 同款倒计时模式；展示文案统一带「约」。
 """
+
 from __future__ import annotations
 
 import time
@@ -105,7 +106,9 @@ def training_remaining_secs(building: BuildingData, now: int | None = None) -> i
     if now is None:
         now = int(time.time())
     if building.training_last_update > 0:
-        return max(0, building.training_remain_secs - (now - building.training_last_update))
+        return max(
+            0, building.training_remain_secs - (now - building.training_last_update)
+        )
     return building.training_remain_secs
 
 
@@ -257,7 +260,11 @@ def _parse_members(raw: Any, info_map: dict[str, Any]) -> list[RoomMember]:
         info = info_map.get(char_id)
         name = str(path(info, "name") or "") if isinstance(info, dict) else ""
         members.append(
-            RoomMember(char_id=char_id, name=name or char_id, morale=morale_points(item.get("ap")))
+            RoomMember(
+                char_id=char_id,
+                name=name or char_id,
+                morale=morale_points(item.get("ap")),
+            )
         )
     return members
 
@@ -266,7 +273,7 @@ def _room_label(kind: str, seq: int) -> str:
     return f"{kind}{seq}" if seq > 1 else kind
 
 
-def parse_building(data: "PlayerData") -> BuildingData | None:
+def parse_building(data: PlayerData) -> BuildingData | None:
     """从 PlayerData.raw 解析基建。building 缺失或完全无法识别返回 None。"""
     building = path(data.raw, "building")
     if not isinstance(building, dict):
@@ -284,12 +291,14 @@ def parse_building(data: "PlayerData") -> BuildingData | None:
         labor_max=_as_int(path(building, "labor", "maxValue")),
     )
 
-    for index, room in enumerate(building.get("manufactures") or [], start=1):
+    for room in building.get("manufactures") or []:
         if not isinstance(room, dict):
             continue
         formula_id = str(room.get("formulaId") or "")
         formula = formula_map.get(formula_id)
-        item_id = str(path(formula, "itemId") or "") if isinstance(formula, dict) else ""
+        item_id = (
+            str(path(formula, "itemId") or "") if isinstance(formula, dict) else ""
+        )
         result.manufactures.append(
             ManufactureRoom(
                 slot_id=str(room.get("slotId") or ""),
@@ -358,18 +367,20 @@ def parse_building(data: "PlayerData") -> BuildingData | None:
         result.training_remain_secs = _as_int(training.get("remainSecs"), -1)
         result.training_last_update = _as_int(training.get("lastUpdateTime"))
         trainee = training.get("trainee")
-        trainee_id = str(path(trainee, "charId") or "") if isinstance(trainee, dict) else ""
+        trainee_id = (
+            str(path(trainee, "charId") or "") if isinstance(trainee, dict) else ""
+        )
         if trainee_id:
             result.training_trainee_id = trainee_id
             info = info_map.get(trainee_id)
             result.training_trainee = (
                 str(path(info, "name") or "") if isinstance(info, dict) else ""
             ) or trainee_id
-            result.training_target_skill = _as_int(
-                path(trainee, "targetSkill"), -1
-            )
+            result.training_target_skill = _as_int(path(trainee, "targetSkill"), -1)
         trainer = training.get("trainer")
-        trainer_id = str(path(trainer, "charId") or "") if isinstance(trainer, dict) else ""
+        trainer_id = (
+            str(path(trainer, "charId") or "") if isinstance(trainer, dict) else ""
+        )
         if trainer_id:
             result.training_trainer_id = trainer_id
             tinfo = info_map.get(trainer_id)

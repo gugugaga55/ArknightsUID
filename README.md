@@ -20,7 +20,7 @@ Python 依赖（httpx、公招标签截图识别的 rapidocr 等）声明在 `py
 
 ## 功能
 
-常用命令支持拼音首字母缩写（与 EndUID 的 `endmr` 同款习惯）：`ark每日=arkmr`、`ark理智=arklz`、`ark签到=arkqd`、`ark抽卡记录=arkck`、`ark攒抽=arkzc`、`ark公告=arkgg`、`ark面板=arkmb`、`ark公招=arkgz`、`ark公招推荐=arkgztj`、`ark肉鸽=arkrg`、`ark养成=arkyc`、`ark日历=arkrl`、`ark帮助=arkbz`。
+常用命令支持拼音首字母缩写：`ark每日=arkmr`、`ark理智=arklz`、`ark签到=arkqd`、`ark抽卡记录=arkck`、`ark攒抽=arkzc`、`ark公告=arkgg`、`ark面板=arkmb`、`ark公招=arkgz`、`ark公招推荐=arkgztj`、`ark肉鸽=arkrg`、`ark养成=arkyc`、`ark日历=arkrl`、`ark帮助=arkbz`。
 
 ### 账号登录（仅私聊；扫码登录可配置放行群聊）
 
@@ -38,7 +38,7 @@ Python 依赖（httpx、公招标签截图识别的 rapidocr 等）声明在 `py
 
 </details>
 
-### 状态查询（自有登录优先，无则回退 EndUID）
+### 状态查询
 
 <details><summary>展开/收起</summary>
 
@@ -96,6 +96,16 @@ Python 依赖（httpx、公招标签截图识别的 rapidocr 等）声明在 `py
   <img src="docs/design/previews/ark_rogue.jpg" width="55%">
 
   </details>
+- <details><summary><code>ark肉鸽战绩 [期名]</code>：单期肉鸽战绩明细卡——森空岛 App「战绩查询」独立端点（与 <code>ark肉鸽</code> 进度卡不同源）：最高达成难度 / 最高得分 / 声望 / 奖章 / 常用干员 / 最近与收藏战绩（胜负、难度、得分、分队、结局或止步关卡、用时、结算阵容）。期名支持简称与自定义期名（如 <code>ark肉鸽战绩 界园</code>），缺省为最新期</summary>
+
+  <img src="docs/design/previews/ark_rogue_record.jpg" width="55%">
+
+  </details>
+- <details><summary><code>ark肉鸽详情 [期名] &lt;#局号&gt; [收藏]</code>：单局战况详情——结局回顾（带官方配色分段）/ 开局与结算阵容 / 藏品清单（图标+名称）/ 层数节点战斗统计 / 用时与种子号。局号见 <code>ark肉鸽战绩</code> 卡上的 #N 标记，加「收藏」查收藏战绩（如 <code>ark肉鸽详情 界园 3</code>、<code>ark肉鸽详情 收藏 1</code>）</summary>
+
+  <img src="docs/design/previews/ark_rogue_run.jpg" width="55%">
+
+  </details>
 - <details><summary><code>ark肉鸽敌人 &lt;名字&gt;</code>：肉鸽专用敌人 buff 面板——基础形态数值 + 所属期难度档累积加成（含新手档削减；数据 tomimi.dev 游戏解包，支持精确/前缀/子串匹配；期名支持简称与「X肉鸽」叫法：水月/萨米/萨卡兹/界园/树海等，如 <code>ark肉鸽敌人 汉科 树海 N15</code>；层数增益与交互式全 buff 模拟见 tomimi.dev）</summary>
 
   <img src="docs/design/previews/ark_rogue_enemy.jpg" width="55%">
@@ -113,7 +123,7 @@ Python 依赖（httpx、公招标签截图识别的 rapidocr 等）声明在 `py
 
 <details><summary>展开/收起</summary>
 
-- <details><summary><code>ark抽卡记录</code> / <code>ark抽卡分析</code>：增量拉取官方寻访记录并出统计卡（总抽数/六星率/平均/垫刀/最近六星）</summary>
+- <details><summary><code>ark抽卡记录</code> / <code>ark抽卡分析</code>：增量拉取官方寻访记录并出统计卡（总抽数/六星率/五星率/平均/垫刀/最近六星，每个六星条目下挂该段抽取的五星小头像）</summary>
 
   <img src="docs/design/previews/ark_gacha_card.jpg" width="55%">
 
@@ -293,9 +303,9 @@ Python 依赖（httpx、公招标签截图识别的 rapidocr 等）声明在 `py
 
 <details><summary>展开/收起</summary>
 
-- <details><summary><code>ark帮助</code>：查看插件帮助卡</summary>
+- <details><summary><code>ark帮助</code>：两级帮助——无参为总览卡（核心命令 + 分组目录），<code>ark帮助 &lt;分组名/序号&gt;</code> 看单组明细（如 <code>ark帮助 肉鸽</code>），<code>ark帮助 全部</code> 看全量命令卡</summary>
 
-  <img src="docs/design/previews/ark_help.jpg" width="55%">
+  <img src="docs/design/previews/ark_help_overview.jpg" width="55%">
 
   </details>
 
@@ -326,22 +336,6 @@ Python 依赖（httpx、公招标签截图识别的 rapidocr 等）声明在 `py
 - 其他可复用登录态仅在内部使用，不会在命令输出中展示。
 
 安全约束：命令回复、帮助和 README 都不会输出森空岛登录凭据或接口缓存登录态明文；绑定/登录命令仅在私聊可用（群聊会被拒绝并提示），扫码登录可由管理员开启「允许群聊扫码登录」放行群聊（默认关）。
-
-## 安全说明
-
-凭据存储与加密：
-
-- 自有登录的森空岛登录凭据、官网抽卡链凭据与短期访问凭据均以 **Fernet 密文**（`enc:v1:` 前缀）落库；旧明文行读取时自动兼容，下次写入自动升级为密文，无需停机迁移。
-- 加密密钥优先取环境变量 `ARK_UID_ENC_KEY`（生成方式：`python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`）；未设置时自动生成密钥文件并存于插件数据目录（文件 0600、目录 0700）。更高安全要求请用环境变量注入并把密钥与数据目录分开存放。
-- **密钥文件丢失/更换后密文凭据将解密失败**，表现为账号凭据失效，重新 `ark扫码登录` 即可自愈。
-- 仍然明文的：EndUID 回退读取的行属 EndUID 插件自己的存储，本插件只读不动；玩家数据缓存（player_info 等）不含凭据。
-- 请保持 gsuid_core 数据目录仅限运行用户可读；数据库与密钥文件被一同拿走时加密无法防御（同机存放是可用性取舍）。
-
-其他安全行为：
-
-- 绑定/登录仅私聊（扫码登录可经「允许群聊扫码登录」配置放行群聊，默认关）；回复中的 UID 默认脱敏（`HideUid` 默认开）；外部 API 报错回显前统一抹去敏感凭据类键值。
-- 外置渲染（`RemoteRenderEnable`）会把完整卡片 HTML（含昵称、UID、游戏数据）发送到 `RemoteRenderUrl`——仅指向自建/受信任服务，公网务必 HTTPS。
-- 代码中的 `APP_CODE`、数美指纹 DES 密钥等为逆向公开协议常量，非机密；登录凭据传递建议首选 `ark扫码登录`，`ark绑定 <森空岛凭据>` 会使凭据经过 IM 服务器，仅作兜底。
 
 ## 渲染引擎
 

@@ -5,6 +5,7 @@
 
 所有视觉产物由开发者自行设计，不使用任何第三方项目模板。
 """
+
 from __future__ import annotations
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -21,4 +22,4 @@ ark_templates = Environment(
     autoescape=select_autoescape(["html", "xml"]),
 )
 
-from .render_utils import render_html, image_to_base64, get_image_b64_with_cache  # noqa: E402,F401
+from .render_utils import render_html, get_image_b64_with_cache  # noqa: E402,F401

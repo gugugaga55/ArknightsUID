@@ -12,9 +12,12 @@
 character_table 的 rarity 是 TIER_x（=x 星），与 player_info charInfoMap 的
 0-5 编号不同，本模块统一输出 1-6 人读值。
 """
+
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NamedTuple
+
+from gsuid_core.logger import logger
 
 from ._table_cache import (
     CHAR_TABLE_PATH,
@@ -50,12 +53,22 @@ def _index_covers_sources(index_path, *sources) -> bool:
             continue
     return True
 
+
 # 内建社区别名（别名 → 中文名）。只收录广泛公认且无歧义的。
 CURATED_ALIASES: dict[str, str] = {
     "42": "史尔特尔",
     "陈sir": "陈",
     "近卫阿米娅": "阿米娅",  # 三形态由 profession 区分，名称统一指向阿米娅
     "医疗阿米娅": "阿米娅",
+}
+
+# 阿米娅三形态直查（社区习惯叫法 → charId，客观角色事实；练度卡/养成计算
+# 需要具体形态的 charId，名称级别名见上方 CURATED_ALIASES）。
+AMIYA_FORM_IDS: dict[str, str] = {
+    "近卫阿米娅": "char_1001_amiya2",
+    "阿米娅近卫": "char_1001_amiya2",
+    "医疗阿米娅": "char_1037_amiya3",
+    "阿米娅医疗": "char_1037_amiya3",
 }
 
 _TIER_MAP = {f"TIER_{i}": i for i in range(1, 8)}
@@ -179,9 +192,7 @@ async def load_item_index() -> dict[str, dict[str, Any]]:
     return index
 
 
-def match_entries(
-    query: str, index: dict[str, dict[str, Any]]
-) -> list[dict[str, Any]]:
+def match_entries(query: str, index: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     """按优先级匹配，返回候选列表（含 char_id 键，0 个即无匹配）。
 
     精确名/别名/appellation 命中只返回唯一项；前缀命中可能多项（≤8）。
@@ -239,3 +250,70 @@ def resolve_char(
         first = matched[0]
         return str(first["char_id"]), str(first.get("name", ""))
     return None
+
+
+class QueryResolution(NamedTuple):
+    """resolve_query 的结构化结果；错误文案由调用方按场景组织。"""
+
+    char_id: str
+    name: str
+    candidates: list[dict[str, Any]]
+    index_ready: bool
+
+    @property
+    def unique(self) -> bool:
+        """是否唯一命中（char_id 非空，此时 candidates 必空）。"""
+        return bool(self.char_id)
+
+    def ambiguous_message(self, query: str) -> str:
+        """多名干员候选的统一提示（原先在 cultivate/account 逐字重复）。"""
+        names = "、".join(str(m.get("name", "")) for m in self.candidates[:8])
+        return f"「{query}」匹配到多名干员：{names}，请写全名。"
+
+
+async def resolve_query(
+    query: str,
+    *,
+    bot_id: str = "",
+    user_id: str = "",
+    amiya_forms: bool = True,
+) -> QueryResolution:
+    """查询词 → 干员解析的统一组合管线（收编 cultivate/wiki/account 三处实现）。
+
+    管线：用户自定义别名（传 bot_id+user_id 时启用）→ 阿米娅形态直查
+    （amiya_forms=False 跳过，如 wiki 词条搜索需名称级结果）→ gamedata
+    索引匹配。结果语义：
+
+    - 唯一命中：char_id/name 非空（阿米娅形态捷径时 name 为空串）
+    - 多名候选：candidates 非空（≤8，用 ambiguous_message 生成提示）
+    - 无命中：candidates 空；index_ready=False 表示索引未就绪（首次
+      使用需下载全量表），True 表示索引可用但确无此干员
+    """
+    query = (query or "").strip()
+    if bot_id and user_id:
+        try:
+            from ..user_alias import apply_user_alias
+
+            query = await apply_user_alias(bot_id, user_id, query)
+        except Exception as exc:
+            logger.debug(
+                f"[ArknightsUID·干员解析] 用户别名应用失败: {exc.__class__.__name__}"
+            )
+
+    if amiya_forms:
+        amiya_id = AMIYA_FORM_IDS.get(query)
+        if amiya_id:
+            return QueryResolution(amiya_id, "", [], True)
+
+    index = await load_char_index()
+    if not index:
+        return QueryResolution("", "", [], False)
+    matched = match_entries(query, index)
+    if len(matched) == 1:
+        first = matched[0]
+        return QueryResolution(
+            str(first["char_id"]), str(first.get("name", "")), [], True
+        )
+    if matched:
+        return QueryResolution("", "", matched, True)
+    return QueryResolution("", "", [], True)

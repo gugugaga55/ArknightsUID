@@ -7,100 +7,59 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from jinja2.exceptions import TemplateNotFound
-
 from gsuid_core.bot import Bot
 from gsuid_core.logger import logger
 from gsuid_core.models import Event
 from gsuid_core.sv import SV
 
-try:
-    from ArknightsUID.ArknightsUID.version import ArknightsUID_version
-except ModuleNotFoundError:
-    from ArknightsUID.version import ArknightsUID_version
+from ArknightsUID.version import ArknightsUID_version
 
-try:
-    from ArknightsUID.ArknightsUID.utils.prts.client import (
-        EnemyInfo,
-        EnemyLevel,
-        OperatorInfo,
-        SkillLevelDetail,
-        StageInfo,
-        WikiPageSummary,
-        final_level,
-        level_resistances,
-        query_activities,
-        query_enemy,
-        query_gacha_pools,
-        query_game_info,
-        query_operator,
-        query_page,
-        query_stage,
-        resolve_map_file_url,
-        search_pages,
-        select_owner_level,
-    )
-except ModuleNotFoundError:
-    from ArknightsUID.utils.prts.client import (
-        EnemyInfo,
-        EnemyLevel,
-        OperatorInfo,
-        SkillLevelDetail,
-        StageInfo,
-        WikiPageSummary,
-        final_level,
-        level_resistances,
-        query_activities,
-        query_enemy,
-        query_gacha_pools,
-        query_game_info,
-        query_operator,
-        query_page,
-        query_stage,
-        resolve_map_file_url,
-        search_pages,
-        select_owner_level,
-    )
+from ArknightsUID.utils.prts.client import (
+    EnemyInfo,
+    EnemyLevel,
+    OperatorInfo,
+    SkillLevelDetail,
+    StageInfo,
+    WikiPageSummary,
+    final_level,
+    level_resistances,
+    query_activities,
+    query_enemy,
+    query_gacha_pools,
+    query_game_info,
+    query_operator,
+    query_page,
+    query_stage,
+    resolve_map_file_url,
+    search_pages,
+    select_owner_level,
+)
 
-try:
-    from ArknightsUID.ArknightsUID.utils.gamedata.itemicon import (
-        enemy_icon_b64,
-        item_icon_b64,
-        split_material_text,
-    )
-    from ArknightsUID.ArknightsUID.utils.player.context import char_avatar_b64
-except ModuleNotFoundError:
-    from ArknightsUID.utils.gamedata.itemicon import (
-        enemy_icon_b64,
-        item_icon_b64,
-        split_material_text,
-    )
-    from ArknightsUID.utils.player.context import char_avatar_b64
-
-try:
-    from ArknightsUID.ArknightsUID.utils.gamedata.recruit import (
-        build_tag_universe,
-        load_recruit_data,
-        match_recruit,
-    )
-    from ArknightsUID.ArknightsUID.utils.recruit_ocr import extract_recruit_tags
-except ModuleNotFoundError:
-    from ArknightsUID.utils.gamedata.recruit import (
-        build_tag_universe,
-        load_recruit_data,
-        match_recruit,
-    )
-    from ArknightsUID.utils.recruit_ocr import extract_recruit_tags
+from ArknightsUID.utils.gamedata.itemicon import (
+    enemy_icon_b64,
+    item_icon_b64,
+    split_material_text,
+)
+from ArknightsUID.utils.player.context import char_avatar_b64
+from ArknightsUID.utils.gamedata.recruit import (
+    build_tag_universe,
+    load_recruit_data,
+    match_recruit,
+)
+from ArknightsUID.utils.recruit_ocr import extract_recruit_tags
+from ArknightsUID.utils.skillfx import (
+    skill_current_final,
+    skill_meta,
+)
 
 wiki_sv = SV("ArknightsUID资料", priority=5)
+
+# 文本回复公共实现在 utils.card.send_text；保留模块级别名供调用点/测试 patch
+from ArknightsUID.utils.card import send_text as _send_text  # noqa: E402
 
 
 def _clean_query(text: str) -> str:
     return text.strip().strip("：:").strip()
-
-
-async def _send_text(bot: Bot, ev: Event, msg: str) -> None:
-    await bot.send((" " if ev.group_id else "") + msg, at_sender=bool(ev.group_id))
 
 
 def _clip(value: str, limit: int = 700) -> str:
@@ -142,55 +101,24 @@ def _owner_level(
     return select_owner_level(levels, specialize, main_lvl)
 
 
-def _skill_level_context(lv: SkillLevelDetail) -> dict:
-    parts = []
-    if lv.sp_cost:
-        parts.append(f"{lv.sp_cost}耗")
-    if lv.duration:
-        parts.append(f"{lv.duration}s")
-    return {
-        "level": lv.level,
-        "description": lv.description,
-        "sp_init": lv.sp_init,
-        "sp_cost": lv.sp_cost,
-        "duration": lv.duration,
-        "meta": "·".join(parts),
-    }
-
-
 def _format_level_line(lv: SkillLevelDetail) -> str:
-    """单级详情行：`专3：描述（90耗·30持）`，长描述截断。"""
-    parts = []
-    if lv.sp_cost:
-        parts.append(f"{lv.sp_cost}耗")
-    if lv.duration:
-        parts.append(f"{lv.duration}持")
-    suffix = f"（{'·'.join(parts)}）" if parts else ""
+    """单级详情行：`专3：描述（初动10·消耗24·持续30秒）`，长描述截断。"""
+    meta = skill_meta(lv)
+    suffix = f"（{meta}）" if meta else ""
     return f"{lv.level}：{_clip(lv.description, 140)}{suffix}"
 
 
-async def _build_owner_context(op: OperatorInfo, ev: Event) -> dict | None:
-    """已绑定账号对该干员的练度状态（技能等级 + 在训剩余）；拿不到返回 None。
+async def _owner_player_data(ev: Event):
+    """已绑定账号的 (credential, 玩家数据)；拿不到返回 None。
 
-    干员查询是资料查询，账号只是增强信息：未绑定/未持有/接口失败一律静默
-    降级为通用 PRTS 展示，不向用户报账号侧错误。
+    干员查询/面板模拟是资料查询，账号只是增强信息：未绑定/接口失败一律
+    静默降级，不向用户报账号侧错误。
     """
     try:
-        from ..utils.enduid.adapter import (
-            hide_uid_for,
-            resolve_credential,
-        )
-        from ..utils.gamedata.charinfo import (
-            load_char_index,
-            load_skill_names,
-            resolve_char,
-        )
-        from ..utils.player import (
+        from ArknightsUID.utils.enduid.adapter import resolve_credential
+        from ArknightsUID.utils.player import (
             fetch_cached_player_info,
-            parse_building,
             parse_player_info,
-            training_remaining_secs,
-            training_status_text,
         )
 
         credential = await resolve_credential(ev.user_id, ev.bot_id)
@@ -200,8 +128,35 @@ async def _build_owner_context(op: OperatorInfo, ev: Event) -> dict | None:
         if not isinstance(response, dict):
             return None
         data = parse_player_info(response)
-        if data is None:
+        return None if data is None else (credential, data)
+    except Exception:
+        logger.debug("[ArknightsUID] 玩家数据获取失败，走通用展示", exc_info=True)
+        return None
+
+
+async def _build_owner_context(op: OperatorInfo, ev: Event) -> dict | None:
+    """已绑定账号对该干员的练度状态（技能等级 + 在训剩余）；拿不到返回 None。
+
+    干员查询是资料查询，账号只是增强信息：未绑定/未持有/接口失败一律静默
+    降级为通用 PRTS 展示，不向用户报账号侧错误。
+    """
+    try:
+        from ArknightsUID.utils.enduid.adapter import hide_uid_for
+        from ArknightsUID.utils.gamedata.charinfo import (
+            load_char_index,
+            load_skill_names,
+            resolve_char,
+        )
+        from ArknightsUID.utils.player import (
+            parse_building,
+            training_remaining_secs,
+            training_status_text,
+        )
+
+        loaded = await _owner_player_data(ev)
+        if loaded is None:
             return None
+        credential, data = loaded
         index = await load_char_index()
         hit = resolve_char(op.name or op.title, index) if index else None
         if not hit:
@@ -219,9 +174,7 @@ async def _build_owner_context(op: OperatorInfo, ev: Event) -> dict | None:
         training_remain = ""
         building = parse_building(data)
         if building and building.training_trainee_id == char_id:
-            training_remain = training_status_text(
-                training_remaining_secs(building)
-            )
+            training_remain = training_status_text(training_remaining_secs(building))
         return {
             "uid": await hide_uid_for(credential.uid, ev.user_id, ev.bot_id),
             "main_skill_lvl": entry.main_skill_lvl,
@@ -348,9 +301,7 @@ def _format_enemy(enemy: EnemyInfo) -> str:
             if stats2:
                 lines.append(f"等级{i}：" + "，".join(stats2))
             if lv.abilities:
-                lines.append(
-                    f"等级{i}机制：" + _clip("\n".join(lv.abilities), 300)
-                )
+                lines.append(f"等级{i}机制：" + _clip("\n".join(lv.abilities), 300))
 
     _append_source(lines, enemy.source_url)
     return "\n".join(lines)
@@ -389,7 +340,12 @@ def _format_stage(stage: StageInfo, enemies_ctx: list[dict] | None = None) -> st
             suffix = f"x{row['count']}" if row.get("count") else ""
             stats = [
                 f"{label}{row[key]}"
-                for label, key in (("HP", "hp"), ("攻", "atk"), ("防", "defense"), ("抗", "res"))
+                for label, key in (
+                    ("HP", "hp"),
+                    ("攻", "atk"),
+                    ("防", "defense"),
+                    ("抗", "res"),
+                )
                 if row.get(key)
             ]
             stat_text = f"（{'·'.join(stats)}）" if stats else ""
@@ -445,7 +401,9 @@ def _format_operator(op: OperatorInfo, owner: dict | None = None) -> str:
     if op.talents:
         lines.append("【天赋】")
         for t in op.talents:
-            head = f"  {t.slot}·{t.name}" if t.slot and t.name else f"  {t.name or t.slot}"
+            head = (
+                f"  {t.slot}·{t.name}" if t.slot and t.name else f"  {t.name or t.slot}"
+            )
             lines.append(head)
             # 逐阶段（精英1/精英2/模组级）各带具体数值，与卡片展示一致
             if t.stages:
@@ -470,6 +428,8 @@ def _format_operator(op: OperatorInfo, owner: dict | None = None) -> str:
             head = f"  {s.name}"
             if s.skill_type:
                 head += f"（{s.skill_type}）"
+            if s.range_:
+                head += f"｜范围 {s.range_}"
             lines.append(head)
             # 玩家当前级（专N 或 Lv.main）+ 满级（专3/无专精回退 7 级）详情
             current_lv: SkillLevelDetail | None = None
@@ -488,13 +448,12 @@ def _format_operator(op: OperatorInfo, owner: dict | None = None) -> str:
             shown = []
             for idx in (0, 3, 6, 7, 9):
                 if idx < len(s.levels):
-                    lv = s.levels[idx]
-                    parts = []
-                    if lv.sp_cost:
-                        parts.append(f"{lv.sp_cost}耗")
-                    if lv.duration:
-                        parts.append(f"{lv.duration}持")
-                    shown.append(f"{lv.level}({'/'.join(parts)})" if parts else lv.level)
+                    meta = skill_meta(s.levels[idx])
+                    shown.append(
+                        f"{s.levels[idx].level}({meta})"
+                        if meta
+                        else s.levels[idx].level
+                    )
             if shown:
                 lines.append(f"    逐级：{' | '.join(shown)}")
             for mc in s.mastery_costs:
@@ -528,13 +487,22 @@ def _format_operator(op: OperatorInfo, owner: dict | None = None) -> str:
         for m in op.modules:
             tag = f"[{m.type_}]" if m.type_ else ""
             lines.append(f"  {tag}{m.name}：{_clip(m.description, 80)}")
+            # 具体效果摘要：特性追加 + 天赋更新（详情见 ark模组）
+            if m.trait:
+                lines.append(
+                    f"    特性追加：{_clip(m.trait.replace(chr(10), ' '), 100)}"
+                )
+            for lvl in ("2", "3"):
+                update = m.talent_updates.get(lvl)
+                if update:
+                    lines.append(
+                        f"    Lv{lvl}：{_clip(update.replace(chr(10), ' '), 100)}"
+                    )
     if op.potentials:
         lines.append("【潜能】" + "，".join(op.potentials))
     if op.paradox:
         reward = f" 报酬：{'/'.join(op.paradox.rewards)}" if op.paradox.rewards else ""
-        lines.append(
-            f"【悖论模拟】{op.paradox.name}（精英{op.paradox.elite}）{reward}"
-        )
+        lines.append(f"【悖论模拟】{op.paradox.name}（精英{op.paradox.elite}）{reward}")
     if op.base_skills:
         lines.append("【后勤技能】")
         for b in op.base_skills:
@@ -569,28 +537,11 @@ def _format_mastery(op: OperatorInfo) -> str:
 async def _render_or_text(
     bot: Bot, ev: Event, template_name: str, context: dict, text: str
 ) -> None:
-    """有模板则渲染出图，模板缺失/报错则回退纯文本。
+    """出图/回退文本的公共实现在 utils.card.send_card_or_text（含 wiki 在内
+    全部业务模块共用）；此处保留同名薄壳，旧调用点与测试 patch 兼容。"""
+    from ArknightsUID.utils.card import send_card_or_text
 
-    render 模块（含 fastapi/playwright）惰性导入，避免纯文本路径付出重依赖成本，
-    也让单元测试在无需渲染引擎时仍可走回退分支。
-    出图路径直接 bot.send(bytes)，不加 at_sender（图片无需 @，与文本路径不同，非 bug）。
-    """
-    img = None
-    try:
-        from ..utils.render import ark_templates, render_html
-
-        img = await render_html(ark_templates, template_name, context)
-    except TemplateNotFound:
-        # 模板尚未由前端提供（kimi），属预期状态，降级 debug 避免日志刷屏
-        logger.debug(f"[ArknightsUID] 模板未就绪，回退纯文本：{template_name}")
-        img = None
-    except Exception:
-        logger.exception(f"[ArknightsUID] 卡片渲染失败，回退纯文本：{template_name}")
-        img = None
-    if img:
-        await bot.send(img, at_sender=bool(ev.group_id))
-    else:
-        await _send_text(bot, ev, text)
+    await send_card_or_text(bot, ev, template_name, context, text)
 
 
 async def _build_page_context(page: WikiPageSummary) -> dict:
@@ -608,17 +559,23 @@ async def _skill_icon_b64(skill_name: str) -> str:
     if not skill_name:
         return ""
     try:
-        from ..utils.gamedata.charinfo import load_skill_names
-        from ..utils.path import SKILL_CACHE_PATH
-        from ..utils.player.context import skill_icon_url
-        from ..utils.render import get_image_b64_with_cache
+        from ArknightsUID.utils.gamedata.charinfo import load_skill_names
+        from ArknightsUID.utils.path import SKILL_CACHE_PATH
+        from ArknightsUID.utils.player.context import skill_icon_url
+        from ArknightsUID.utils.render import get_image_b64_with_cache
 
         names = await load_skill_names()
         skill_id = next((sid for sid, n in names.items() if n == skill_name), "")
         if not skill_id:
             return ""
-        return await get_image_b64_with_cache(skill_icon_url(skill_id), SKILL_CACHE_PATH)
-    except Exception:
+        return await get_image_b64_with_cache(
+            skill_icon_url(skill_id), SKILL_CACHE_PATH
+        )
+    except Exception as exc:
+        logger.debug(
+            f"[ArknightsUID·wiki] 技能图标获取失败 {skill_name}: "
+            f"{exc.__class__.__name__}"
+        )
         return ""
 
 
@@ -629,8 +586,11 @@ async def _operator_portrait_b64(name: str) -> str:
     逐档回退逻辑在共享助手 char_portrait_b64；索引缺失/下载失败返回空串降级。
     """
     try:
-        from ..utils.gamedata.charinfo import load_char_index, resolve_char
-        from ..utils.player.context import char_portrait_b64
+        from ArknightsUID.utils.gamedata.charinfo import (
+            load_char_index,
+            resolve_char,
+        )
+        from ArknightsUID.utils.player.context import char_portrait_b64
 
         index = await load_char_index()
         if not index:
@@ -650,22 +610,19 @@ async def _build_operator_context(op: OperatorInfo, owner: dict | None = None) -
     """干员富信息卡片上下文（技能全量逐级 + 天赋 + 专精材料 + 立绘）。
 
     rarity 在 PRTS 存 0-5，展示时 +1 转为 1-6 星人读值。
-    skills.levels 全量保留（1-7 + 专1-3 正好 10 级，不裁剪）；另给
-    current（玩家当前级，需 owner）/ final（满级展示级）两条详情，模板
-    直接渲染描述文本（伤害数值在描述里，此前两版渲染均未展示）。
+    skills.levels 全量保留（1-7 + 专1-3 正好 10 级，不裁剪）；current/final
+    详情走共享层 utils.skillfx（描述 + 初动/消耗/持续 meta，与练度卡同口径）。
     """
     rarity = str(int(op.rarity) + 1) if op.rarity.isdigit() else op.rarity
     owner_skills = owner.get("skills") if owner else None
+    main_lvl = (owner or {}).get("main_skill_lvl")
     skills_ctx: list[dict] = []
     for s in op.skills:
-        current_lv: SkillLevelDetail | None = None
-        if owner_skills and s.name in owner_skills:
-            current_lv = _owner_level(
-                s.levels,
-                int(owner_skills[s.name]),
-                int((owner or {}).get("main_skill_lvl") or 0),
-            )
-        final_lv = _final_level(s.levels)
+        current, final = skill_current_final(
+            s,
+            owner_skills.get(s.name) if owner_skills else None,
+            main_lvl,
+        )
         skills_ctx.append(
             {
                 "name": s.name,
@@ -682,20 +639,8 @@ async def _build_operator_context(op: OperatorInfo, owner: dict | None = None) -
                     }
                     for lv in s.levels
                 ],
-                "current": (
-                    _skill_level_context(current_lv)
-                    if current_lv is not None and current_lv.description
-                    else None
-                ),
-                "final": (
-                    None
-                    if (current_lv is not None and current_lv is final_lv)
-                    else (
-                        _skill_level_context(final_lv)
-                        if final_lv is not None and final_lv.description
-                        else None
-                    )
-                ),
+                "current": current,
+                "final": final,
                 "mastery_costs": [
                     {"mastery": mc.mastery, "materials": list(mc.materials)}
                     for mc in s.mastery_costs
@@ -724,8 +669,7 @@ async def _build_operator_context(op: OperatorInfo, owner: dict | None = None) -
                 "unlock": t.unlock,
                 "description": t.description,
                 "stages": [
-                    {"condition": st.condition, "effect": st.effect}
-                    for st in t.stages
+                    {"condition": st.condition, "effect": st.effect} for st in t.stages
                 ],
                 "potential": (
                     {"condition": t.potential.condition, "effect": t.potential.effect}
@@ -751,6 +695,14 @@ async def _build_operator_context(op: OperatorInfo, owner: dict | None = None) -
                 "name": m.name,
                 "type": m.type_,
                 "description": _clip(m.description, 200),
+                # 具体效果摘要（特性追加 + 首条天赋更新；详情走 ark模组）
+                "trait": _clip(m.trait.replace("\n", " "), 160),
+                "talent_brief": _clip(
+                    (next(iter(m.talent_updates.values()), "") or "").replace(
+                        "\n", " "
+                    ),
+                    160,
+                ),
             }
             for m in op.modules
         ],
@@ -881,7 +833,11 @@ def _enemy_secondary_stats(level: EnemyLevel | None) -> list[dict]:
     return rows
 
 
-async def _build_enemy_context(enemy: EnemyInfo) -> dict:
+async def build_enemy_context(enemy: EnemyInfo) -> dict:
+    """敌方情报卡渲染上下文（rogue 详情同用——跨模块公开缝）。
+
+    原私有名 _build_enemy_context 保留为别名，供既有调用点/测试不动。
+    """
     level = enemy.levels[0] if enemy.levels else None
     # 等级 2+ 变体通用化（弑君者等有 3 个等级块；差异字段已在解析层继承补全）
     variants = [
@@ -935,27 +891,19 @@ async def _build_enemy_context(enemy: EnemyInfo) -> dict:
 _ENEMY_FETCH_CONCURRENCY = 4
 
 
+_build_enemy_context = build_enemy_context
+
+
 async def _gather_b64(fetch, keys: list[str]) -> list[str]:
-    """并发受限批量取图 b64（信号量 4，同 _enrich_stage_enemies 口径）。
+    """并发受限批量取图 b64（共享实现在 utils.image.gather_b64）。
 
     串行逐个 await 在冷缓存下是命令级卡顿（公招推荐最重 6×24=144 次，
     见审计 #39）；单飞/负缓存在各 fetch 内部，这里只管并发上限与
     失败降级（空串）。结果顺序与 keys 对齐。
     """
-    if not keys:
-        return []
-    semaphore = asyncio.Semaphore(_ENEMY_FETCH_CONCURRENCY)
+    from ArknightsUID.utils.image import gather_b64
 
-    async def _one(key: str) -> str:
-        if not key:
-            return ""
-        async with semaphore:
-            try:
-                return await fetch(key)
-            except Exception:
-                return ""
-
-    return list(await asyncio.gather(*(_one(k) for k in keys)))
+    return await gather_b64(fetch, keys, limit=_ENEMY_FETCH_CONCURRENCY)
 
 
 async def _enemy_basic_stats(name: str) -> dict:
@@ -1033,7 +981,13 @@ def _stage_condition_blocks(stage: StageInfo) -> list[dict]:
             items.append({"text": _clip(stage.assault_info, 160), "tags": []})
         items.extend({"text": _clip(d, 100), "tags": []} for d in stage.assault_diffs)
         blocks.append(
-            {"label": "突袭条件", "en": "ASSAULT", "tone": "red", "note": "", "rows": items}
+            {
+                "label": "突袭条件",
+                "en": "ASSAULT",
+                "tone": "red",
+                "note": "",
+                "rows": items,
+            }
         )
     if stage.env_conditions:
         blocks.append(
@@ -1092,33 +1046,38 @@ def _stage_condition_blocks(stage: StageInfo) -> list[dict]:
 _MAP_MISS_TTL = 7 * 86400  # 无图关卡负缓存：地图文件名固定，7 天复核一次
 
 
-async def _get_stage_map_b64(code: str, name: str) -> str:
-    """关卡地图 → base64（磁盘缓存）。
+async def _get_stage_map_b64(code: str, name: str, stage_id: str = "") -> str:
+    """关卡地图 → base64（磁盘缓存）。来源优先级：
 
-    优先 md5 直链（map_file_url，零 API、URL 永久固定），标准 + 辅助两种
-    命名；都 404 时兜底一次 imageinfo 查询（覆盖极少数改名文件）；仍无则
-    空串——卡片降级无图，map_url 仍给 PRTS.Map 链接。
+    1. PRTS 上传文件 md5 直链（map_file_url，零 API；主线/教学关有，
+       活动关从无此命名文件），标准 + 辅助两种命名
+    2. imageinfo 兜底（覆盖极少数改名文件）
+    3. torappu level_id 预览（stage_map_preview_url；活动关地图的实际
+       来源，当期活动开服首日即可拉，主线亦全覆盖）
 
-    无图关卡（14 章未上传 / 活动关）写 7 天负缓存标记，避免每次查询
-    都吃 2×404 + 1 次 API。
+    仍无则空串——卡片降级无图，map_url 仍给 PRTS.Map 链接。无图关卡
+    （ST 剧情关/资源未传）写 7 天负缓存标记，避免每次查询都吃满
+    2×404 + 1 次 API + 1 次 torappu。
     """
     if not code or not name:
         return ""
     import hashlib as _hashlib
 
-    from ..utils.prts.client import map_candidate_titles, map_file_url
-    from ..utils.render import get_image_b64_with_cache
-    from ..utils.resource.RESOURCE_PATH import CACHE_PATH
+    from ArknightsUID.utils.prts.client import (
+        map_candidate_titles,
+        map_file_url,
+        stage_map_preview_url,
+    )
+    from ArknightsUID.utils.render import get_image_b64_with_cache
+    from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
 
     cache = CACHE_PATH / "wiki" / "map"
-    miss = cache / (
-        "nomap_" + _hashlib.md5(f"{code}_{name}".encode("utf-8")).hexdigest()[:12]
-    )
+    miss = cache / ("nomap_" + _hashlib.md5(f"{code}_{name}".encode()).hexdigest()[:12])
     if miss.exists() and time.time() - miss.stat().st_mtime < _MAP_MISS_TTL:
         return ""
 
     def _url_miss(url: str) -> Path:
-        from ..utils.gamedata.path_safety import safe_url_basename
+        from ArknightsUID.utils.gamedata.path_safety import safe_url_basename
 
         # 与 bulk_download 的地图 miss marker 同名（安全 basename）
         return cache / (safe_url_basename(url) + ".miss")
@@ -1130,7 +1089,7 @@ async def _get_stage_map_b64(code: str, name: str) -> str:
         挂掉）都写 7 天负缓存——一次瞬时故障让本来存在的地图 7 天不出图。
         网络类失败不写标记，下轮查询即自愈。
         """
-        from ..utils.http import download_bytes_status
+        from ArknightsUID.utils.http import download_bytes_status
 
         status, content = await download_bytes_status(url, timeout=25.0)
         if status == 404:
@@ -1144,8 +1103,8 @@ async def _get_stage_map_b64(code: str, name: str) -> str:
             return ""  # 网络失败/5xx：不写负缓存
         # 200：落盘复用 bulk 的校验规则（非图片内容拒绝，防污染），
         # 随后走缓存读取路径出 b64（含烘焙/格式分支，零重复下载）
-        from ..utils.gamedata.path_safety import safe_url_basename
-        from ..utils.resource.bulk_download import _save_image_sync
+        from ArknightsUID.utils.gamedata.path_safety import safe_url_basename
+        from ArknightsUID.utils.resource.bulk_download import _save_image_sync
 
         url_last = safe_url_basename(url)
         if not url_last:
@@ -1172,7 +1131,18 @@ async def _get_stage_map_b64(code: str, name: str) -> str:
         b64 = await _fetch_map_b64(fallback_url)
         if b64:
             return b64
-    # 关卡级 nomap 标记：仅在 PRTS 明确无该文件（所有候选 URL 均 404）
+    # torappu level_id 预览：活动关地图的主来源（wiki 从不上传活动地图文件）
+    preview_url = stage_map_preview_url(stage_id)
+    if preview_url:
+        marker = _url_miss(preview_url)
+        if not (
+            marker.exists() and time.time() - marker.stat().st_mtime < _MAP_MISS_TTL
+        ):
+            b64 = await _fetch_map_b64(preview_url)
+            if b64:
+                return b64
+
+    # 关卡级 nomap 标记：仅在所有来源明确无该文件（候选 URL 均 404）
     # 时才写——fallback 解析失败（网络）不写，下轮重试。
     # 判定输入必须校验标记新鲜度（审计 #39）：只查 exists() 会把
     # "已过期待重查 + 本轮重查遇网络失败（非 404，标记未刷新）"的
@@ -1187,10 +1157,12 @@ async def _get_stage_map_b64(code: str, name: str) -> str:
             return False
 
     candidate_urls = [
-        url for url in (
-            map_file_url(title) for title in map_candidate_titles(code, name)
-        ) if url
+        url
+        for url in (map_file_url(title) for title in map_candidate_titles(code, name))
+        if url
     ]
+    if preview_url:
+        candidate_urls.append(preview_url)
     if candidate_urls and all(_confirmed_missing(url) for url in candidate_urls):
         try:
             cache.mkdir(parents=True, exist_ok=True)
@@ -1204,7 +1176,7 @@ async def _build_stage_context(stage: StageInfo) -> dict:
     title = stage.code or stage.title
     # 地图：md5 直链优先（固定资源，命中磁盘缓存后零网络零 API）
     try:
-        map_b64 = await _get_stage_map_b64(stage.code, stage.name)
+        map_b64 = await _get_stage_map_b64(stage.code, stage.name, stage.stage_id)
     except Exception:
         logger.debug("[ArknightsUID] 关卡地图下载失败，卡片降级无图", exc_info=True)
         map_b64 = ""
@@ -1263,9 +1235,16 @@ def _parse_panel_query(text: str) -> dict:
     module_level}，未指定的键为 None/False。
     """
     config: dict = {
-        "name": "", "phase": None, "level": None, "potential": None,
-        "favor": None, "skill_index": None, "skill_level": None,
-        "mastery": None, "module_type": None, "no_module": False,
+        "name": "",
+        "phase": None,
+        "level": None,
+        "potential": None,
+        "favor": None,
+        "skill_index": None,
+        "skill_level": None,
+        "mastery": None,
+        "module_type": None,
+        "no_module": False,
         "module_level": None,
     }
     tokens = (text or "").strip().split()
@@ -1303,9 +1282,7 @@ def _parse_panel_query(text: str) -> dict:
         elif m := _RE_MODULE_TYPE.match(token):
             # 全角 Ｘ/Ｙ 先 NFKC 归一半角再大写，否则 'Ｙ' != 'Y'
             # 永不命中模组类型，静默回退 X 模
-            config["module_type"] = unicodedata.normalize(
-                "NFKC", m.group(1)
-            ).upper()
+            config["module_type"] = unicodedata.normalize("NFKC", m.group(1)).upper()
         elif _RE_MODULE_LV.match(token):
             config["module_level"] = int(_RE_MODULE_LV.match(token).group(1))
         elif token in ("无模", "无模组"):
@@ -1320,8 +1297,14 @@ def _parse_panel_query(text: str) -> dict:
 
 
 _PROFESSION_NAMES = {
-    "PIONEER": "先锋", "GUARD": "近卫", "DEFENDER": "重装", "SNIPER": "狙击",
-    "CASTER": "术师", "MEDIC": "医疗", "SUPPORTER": "辅助", "SPECIALIST": "特种",
+    "PIONEER": "先锋",
+    "GUARD": "近卫",
+    "DEFENDER": "重装",
+    "SNIPER": "狙击",
+    "CASTER": "术师",
+    "MEDIC": "医疗",
+    "SUPPORTER": "辅助",
+    "SPECIALIST": "特种",
 }
 
 
@@ -1340,8 +1323,8 @@ def _format_op_panel(context: dict) -> str:
         lines.append(f"天赋·{talent['name']}：{_clip(talent['description'], 120)}")
     skill = context.get("skill")
     if skill:
-        sp = f"（初始{skill['sp_init']}·消耗{skill['sp_cost']}"
-        sp += f"·持续{skill['duration']}" if skill.get("duration") else ""
+        sp = f"（初动{skill['sp_init']}·消耗{skill['sp_cost']}"
+        sp += f"·持续{skill['duration']}秒" if skill.get("duration") else ""
         sp += "）"
         lines.append(f"{skill['title']}：{_clip(skill['description'], 200)}{sp}")
     if context.get("potentials"):
@@ -1352,48 +1335,37 @@ def _format_op_panel(context: dict) -> str:
 
 async def _owner_panel_config(ev: Event, char_id: str) -> dict | None:
     """已绑定账号持有该干员时 → 当前面板配置（等级/潜能/好感/技能/模组）。"""
-    try:
-        from ..utils.enduid.adapter import resolve_credential
-        from ..utils.player import fetch_cached_player_info, parse_player_info
-
-        credential = await resolve_credential(ev.user_id, ev.bot_id)
-        if isinstance(credential, str):
-            return None
-        response = await fetch_cached_player_info(credential)
-        if not isinstance(response, dict):
-            return None
-        data = parse_player_info(response)
-        if data is None:
-            return None
-        entry = next((c for c in data.chars if c.char_id == char_id), None)
-        if entry is None:
-            return None
-        # 默认技能：取专精等级最高的技能（配对取该技能自身的专精档，
-        # 避免「技能2专3、技能3专1」时误按技能3×专3 折算），无专精则 1 技能
-        skill_index, specialize = 1, 0
-        for i, skill in enumerate(entry.skills or [], start=1):
-            level = skill.specialize_level or 0
-            if level > specialize:
-                skill_index, specialize = i, level
-        equip_level = 0
-        if entry.default_equip_id:
-            for equip in entry.equips or []:
-                if equip.equip_id == entry.default_equip_id:
-                    equip_level = equip.level
-        return {
-            "owned": True,
-            "phase": entry.evolve_phase,
-            "level": entry.level,
-            "potential": entry.potential_rank,
-            "favor": entry.favor_percent,
-            "skill_index": skill_index,
-            "main_skill_lvl": entry.main_skill_lvl,
-            "specialize": specialize,
-            "default_equip_id": entry.default_equip_id,
-            "equip_level": equip_level,
-        }
-    except Exception:
+    loaded = await _owner_player_data(ev)
+    if loaded is None:
         return None
+    _, data = loaded
+    entry = next((c for c in data.chars if c.char_id == char_id), None)
+    if entry is None:
+        return None
+    # 默认技能：取专精等级最高的技能（配对取该技能自身的专精档，
+    # 避免「技能2专3、技能3专1」时误按技能3×专3 折算），无专精则 1 技能
+    skill_index, specialize = 1, 0
+    for i, skill in enumerate(entry.skills or [], start=1):
+        level = skill.specialize_level or 0
+        if level > specialize:
+            skill_index, specialize = i, level
+    equip_level = 0
+    if entry.default_equip_id:
+        for equip in entry.equips or []:
+            if equip.equip_id == entry.default_equip_id:
+                equip_level = equip.level
+    return {
+        "owned": True,
+        "phase": entry.evolve_phase,
+        "level": entry.level,
+        "potential": entry.potential_rank,
+        "favor": entry.favor_percent,
+        "skill_index": skill_index,
+        "main_skill_lvl": entry.main_skill_lvl,
+        "specialize": specialize,
+        "default_equip_id": entry.default_equip_id,
+        "equip_level": equip_level,
+    }
 
 
 async def _build_op_panel_context(query: str, ev: Event) -> dict | str:
@@ -1403,8 +1375,11 @@ async def _build_op_panel_context(query: str, ev: Event) -> dict | str:
     技能逐级文本来自 PRTS（skill_table 描述是未填充模板变量，不可用）。
     默认配置 = 用户自己的干员（未绑定/未持有 → 精2满级 潜0 技能7级 无模组）。
     """
-    from ..utils.gamedata import oppanel
-    from ..utils.gamedata.charinfo import load_char_index, resolve_char
+    from ArknightsUID.utils.gamedata import oppanel
+    from ArknightsUID.utils.gamedata.charinfo import (
+        load_char_index,
+        resolve_char,
+    )
 
     config = _parse_panel_query(query)
     name = config["name"]
@@ -1431,8 +1406,10 @@ async def _build_op_panel_context(query: str, ev: Event) -> dict | str:
     phase = config["phase"] if config["phase"] is not None else base_phase
     phase = max(0, min(phase, phases_count - 1))
     max_level = oppanel.max_level_at(char_entry, phase)
-    level = config["level"] if config["level"] is not None else (
-        (owner or {}).get("level") or max_level
+    level = (
+        config["level"]
+        if config["level"] is not None
+        else ((owner or {}).get("level") or max_level)
     )
     if level == -1:
         level = max_level
@@ -1443,14 +1420,15 @@ async def _build_op_panel_context(query: str, ev: Event) -> dict | str:
         # 玩家数据 potentialRank 是 0 基档位：生效档 = N-1（此前直接把 N
         # 当档位用，潜1-潜5 全部多吃一档潜能加成）
         potential = (
-            max_potential if config["potential"] == -1
-            else config["potential"] - 1
+            max_potential if config["potential"] == -1 else config["potential"] - 1
         )
     else:
         potential = (owner or {}).get("potential", 0)
     potential = max(0, min(potential, max_potential))
-    favor = config["favor"] if config["favor"] is not None else (
-        (owner or {}).get("favor", 0)
+    favor = (
+        config["favor"]
+        if config["favor"] is not None
+        else ((owner or {}).get("favor", 0))
     )
 
     # 模组：显式 X/Y > 用户默认装备 > 无
@@ -1493,11 +1471,7 @@ async def _build_op_panel_context(query: str, ev: Event) -> dict | str:
         mastery = config["mastery"]
         if mastery is None and not config["skill_level"]:
             mastery = (owner or {}).get("specialize", 0) or None
-        main_lvl = (
-            config["skill_level"]
-            or (owner or {}).get("main_skill_lvl")
-            or 7
-        )
+        main_lvl = config["skill_level"] or (owner or {}).get("main_skill_lvl") or 7
         detail = select_owner_level(
             skill.levels, mastery if mastery else 0, int(main_lvl)
         )
@@ -1522,9 +1496,7 @@ async def _build_op_panel_context(query: str, ev: Event) -> dict | str:
     parts = panel["parts"]
     for label, key in (("生命", "hp"), ("攻击", "atk"), ("防御", "def")):
         seg = parts.get(key) or {}
-        extra = sum(
-            seg.get(k, 0.0) for k in ("potential", "favor", "module")
-        )
+        extra = sum(seg.get(k, 0.0) for k in ("potential", "favor", "module"))
         if extra:
             source_bits = []
             if seg.get("potential"):
@@ -1533,27 +1505,26 @@ async def _build_op_panel_context(query: str, ev: Event) -> dict | str:
                 source_bits.append(f"好感+{oppanel._fmt(seg['favor'])}")
             if seg.get("module"):
                 source_bits.append(f"模组+{oppanel._fmt(seg['module'])}")
-            breakdown.append(f"{label}：基础 {oppanel._fmt(seg['base'])} → " + "、".join(source_bits))
+            breakdown.append(
+                f"{label}：基础 {oppanel._fmt(seg['base'])} → " + "、".join(source_bits)
+            )
 
-    profession = _PROFESSION_NAMES.get(
-        str(char_entry.get("profession") or ""), ""
-    )
+    profession = _PROFESSION_NAMES.get(str(char_entry.get("profession") or ""), "")
     # character_table 的稀有度是 TIER_x（=x 星）
     rarity_text = str(char_entry.get("rarity") or "")
     try:
         rarity = int(rarity_text.rsplit("_", 1)[-1])
     except ValueError:
         rarity = 0
-    from ..utils.player.context import char_avatar_b64
+    from ArknightsUID.utils.player.context import char_avatar_b64
 
     config_labels = [
-        f"精{phase} Lv{level}", f"潜能{potential}",
+        f"精{phase} Lv{level}",
+        f"潜能{potential}",
         f"好感{favor}%",
     ]
     if module:
-        config_labels.append(
-            f"{module['type']}模组·{module['name']} Lv{module_level}"
-        )
+        config_labels.append(f"{module['type']}模组·{module['name']} Lv{module_level}")
     else:
         config_labels.append("无模组")
     if skill_ctx:
@@ -1572,17 +1543,17 @@ async def _build_op_panel_context(query: str, ev: Event) -> dict | str:
         "skill": skill_ctx,
         "skills": skill_list,
         "potentials": potentials,
-        "module_choices": [
-            {"type": c["type"], "name": c["name"]} for c in choices
-        ],
-        "source_url": op.source_url if op else page_url_title(char_entry.get("name") or name),
+        "module_choices": [{"type": c["type"], "name": c["name"]} for c in choices],
+        "source_url": op.source_url
+        if op
+        else page_url_title(char_entry.get("name") or name),
         "source_note": "数值 ArknightsGameData · 技能文本 PRTS Wiki",
         "version": ArknightsUID_version,
     }
 
 
 def page_url_title(title: str) -> str:
-    from ..utils.prts.client import page_url
+    from ArknightsUID.utils.prts.client import page_url
 
     return page_url(title)
 
@@ -1592,7 +1563,8 @@ async def send_op_panel(bot: Bot, ev: Event) -> None:
     query = _clean_query(ev.text)
     if not query:
         return await _send_text(
-            bot, ev,
+            bot,
+            ev,
             "用法：ark面板 干员名 [精2 Lv45 潜6 满好 X模 模3 技能2 专3]（默认取你自己的练度）",
         )
     context = await _build_op_panel_context(query, ev)
@@ -1621,29 +1593,21 @@ async def send_wiki_page(bot: Bot, ev: Event) -> None:
     await _send_text(bot, ev, _format_search(query, results))
 
 
-async def _resolve_alias(
-    query: str, bot_id: str = "", user_id: str = ""
-) -> str:
+async def _resolve_alias(query: str, bot_id: str = "", user_id: str = "") -> str:
     """用户自定义别名 → 内建别名/英文代号/唯一前缀 → 标准干员名。
 
-    用户别名（ArkAlias 表，精确匹配）优先级最高；gamedata 索引不可用
-    或匹配不唯一时原样返回，交由 PRTS 搜索兜底。
+    统一管线见 charinfo.resolve_query（amiya_forms=False：词条搜索需要
+    名称级结果，不走形态 charId 捷径）；索引不可用或匹配不唯一时原样
+    返回，交由 PRTS 搜索兜底。
     """
-    if bot_id and user_id:
-        try:
-            from ..utils.user_alias import apply_user_alias
-
-            query = await apply_user_alias(bot_id, user_id, query)
-        except Exception:
-            logger.debug("[ArknightsUID] 用户别名解析失败，跳过")
     try:
-        from ..utils.gamedata.charinfo import load_char_index, resolve_char
+        from ArknightsUID.utils.gamedata.charinfo import resolve_query
 
-        index = await load_char_index()
-        if index:
-            hit = resolve_char(query, index)
-            if hit:
-                return hit[1]
+        res = await resolve_query(
+            query, bot_id=bot_id, user_id=user_id, amiya_forms=False
+        )
+        if res.unique and res.name:
+            return res.name
     except Exception:
         logger.debug("[ArknightsUID] 别名解析失败，使用原始查询词")
     return query
@@ -1693,15 +1657,11 @@ async def send_mastery_materials(bot: Bot, ev: Event) -> None:
                 name, _count = split_material_text(text)
                 if name:
                     item_names.append(name)
-    item_icons = dict(
-        zip(item_names, await _gather_b64(item_icon_b64, item_names))
-    )
+    item_icons = dict(zip(item_names, await _gather_b64(item_icon_b64, item_names)))
     skill_icons = dict(
         zip(
             [s.name for s in mastery_skills],
-            await _gather_b64(
-                _skill_icon_b64, [s.name for s in mastery_skills]
-            ),
+            await _gather_b64(_skill_icon_b64, [s.name for s in mastery_skills]),
         )
     )
     skills_ctx = []
@@ -1715,11 +1675,13 @@ async def send_mastery_materials(bot: Bot, ev: Event) -> None:
                     {"name": name, "count": count, "icon": item_icons.get(name, "")}
                 )
             costs_ctx.append({"mastery": mc.mastery, "materials": mats})
-        skills_ctx.append({
-            "name": s.name,
-            "icon": skill_icons.get(s.name, ""),
-            "mastery_costs": costs_ctx,
-        })
+        skills_ctx.append(
+            {
+                "name": s.name,
+                "icon": skill_icons.get(s.name, ""),
+                "mastery_costs": costs_ctx,
+            }
+        )
     context = {
         "name": op.name or op.title,
         "rarity": rarity,
@@ -1756,19 +1718,18 @@ async def send_enemy_page(bot: Bot, ev: Event) -> None:
     enemy = await query_enemy(query)
     if not enemy:
         return await _send_text(
-            bot, ev,
+            bot,
+            ev,
             f"未找到敌人词条：{query}"
             "（若为肉鸽主题敌人，试试 ark肉鸽敌人 " + query + "）",
         )
-    context = await _build_enemy_context(enemy)
-    await _render_or_text(
-        bot, ev, "ark_wiki_enemy.html", context, _format_enemy(enemy)
-    )
+    context = await build_enemy_context(enemy)
+    await _render_or_text(bot, ev, "ark_wiki_enemy.html", context, _format_enemy(enemy))
 
 
 def _format_relic(name: str, groups: list[dict]) -> str:
     lines = [f"「明日方舟」肉鸽藏品：{name}"]
-    for i, g in enumerate(groups):
+    for g in groups:
         head = f"  [{g.get('rarity_name') or g.get('rarity') or '-'}]"
         lines.append(
             f"{head} {'、'.join(t for t in g['themes'] if t)}\n    {_clip(g['usage'] or '（无效果说明）', 200)}"
@@ -1786,7 +1747,7 @@ async def _build_relic_context(name: str, groups: list[dict]) -> dict:
         icon = ""
         if g.get("icon_id"):
             try:
-                from ..utils.gamedata.rogue_relic import relic_icon_b64
+                from ArknightsUID.utils.gamedata.rogue_relic import relic_icon_b64
 
                 icon = await relic_icon_b64(g["icon_id"])
             except Exception:
@@ -1815,7 +1776,7 @@ async def send_relic_query(bot: Bot, ev: Event) -> None:
     if not query:
         return await _send_text(bot, ev, "用法：ark藏品 名字（如 ark藏品 钝爪-典训）")
     try:
-        from ..utils.gamedata.rogue_relic import (
+        from ArknightsUID.utils.gamedata.rogue_relic import (
             group_relic_effects,
             load_relic_index,
             match_relics,
@@ -1835,7 +1796,9 @@ async def send_relic_query(bot: Bot, ev: Event) -> None:
         return await _send_text(bot, ev, f"未找到藏品：{query}")
     if len(matched) > 1:
         shown = "、".join(matched)
-        return await _send_text(bot, ev, f"找到 {len(matched)} 个候选：{shown}（请用完整名）")
+        return await _send_text(
+            bot, ev, f"找到 {len(matched)} 个候选：{shown}（请用完整名）"
+        )
 
     name = matched[0]
     groups = group_relic_effects(index[name])
@@ -1855,7 +1818,10 @@ async def send_stage_page(bot: Bot, ev: Event) -> None:
         return await _send_text(bot, ev, f"未找到关卡：{query}")
     context = await _build_stage_context(stage)
     await _render_or_text(
-        bot, ev, "ark_wiki_stage.html", context,
+        bot,
+        ev,
+        "ark_wiki_stage.html",
+        context,
         _format_stage(stage, context.get("enemies")),
     )
 
@@ -1886,7 +1852,8 @@ async def send_recruit_recommend(bot: Bot, ev: Event) -> None:
     ]
     if not raw and not image_sources:
         return await _send_text(
-            bot, ev,
+            bot,
+            ev,
             "用法：ark公招推荐 标签1 标签2 …（把公招界面看到的标签全部输入，"
             "如 ark公招推荐 高级资深干员 术师 输出 远程位 生存），"
             "或直接发送公招界面截图自动识别标签",
@@ -1904,7 +1871,8 @@ async def send_recruit_recommend(bot: Bot, ev: Event) -> None:
         if not ocr.tags:
             shown = "、".join(ocr.raw_texts[:6]) or "无"
             return await _send_text(
-                bot, ev,
+                bot,
+                ev,
                 f"截图里没识别到公招标签（读到的文字：{shown}）。"
                 "请截取包含标签区域的公招界面，"
                 "或文字输入 ark公招推荐 标签…",
@@ -1914,7 +1882,7 @@ async def send_recruit_recommend(bot: Bot, ev: Event) -> None:
     else:
         tags = [t.strip() for t in re.split(r"[\s,，、+]+", raw) if t.strip()]
     try:
-        from ..utils.gamedata.recruit import recommend_combos
+        from ArknightsUID.utils.gamedata.recruit import recommend_combos
     except ImportError:
         from ArknightsUID.utils.gamedata.recruit import recommend_combos
 
@@ -1925,7 +1893,8 @@ async def send_recruit_recommend(bot: Bot, ev: Event) -> None:
         if result["unknown"]:
             hint = f"（未识别的标签：{'、'.join(result['unknown'])}）"
         return await _send_text(
-            bot, ev,
+            bot,
+            ev,
             f"这些标签组不出任何可公招组合{hint}。检查标签写法，"
             "或用 ark公招 <标签> 查询单个组合。",
         )
@@ -1984,9 +1953,7 @@ async def send_recruit_recommend(bot: Bot, ev: Event) -> None:
         "勾选高资/资深标签并拉满 9 小时：标签不划、必得 6★/5★；"
         "池与标签口径 PRTS 公开招募页同步。"
     )
-    await _render_or_text(
-        bot, ev, "ark_recruit_plan.html", context, "\n".join(lines)
-    )
+    await _render_or_text(bot, ev, "ark_recruit_plan.html", context, "\n".join(lines))
 
 
 @wiki_sv.on_command(("公招查询", "recruit", "公招", "gz"), block=True)
@@ -1994,7 +1961,9 @@ async def send_recruit_query(bot: Bot, ev: Event) -> None:
     raw = _clean_query(ev.text)
     if not raw:
         return await _send_text(
-            bot, ev, "用法：ark公招 标签1 标签2（空格或逗号分隔，如 ark公招 高级资深干员 术师）"
+            bot,
+            ev,
+            "用法：ark公招 标签1 标签2（空格或逗号分隔，如 ark公招 高级资深干员 术师）",
         )
     tags = [t.strip() for t in re.split(r"[\s,，、]+", raw) if t.strip()]
     data = await load_recruit_data()
@@ -2068,14 +2037,20 @@ async def send_calendar(bot: Bot, ev: Event) -> None:
     maint_text = ""
     try:
         fmt = "%Y-%m-%d %H:%M"
-        start_ts = datetime.strptime(maint_start, fmt).replace(
-            tzinfo=beijing
-        ).timestamp() if maint_start else 0.0
-        end_ts = datetime.strptime(maint_end, fmt).replace(
-            tzinfo=beijing
-        ).timestamp() if maint_end else 0.0
+        start_ts = (
+            datetime.strptime(maint_start, fmt).replace(tzinfo=beijing).timestamp()
+            if maint_start
+            else 0.0
+        )
+        end_ts = (
+            datetime.strptime(maint_end, fmt).replace(tzinfo=beijing).timestamp()
+            if maint_end
+            else 0.0
+        )
         if start_ts > now_ts:
-            maint_text = f"下次维护：{maint_start}（{_format_remaining(start_ts, now_ts)}）"
+            maint_text = (
+                f"下次维护：{maint_start}（{_format_remaining(start_ts, now_ts)}）"
+            )
         elif start_ts and end_ts and start_ts <= now_ts <= end_ts:
             maint_text = f"维护中，预计 {maint_end} 结束"
     except ValueError:
@@ -2099,7 +2074,7 @@ async def send_calendar(bot: Bot, ev: Event) -> None:
     # 下载缓存后 b64 内嵌；失败空串降级为纯文字行）
     banner_urls: dict[str, str] = {}
     try:
-        from ..utils.prts.client import activity_banner_urls
+        from ArknightsUID.utils.prts.client import activity_banner_urls
 
         banner_urls = await activity_banner_urls([a.title for a in activities])
     except Exception:
@@ -2109,8 +2084,8 @@ async def send_calendar(bot: Bot, ev: Event) -> None:
         if not url:
             return ""
         try:
-            from ..utils.render import get_image_b64_with_cache
-            from ..utils.resource.RESOURCE_PATH import CACHE_PATH
+            from ArknightsUID.utils.render import get_image_b64_with_cache
+            from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
 
             return await get_image_b64_with_cache(
                 url, CACHE_PATH / "activity", quality=82
@@ -2166,34 +2141,20 @@ async def send_module_info(bot: Bot, ev: Event) -> None:
     query = _clean_query(ev.text)
     if not query:
         return await _send_text(bot, ev, "用法：ark模组 干员名（如 ark模组 银灰）")
-    try:
-        from ArknightsUID.utils.gamedata.modules_info import (
-            build_module_context,
-            format_module_context,
-        )
-    except ModuleNotFoundError:
-        from ArknightsUID.ArknightsUID.utils.gamedata.modules_info import (
-            build_module_context,
-            format_module_context,
-        )
+    from ArknightsUID.utils.gamedata.modules_info import (
+        build_module_context,
+        format_module_context,
+    )
 
     context = await build_module_context(query)
     if isinstance(context, str):
         return await _send_text(bot, ev, context)
-    # 解锁材料图标（失败空串降级，不影响出卡）
+    # 模组图标（PRTS torappu 资产，按 uniequip id 直取；失败空串降级）。
+    # 材料图标已由 build_module_context 统一挂好（三档全量）
     try:
-        from ..utils.gamedata.itemicon import item_icon_b64
-
-        for module in context.get("modules") or []:
-            for cost in module.get("costs") or []:
-                cost["icon"] = await item_icon_b64(cost.get("name") or "")
-    except Exception:
-        logger.debug("[ArknightsUID] 模组材料图标获取失败", exc_info=True)
-    # 模组图标（PRTS torappu 资产，按 uniequip id 直取；失败空串降级）
-    try:
-        from ..utils.path import EQUIP_CACHE_PATH
-        from ..utils.player.context import equip_icon_url
-        from ..utils.render import get_image_b64_with_cache
+        from ArknightsUID.utils.path import EQUIP_CACHE_PATH
+        from ArknightsUID.utils.player.context import equip_icon_url
+        from ArknightsUID.utils.render import get_image_b64_with_cache
 
         for module in context.get("modules") or []:
             module["icon"] = await get_image_b64_with_cache(
@@ -2212,40 +2173,35 @@ async def send_crisis_info(bot: Bot, ev: Event) -> None:
     # 词条文本数据源暂不可达（PRTS SMW 词条分类仅图标文件，
     # GameData crisis 表不含词条文本），当前仅提供赛季时间线
     # 无参数：赛季时间线（旧+新，最近 8 个）
-        try:
-            from ArknightsUID.utils.gamedata.crisis import load_crisis_seasons
-        except ModuleNotFoundError:
-            from ArknightsUID.ArknightsUID.utils.gamedata.crisis import (
-                load_crisis_seasons,
-            )
+    from ArknightsUID.utils.gamedata.crisis import load_crisis_seasons
 
-        seasons = await load_crisis_seasons()
-        if not seasons:
-            return await _send_text(
-                bot, ev, "危机合约赛季数据不可用（gamedata 拉取失败），请稍后再试。"
-            )
-        lines = ["「明日方舟」危机合约赛季（近 8 期）："]
-        context_rows = []
-        for season in seasons[:8]:
-            mark = "（新制式）" if season["version"] == "危机合约V2" else ""
-            lines.append(
-                f"- {season['name']}{mark}｜{season['start']} ~ {season['end']}"
-            )
-            context_rows.append(
-                {
-                    "name": season["name"],
-                    "v2": season["version"] == "危机合约V2",
-                    "start": season["start"],
-                    "end": season["end"],
-                }
-            )
-        # 词条检索数据源暂不可达（见函数头注释），不再提示不存在的功能
-        return await _render_or_text(
-            bot, ev,
-            "ark_crisis.html",
-            {"seasons": context_rows, "version": ArknightsUID_version},
-            "\n".join(lines),
+    seasons = await load_crisis_seasons()
+    if not seasons:
+        return await _send_text(
+            bot, ev, "危机合约赛季数据不可用（gamedata 拉取失败），请稍后再试。"
         )
+    lines = ["「明日方舟」危机合约赛季（近 8 期）："]
+    context_rows = []
+    for season in seasons[:8]:
+        mark = "（新制式）" if season["version"] == "危机合约V2" else ""
+        lines.append(f"- {season['name']}{mark}｜{season['start']} ~ {season['end']}")
+        context_rows.append(
+            {
+                "name": season["name"],
+                "v2": season["version"] == "危机合约V2",
+                "start": season["start"],
+                "end": season["end"],
+            }
+        )
+    # 词条检索数据源暂不可达（见函数头注释），不再提示不存在的功能
+    return await _render_or_text(
+        bot,
+        ev,
+        "ark_crisis.html",
+        {"seasons": context_rows, "version": ArknightsUID_version},
+        "\n".join(lines),
+    )
+
 
 @wiki_sv.on_command(("语音", "台词"), block=True)
 async def send_voice_lines(bot: Bot, ev: Event) -> None:
@@ -2254,13 +2210,15 @@ async def send_voice_lines(bot: Bot, ev: Event) -> None:
     parts = query.split()
     if not parts:
         return await _send_text(
-            bot, ev, "用法：ark语音 干员名 [关键词]（如 ark语音 银灰 / ark语音 银灰 合约）"
+            bot,
+            ev,
+            "用法：ark语音 干员名 [关键词]（如 ark语音 银灰 / ark语音 银灰 合约）",
         )
     name = parts[0]
     keyword = parts[1] if len(parts) > 1 else ""
     name = await _resolve_alias(name, ev.bot_id, ev.user_id)
 
-    from ..utils.prts.client import query_voice_lines
+    from ArknightsUID.utils.prts.client import query_voice_lines
 
     try:
         lines = await query_voice_lines(name)
@@ -2274,16 +2232,22 @@ async def send_voice_lines(bot: Bot, ev: Event) -> None:
 
     if keyword:
         hits = [
-            l for l in lines if keyword in l["title"] or keyword in l["text"]
+            line
+            for line in lines
+            if keyword in line["title"] or keyword in line["text"]
         ]
         if not hits:
-            return await _send_text(bot, ev, f"「{name}」的台词里没有提到「{keyword}」。")
+            return await _send_text(
+                bot, ev, f"「{name}」的台词里没有提到「{keyword}」。"
+            )
         shown = hits[:8]
-        header = f"「{name}」台词 · 「{keyword}」（{len(hits)} 条，显示前 {len(shown)} 条）"
+        header = (
+            f"「{name}」台词 · 「{keyword}」（{len(hits)} 条，显示前 {len(shown)} 条）"
+        )
     else:
         shown = lines[:10]
         header = f"「{name}」语音记录（共 {len(lines)} 条，显示前 {len(shown)} 条）"
     body = [header]
-    body.extend(f"[{l['title']}] {l['text']}" for l in shown)
+    body.extend(f"[{s['title']}] {s['text']}" for s in shown)
     body.append("数据：PRTS（语音记录）")
     await _send_text(bot, ev, "\n".join(body))

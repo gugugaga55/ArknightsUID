@@ -85,6 +85,12 @@ class SklandClientTest(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
         self.logger = RecordingLogger()
         self.original_logger = skland_client.logger
+        # _query_string 已上移 utils/api/request_util（签名原语共享层），
+        # 其告警经 request_util.logger 发出——一并替换才能捕获
+        import ArknightsUID.utils.api.request_util as request_util
+
+        self.original_ru_logger = request_util.logger
+        request_util.logger = self.logger
         self.original_get_client = skland_client.get_client
         self.original_retry_delay = skland_client._REFRESH_RETRY_DELAY
         self.original_mark_invalid = skland_client._mark_invalid
@@ -117,6 +123,9 @@ class SklandClientTest(unittest.IsolatedAsyncioTestCase):
 
     def tearDown(self) -> None:
         skland_client.logger = self.original_logger
+        import ArknightsUID.utils.api.request_util as request_util
+
+        request_util.logger = self.original_ru_logger
         skland_client.get_client = self.original_get_client  # type: ignore[assignment]
         skland_client._REFRESH_RETRY_DELAY = self.original_retry_delay
         skland_client._mark_invalid = self.original_mark_invalid  # type: ignore[assignment]
@@ -366,3 +375,24 @@ class SklandClientTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(method, "GET")
         self.assertIn("/api/v1/game/cultivate/player", url)
         self.assertIn("uid=123456789", url)
+
+    async def test_get_rogue_records_passes_topic_and_target(self) -> None:
+        """肉鸽战绩端点（森空岛 App 战绩页同源）：uid/targetUserId/topicId 传递。
+
+        topicId 用主题表键 rogue_N（与社区 nonebot-plugin-skland 一致）；
+        签名组合未经真实凭据联调（见函数 docstring），这里只锁参数链路。
+        """
+        FakeAsyncClient.queue = [
+            refresh_ok("T"),
+            FakeResponse(200, {"code": 0, "data": {}}),
+        ]
+
+        await skland_client.get_rogue_records(Credential(), topic_id="rogue_6")
+
+        method, url, _kwargs = FakeAsyncClient.requests[-1]
+        self.assertEqual(method, "GET")
+        self.assertIn("/api/v1/game/arknights/rogue", url)
+        self.assertIn("uid=123456789", url)
+        # target 缺省查自己
+        self.assertIn("targetUserId=123456789", url)
+        self.assertIn("topicId=rogue_6", url)

@@ -11,12 +11,13 @@
 
 每请求的 timeout / follow_redirects 通过参数覆盖共享 client 默认值。
 """
+
 from __future__ import annotations
 
 import asyncio
 import ipaddress
 import socket
-from typing import Any, NamedTuple, Optional
+from typing import Any, NamedTuple
 from urllib.parse import urlsplit
 
 import httpx
@@ -26,12 +27,17 @@ from gsuid_core.logger import logger
 # 默认请求超时（秒）；个别慢接口（gamedata 全量表 / 外置渲染）按调用方覆盖
 DEFAULT_TIMEOUT = 25.0
 
+# GET 的瞬时故障重试：传输异常 / 网关类 5xx（502/503/504）默认重试 1 次。
+# POST 不重试——登录/换 token 等非幂等接口，重试可能重复提交。
+TRANSIENT_STATUSES = frozenset({502, 503, 504})
+TRANSIENT_RETRY_DELAY = 0.5
+
 # ── 用户可控 URL 的安全下载边界（OCR 截图等）───────────────────────
-SAFE_DOWNLOAD_MAX_BYTES = 8 * 1024 * 1024   # 单文件 8MB（截图远小于此）
+SAFE_DOWNLOAD_MAX_BYTES = 8 * 1024 * 1024  # 单文件 8MB（截图远小于此）
 SAFE_DOWNLOAD_MAX_REDIRECTS = 3
 SAFE_DOWNLOAD_TIMEOUT = 15.0
 
-_client: Optional[httpx.AsyncClient] = None
+_client: httpx.AsyncClient | None = None
 _client_lock = asyncio.Lock()
 
 
@@ -51,7 +57,7 @@ class ApiError(Exception):
         message: str,
         *,
         status: int = 0,
-        code: Optional[int] = None,
+        code: int | None = None,
         url: str = "",
     ) -> None:
         super().__init__(message)
@@ -75,8 +81,8 @@ class RequestResult(NamedTuple):
     """request_json 结果：status=0 表示请求未送达（网络异常）。"""
 
     status: int
-    data: Any | None          # 响应 JSON；非 JSON 响应为 None
-    cookies: list[str]        # set-cookie 头列表（无则空）
+    data: Any | None  # 响应 JSON；非 JSON 响应为 None
+    cookies: list[str]  # set-cookie 头列表（无则空）
 
 
 def describe_error(exc: Exception) -> str:
@@ -114,9 +120,7 @@ async def get_client() -> httpx.AsyncClient:
                     ),
                 )
                 if proxy_url:
-                    logger.info(
-                        f"[ArknightsUID·http] 共享客户端启用代理: {proxy_url}"
-                    )
+                    logger.info(f"[ArknightsUID·http] 共享客户端启用代理: {proxy_url}")
                     client_kwargs["proxy"] = proxy_url
                 _client = httpx.AsyncClient(**client_kwargs)
     return _client
@@ -140,35 +144,56 @@ async def request_json(
     content: str | None = None,
     timeout: float = DEFAULT_TIMEOUT,
     follow_redirects: bool = True,
+    transient_retries: int = 1,
 ) -> RequestResult:
     """统一 GET/POST → (status, json, set_cookies)。
 
     网络异常 → (0, None, []) 并打 warning（含异常 message）；
     非 JSON 响应 → (status, None, []) 并打 warning。业务码判断留给调用方。
+
+    GET 的瞬时故障（传输异常 / 502/503/504）默认重试 1 次（0.5s 退避）；
+    POST 一律不重试（非幂等）。
     """
     client = await get_client()
-    try:
-        if method.upper() == "GET":
-            resp = await client.get(
-                url,
-                headers=headers,
-                params=params,
-                timeout=timeout,
-                follow_redirects=follow_redirects,
-            )
+    is_get = method.upper() == "GET"
+    attempts = 1 + (transient_retries if is_get and transient_retries > 0 else 0)
+    last_exc: Exception | None = None
+    resp = None
+    for attempt in range(1, attempts + 1):
+        try:
+            if is_get:
+                resp = await client.get(
+                    url,
+                    headers=headers,
+                    params=params,
+                    timeout=timeout,
+                    follow_redirects=follow_redirects,
+                )
+            else:
+                resp = await client.post(
+                    url,
+                    headers=headers,
+                    params=params,
+                    json=json_body,
+                    content=content,
+                    timeout=timeout,
+                    follow_redirects=follow_redirects,
+                )
+        except Exception as exc:
+            last_exc = exc
         else:
-            resp = await client.post(
-                url,
-                headers=headers,
-                params=params,
-                json=json_body,
-                content=content,
-                timeout=timeout,
-                follow_redirects=follow_redirects,
+            last_exc = None
+            if not (is_get and resp.status_code in TRANSIENT_STATUSES):
+                break
+        if attempt < attempts:
+            logger.debug(
+                f"[ArknightsUID·http] {method} {url} 瞬时故障"
+                f"（第 {attempt} 次），{TRANSIENT_RETRY_DELAY}s 后重试"
             )
-    except Exception as exc:
+            await asyncio.sleep(TRANSIENT_RETRY_DELAY)
+    if last_exc is not None:
         logger.warning(
-            f"[ArknightsUID·http] {method} {url} 请求失败: {describe_error(exc)}"
+            f"[ArknightsUID·http] {method} {url} 请求失败: {describe_error(last_exc)}"
         )
         return RequestResult(0, None, [])
 
@@ -193,15 +218,11 @@ async def download_bytes(
     """下载二进制内容（图标/静态文件）。失败打 warning 并返回 None。"""
     client = await get_client()
     try:
-        resp = await client.get(
-            url, timeout=timeout, follow_redirects=follow_redirects
-        )
+        resp = await client.get(url, timeout=timeout, follow_redirects=follow_redirects)
         resp.raise_for_status()
         return resp.content
     except Exception as exc:
-        logger.warning(
-            f"[ArknightsUID·http] 下载失败 {url}: {describe_error(exc)}"
-        )
+        logger.warning(f"[ArknightsUID·http] 下载失败 {url}: {describe_error(exc)}")
         return None
 
 
@@ -217,18 +238,12 @@ async def download_bytes_status(
     """
     client = await get_client()
     try:
-        resp = await client.get(
-            url, timeout=timeout, follow_redirects=follow_redirects
-        )
+        resp = await client.get(url, timeout=timeout, follow_redirects=follow_redirects)
     except Exception as exc:
-        logger.warning(
-            f"[ArknightsUID·http] 下载失败 {url}: {describe_error(exc)}"
-        )
+        logger.warning(f"[ArknightsUID·http] 下载失败 {url}: {describe_error(exc)}")
         return 0, None
     if resp.status_code >= 400:
-        logger.warning(
-            f"[ArknightsUID·http] 下载失败 {url}: HTTP {resp.status_code}"
-        )
+        logger.warning(f"[ArknightsUID·http] 下载失败 {url}: HTTP {resp.status_code}")
         return resp.status_code, None
     return resp.status_code, resp.content
 
@@ -264,12 +279,7 @@ async def assert_public_http_url(url: str) -> str:
         except ValueError:
             raise UnsafeUrlError(f"unparseable address: {addr!r}") from None
         # is_global 不含多播/保留段的判定（224.0.0.1 等 is_global=True），显式拒绝
-        if (
-            not ip.is_global
-            or ip.is_multicast
-            or ip.is_reserved
-            or ip.is_unspecified
-        ):
+        if not ip.is_global or ip.is_multicast or ip.is_reserved or ip.is_unspecified:
             raise UnsafeUrlError(f"non-public address: {ip}")
     return url
 

@@ -92,8 +92,8 @@
         <div class="prose" style="font-size: 12px; white-space: pre-line;">{{ skill.description }}</div>
         <div class="rows" style="margin-top: var(--space-2);">
             <div class="row">
-                <span class="row-label">SP 初始 / 消耗{% if skill.duration %} / 持续{% endif %}</span>
-                <span class="row-value mono" style="font-size: 13px;">{{ skill.sp_init }} / {{ skill.sp_cost }}{% if skill.duration %} / {{ skill.duration }}s{% endif %}</span>
+                <span class="row-label">SP 初动 / 消耗{% if skill.duration %} / 持续{% endif %}</span>
+                <span class="row-value mono" style="font-size: 13px;">{{ skill.sp_init }} / {{ skill.sp_cost }}{% if skill.duration %} / {{ skill.duration }}秒{% endif %}</span>
             </div>
         </div>
         {% endif %}

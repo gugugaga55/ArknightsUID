@@ -4,51 +4,41 @@
 （`get_endfield_web_headers`）。其余部分（RespCode、UA 常量、签名相关 header
 构造）对明日方舟同样适用。
 """
+
 from __future__ import annotations
 
+import re
 import time
 from enum import IntEnum
-from typing import Optional
+from typing import Any
+
+from gsuid_core.logger import logger
 
 from .smsdk import get_device_id  # 设备 ID（dId）
 
 
 class RespCode(IntEnum):
-    """森空岛 API 业务码（响应 JSON 的 code 字段）。"""
+    """森空岛 API 业务码（响应 JSON 的 code 字段）。
 
-    OK = 0                    # 请求成功
-
-    # 认证相关
-    TOKEN_INVALID = 220       # 登录过期
-    CRED_INVALID = 10001      # Cred 失效或已签到
-    LOGIN_EXPIRED = 10002     # 登录失效
-    TIME_ERROR = 10003        # 时间错误
-
-    # 请求相关
-    REQUEST_ERROR = 10000     # 请求异常
-    # 验证码相关
-    CAPTCHA_ERROR = 130       # 验证码错误
-    CAPTCHA_EXPIRED = 132     # 验证码过期
-
-
-class HttpCode(IntEnum):
-    """HTTP 状态码（与 RespCode 的业务码是两个命名空间，勿混用）。
-
-    METHOD_NOT_ALLOWED 在 as.hypergryph.com OAuth 链上出现过，
-    含义是"当前 IP/服务受限"，并非单纯的方法不符。
+    只保留本插件实际判定用到的码；EndUID 原版的 TIME_ERROR/
+    CAPTCHA_* 从未使用，已随迁移移除。
     """
 
-    OK = 200
-    BAD_REQUEST = 400
-    FORBIDDEN = 403
-    METHOD_NOT_ALLOWED = 405
+    OK = 0  # 请求成功
+
+    # 认证相关
+    TOKEN_INVALID = 220  # 登录过期
+    CRED_INVALID = 10001  # Cred 失效或已签到
+    LOGIN_EXPIRED = 10002  # 登录失效
+
+    # 请求相关
+    REQUEST_ERROR = 10000  # 请求异常
 
 
 # === User-Agent ===
 # iOS Skland 1.21.0（明日方舟签名链路用）
 IOS_USER_AGENT = (
-    "Skland/1.21.0 (com.hypergryph.skland; build:102100065; iOS 17.6.0) "
-    "Alamofire/5.7.1"
+    "Skland/1.21.0 (com.hypergryph.skland; build:102100065; iOS 17.6.0) Alamofire/5.7.1"
 )
 # Android Skland 1.52.1
 ANDROID_USER_AGENT = (
@@ -58,8 +48,7 @@ ANDROID_USER_AGENT = (
 )
 # Skland App 原生 UA
 SKLAND_APP_USER_AGENT = (
-    "Skland/1.52.1 (com.hypergryph.skland; build:105201003; Android 32; ) "
-    "Okhttp/4.11.0"
+    "Skland/1.52.1 (com.hypergryph.skland; build:105201003; Android 32; ) Okhttp/4.11.0"
 )
 # Web UA（用于 cred 兑换）
 WEB_USER_AGENT = (
@@ -68,8 +57,8 @@ WEB_USER_AGENT = (
 )
 
 # === vName / 平台 ===
-SIGN_VNAME = "1.0.0"          # Web 接口默认
-ARK_SIGN_VNAME = "1.21.0"     # 明日方舟签到/查询专用（iOS 1.21.0）
+SIGN_VNAME = "1.0.0"  # Web 接口默认
+ARK_SIGN_VNAME = "1.21.0"  # 明日方舟签到/查询专用（iOS 1.21.0）
 
 SKLAND_APP_VNAME = "1.52.1"
 SKLAND_APP_VCODE = "105201003"
@@ -82,58 +71,7 @@ SKLAND_APP_CHANNEL = "OF"
 SKLAND_APP_MANUFACTURER = "Samsung"
 
 
-def get_base_header(
-    cred: str,
-    timestamp: str,
-    sign: str,
-    platform: int = 3,
-    uid: Optional[str] = None,
-    game_id: Optional[int] = None,
-    vname: str = SIGN_VNAME,
-    did: str = "",
-    user_agent: Optional[str] = None,
-    accept_encoding: str = "gzip",
-) -> dict:
-    """构造签名请求的基础请求头。
-
-    Args:
-        cred: 用户凭证
-        timestamp: 时间戳（字符串）
-        sign: 签名
-        platform: 平台 ID（1=iOS App, 3=Web 默认）
-        uid: 用户游戏 UID
-        game_id: 游戏 ID（明日方舟官服渠道 ID = 1）
-        vname: 签名版本号
-        did: 设备指纹（建议由 `get_device_id()` 生成，留空则不发）
-        user_agent: User-Agent
-        accept_encoding: Accept-Encoding
-
-    Returns:
-        完整的 HTTP 请求头字典
-    """
-    if not user_agent:
-        user_agent = ANDROID_USER_AGENT
-
-    headers = {
-        "User-Agent": user_agent,
-        "Accept-Encoding": accept_encoding,
-        "Content-Type": "application/json",
-        "cred": cred,
-        "timestamp": timestamp,
-        "sign": sign,
-        "vName": vname,
-        "dId": did,
-        "platform": str(platform),
-    }
-
-    # 携带角色信息（sk-game-role 是森空岛识别"哪个游戏哪个角色"的关键头）
-    if uid and game_id:
-        headers["sk-game-role"] = f"{platform}_{uid}_{game_id}"
-
-    return headers
-
-
-def _guess_manufacturer(user_agent: Optional[str]) -> str:
+def _guess_manufacturer(user_agent: str | None) -> str:
     """从 UA 推断手机厂商（Skland App 接口用）。"""
     if not user_agent:
         return SKLAND_APP_MANUFACTURER
@@ -153,7 +91,7 @@ def _guess_manufacturer(user_agent: Optional[str]) -> str:
     return SKLAND_APP_MANUFACTURER
 
 
-def get_skland_app_headers(user_agent: Optional[str] = None) -> dict:
+def get_skland_app_headers(user_agent: str | None = None) -> dict:
     """Skland App 接口所需的额外请求头。"""
     return {
         "language": SKLAND_APP_LANGUAGE,
@@ -163,18 +101,6 @@ def get_skland_app_headers(user_agent: Optional[str] = None) -> dict:
         "channel": SKLAND_APP_CHANNEL,
         "manufacturer": _guess_manufacturer(user_agent),
         "Accept-Language": "zh-CN,zh;q=0.9,en-US;q=0.8,en;q=0.7",
-    }
-
-
-def get_refresh_header(cred: str) -> dict:
-    """Token 刷新请求头。
-
-    Token 刷新不需要签名，只需要 cred。
-    """
-    return {
-        "cred": cred,
-        "User-Agent": IOS_USER_AGENT,
-        "Content-Type": "application/json",
     }
 
 
@@ -206,3 +132,58 @@ def get_cred_header() -> dict:
         "timestamp": str(int(time.time())),
         "vName": "1.0.0",
     }
+
+
+# === Skland/Hypergryph 请求共享原语（原先在 client/web/hypergryph 三处重复）===
+
+# Skland 签名查询串的"安全字符"白名单（键/值仅允许这些，其余告警不阻断）
+_UNSAFE_QUERY_RE = re.compile(r"[^0-9A-Za-z_.\-]")
+
+
+def build_query_string(params: dict[str, Any] | None) -> str:
+    """Skland 签名用查询串（原 skland/client 与 skland/web 各写一份）。
+
+    刻意不做 URL 编码：Skland 官方签名要求按原始键值拼接（sorted by key），
+    编码会破坏签名一致性。调用方应仅传入无特殊字符的参数（如 uid/gameId 数字）；
+    出现其它字符说明调用方破坏了这一契约，打 warning 暴露问题（不阻断）。
+    """
+    if not params:
+        return ""
+    pairs: list[str] = []
+    for key, value in sorted(params.items()):
+        pair = f"{key}={value}"
+        # '=' 是键值分隔符不属于参数内容，需对 key/value 分别校验；
+        # 对拼接串整体匹配会把每个请求都误报（'gameId=1' 事件）
+        if _UNSAFE_QUERY_RE.search(str(key)) or _UNSAFE_QUERY_RE.search(str(value)):
+            logger.warning(
+                f"[ArknightsUID] Skland 签名参数含特殊字符，签名可能失效: {pair!r}"
+            )
+        pairs.append(pair)
+    return "&".join(pairs)
+
+
+def envelope_ok(data: Any, *, key: str = "code") -> bool:
+    """响应信封校验谓词：data 为 dict 且 data[key] == 0。
+
+    Skland/公告网关用 ``code``，Hypergryph OAuth 网关用 ``status``。
+    """
+    return isinstance(data, dict) and data.get(key) == 0
+
+
+def require_envelope(
+    data: Any,
+    *,
+    action: str,
+    key: str = "code",
+    log_prefix: str = "[ArknightsUID]",
+) -> dict[str, Any] | None:
+    """信封校验（带日志版）：通过返回 data 本身，否则 warning（含 code）并返回 None。
+
+    原先「not isinstance(data, dict) or data.get(...) != 0 → warning → 返回空」
+    的守卫在 skland/web 与 hypergryph/client 里近乎逐字重复了约十处。
+    """
+    if envelope_ok(data, key=key):
+        return data
+    code = data.get(key) if isinstance(data, dict) else "?"
+    logger.warning(f"{log_prefix} {action}: code={code}")
+    return None

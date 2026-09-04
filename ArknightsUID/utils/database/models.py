@@ -14,9 +14,9 @@ P0 阶段最小集：仅 `ArkUser` 和 `ArkBind`。
 当前为「独立建表」模式。若后续需要与 EndUID 共享 cred，
 可以新增「跨插件读 EndUser」的 fallback（懒 import EndUID.models）。
 """
+
 from __future__ import annotations
 
-from typing import List, Optional
 
 from sqlmodel import Field, SQLModel, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,12 +27,12 @@ from gsuid_core.logger import logger
 from gsuid_core.utils.database.base_models import Bind, User, with_session
 from gsuid_core.server import on_core_start
 
-from ..api.request_util import RespCode  # noqa: F401  # 保留 RespCode 引用便于迁移
 from ..crypto import (
     ENC_PREFIX,
     EncryptionUnavailableError,
     cred_equals,
     encrypt_secret,
+    warmup as crypto_warmup,
 )
 from .auto_migrate import (
     auto_add_missing_columns,
@@ -50,13 +50,10 @@ class ArkUser(User, table=True):
     __tablename__ = "ArkUser"
     __table_args__ = (
         Index("idx_ark_uid_user_bot", "uid", "user_id", "bot_id"),
-        Index("idx_ark_last_used", "last_used_time"),
         Index("idx_ark_cookie_status", "cookie_status"),
         # 每行一个 (bot_id, user_id, uid)：唯一约束是 upsert_by_uid 原子性的
         # 数据库级兜底（旧库由 ensure_ark_user_unique_index 去重后补建索引）
-        UniqueConstraint(
-            "bot_id", "user_id", "uid", name="ux_ark_user_bot_uid"
-        ),
+        UniqueConstraint("bot_id", "user_id", "uid", name="ux_ark_user_bot_uid"),
         {"extend_existing": True},
     )
 
@@ -76,12 +73,12 @@ class ArkUser(User, table=True):
     )
 
     # 认证信息
-    token: Optional[str] = Field(default=None, title="Skland API Token（短期）")
+    token: str | None = Field(default=None, title="Skland API Token（短期）")
     hg_token: str = Field(default="", title="HyperGryph Login Token（抽卡用）")
     platform: str = Field(default="3", title="平台 ID")
 
     # 森空岛账号 ID（用于抽卡 OAuth 链换 u8_token）
-    record_id: Optional[str] = Field(default=None, title="森空岛账号 ID")
+    record_id: str | None = Field(default=None, title="森空岛账号 ID")
     server_id: str = Field(default="1", title="服务器 ID")
     skland_user_id: str = Field(default="", title="森空岛用户 ID")
 
@@ -91,10 +88,9 @@ class ArkUser(User, table=True):
     # 用户偏好
     hide_uid_self_value: str = Field(default="", title="隐藏 UID（用户级，覆盖全局）")
 
-    # 时间戳
-    created_time: Optional[int] = Field(default=None, title="创建时间（秒）")
-    last_used_time: Optional[int] = Field(default=None, title="最后使用时间（秒）")
-    last_cred_request_time: Optional[int] = Field(
+    # 时间戳（created/last_used 等使用统计字段从未接线，已移除；
+    # last_cred_request_time 由 update_token_by_cred 写入，token 新鲜度记录）
+    last_cred_request_time: int | None = Field(
         default=None, title="上次请求 cred 时间（秒）"
     )
 
@@ -132,14 +128,17 @@ class ArkUser(User, table=True):
         result = await session.execute(stmt)
         if result.rowcount:
             return True
-        session.add(cls(user_id=user_id, bot_id=bot_id, uid=uid, **data))
         try:
-            await session.flush()
-            return True
+            # savepoint：撞唯一约束时只回滚本次 INSERT，共享事务里
+            # 此前协程的未提交改动不被牵连（旧实现 rollback 整段事务）
+            async with session.begin_nested():
+                session.add(cls(user_id=user_id, bot_id=bot_id, uid=uid, **data))
+                await session.flush()
+                return True
         except IntegrityError:
-            await session.rollback()
-            # 是否真是并发插入竞态：竞争者行必须已存在，否则属于其他
-            # 完整性错误（字段非法等），如实上抛而不是伪装成功
+            # savepoint 已由 begin_nested 回滚；是否真是并发插入竞态：
+            # 竞争者行必须已存在，否则属于其他完整性错误（字段非法等），
+            # 如实上抛而不是伪装成功
             check = await session.execute(
                 select(cls).where(
                     cls.user_id == user_id,
@@ -158,12 +157,14 @@ class ArkUser(User, table=True):
         cls,
         session: AsyncSession,
         cred: str,
-        game_id: Optional[int] = ARKNIGHTS_CHANNEL_OFFICIAL,
-    ) -> Optional["ArkUser"]:
-        """通过 cred 查询用户（用于 token 缓存索引）。
+        game_id: int | None = ARKNIGHTS_CHANNEL_OFFICIAL,
+    ) -> ArkUser | None:
+        """通过 cred 查询用户行。
 
         cookie 落库为密文（enc:v1:，见 utils/crypto），无法 SQL 等值匹配；
         按 game_id 缩小范围后在 Python 侧解密比对（行数为账号数，量级小）。
+        当前消费方是加密回归测试（test_cred_encryption）；曾规划的
+        token 缓存索引未采用（token 回写走 update_token_by_cred）。
         """
         filters = []
         if game_id is not None:
@@ -182,8 +183,8 @@ class ArkUser(User, table=True):
         session: AsyncSession,
         cred: str,
         token: str,
-        game_id: Optional[int] = ARKNIGHTS_CHANNEL_OFFICIAL,
-        cred_time: Optional[int] = None,
+        game_id: int | None = ARKNIGHTS_CHANNEL_OFFICIAL,
+        cred_time: int | None = None,
     ) -> int:
         """按 cred 更新 token（refresh 回写）。返回更新行数。
 
@@ -218,7 +219,7 @@ class ArkUser(User, table=True):
         cls,
         session: AsyncSession,
         cred: str,
-        game_id: Optional[int] = ARKNIGHTS_CHANNEL_OFFICIAL,
+        game_id: int | None = ARKNIGHTS_CHANNEL_OFFICIAL,
     ) -> int:
         """按 cred 标记 cookie_status=无效（refresh 被拒 = cred 已死）。
 
@@ -239,9 +240,7 @@ class ArkUser(User, table=True):
 
     @classmethod
     @with_session
-    async def reencrypt_plaintext_credentials(
-        cls, session: AsyncSession
-    ) -> int:
+    async def reencrypt_plaintext_credentials(cls, session: AsyncSession) -> int:
         """存量明文凭据一次性重加密（审计 #4 收尾）。
 
         decrypt_secret 兼容读取历史明文，但明文行在"数据库文件被非授权
@@ -269,9 +268,7 @@ class ArkUser(User, table=True):
             if changed:
                 upgraded += 1
         if upgraded:
-            logger.info(
-                f"[ArknightsUID·加密] 存量明文凭据已重加密 {upgraded} 行"
-            )
+            logger.info(f"[ArknightsUID·加密] 存量明文凭据已重加密 {upgraded} 行")
         return upgraded
 
     @classmethod
@@ -308,28 +305,10 @@ class ArkBind(Bind, table=True):
     )
 
     # `uid` 字段由 Bind 基类提供，存明日方舟 UID
-    uid: Optional[str] = Field(default=None, title="明日方舟 UID")
+    uid: str | None = Field(default=None, title="明日方舟 UID")
 
-    @classmethod
-    @with_session
-    async def get_bound_uid(
-        cls,
-        session: AsyncSession,
-        user_id: str,
-        bot_id: str,
-    ) -> Optional[str]:
-        """取该用户绑定的第一个明日方舟 UID。
-
-        基类 insert_uid 把多 uid 用 "_" 拼进同一行：直接返回整串会
-        得到 "123_456" 这样的拼接值（审计 #39潜伏雷），拆回首段。
-        """
-        result = await session.execute(
-            select(cls).where(cls.user_id == user_id, cls.bot_id == bot_id)
-        )
-        data = result.scalars().all()
-        if not data or not data[0].uid:
-            return None
-        return str(data[0].uid).split("_", 1)[0] or None
+    # 曾有 get_bound_uid（取首个绑定 UID）：多账号下恒返回第一行导致
+    # 配置写错账号，已由 resolve_accounts + 默认账号口径取代并删除
 
 
 class ArkAlias(SQLModel, table=True):
@@ -344,13 +323,11 @@ class ArkAlias(SQLModel, table=True):
         Index("idx_ark_alias_user", "bot_id", "user_id"),
         # (bot_id, user_id, alias) 唯一：set_alias 撞约束收敛的数据库级
         # 兜底（旧库由 ensure_ark_alias_unique_index 去重后补建索引）
-        UniqueConstraint(
-            "bot_id", "user_id", "alias", name="ux_ark_alias_key"
-        ),
+        UniqueConstraint("bot_id", "user_id", "alias", name="ux_ark_alias_key"),
         {"extend_existing": True},
     )
 
-    id: Optional[int] = Field(default=None, primary_key=True)
+    id: int | None = Field(default=None, primary_key=True)
     bot_id: str = Field(default="", title="Bot ID")
     user_id: str = Field(default="", title="用户 ID")
     alias: str = Field(default="", title="自定义别名（小写）", index=True)
@@ -387,11 +364,15 @@ class ArkAlias(SQLModel, table=True):
         if result.rowcount:
             await session.commit()
             return
-        session.add(cls(bot_id=bot_id, user_id=user_id, alias=alias, target=target))
         try:
-            await session.flush()
+            # savepoint（同 upsert_by_uid：只回滚本次 INSERT，不牵连共享事务）
+            async with session.begin_nested():
+                session.add(
+                    cls(bot_id=bot_id, user_id=user_id, alias=alias, target=target)
+                )
+                await session.flush()
         except IntegrityError:
-            await session.rollback()
+            # savepoint 已回滚；竞争者行存在 → 收敛为 UPDATE，否则如实上抛
             check = await session.execute(
                 select(cls).where(
                     cls.bot_id == bot_id,
@@ -428,7 +409,7 @@ class ArkAlias(SQLModel, table=True):
     @with_session
     async def list_aliases(
         cls, session: AsyncSession, bot_id: str, user_id: str
-    ) -> List["ArkAlias"]:
+    ) -> list[ArkAlias]:
         """该用户的全部别名。"""
         result = await session.execute(
             select(cls).where(cls.bot_id == bot_id, cls.user_id == user_id)
@@ -439,7 +420,7 @@ class ArkAlias(SQLModel, table=True):
     @with_session
     async def resolve_alias(
         cls, session: AsyncSession, bot_id: str, user_id: str, alias: str
-    ) -> Optional[str]:
+    ) -> str | None:
         """别名 → 干员中文名；无匹配返回 None（精确匹配，小写化）。"""
         result = await session.execute(
             select(cls).where(
@@ -450,6 +431,66 @@ class ArkAlias(SQLModel, table=True):
         )
         existing = result.scalars().first()
         return existing.target if existing else None
+
+
+class ArkCommandAlias(SQLModel, table=True):
+    """主人自定义指令别名表（ark指令别名 招募=公招推荐）。
+
+    全局生效（不分 bot/用户），alias 唯一。target 为目标命令词（不带
+    ark/方舟 前缀）；target 为空串是 tombstone——用于停用内置别名
+    （内置别名不落库，删除时写 tombstone，重启不复活）。
+    """
+
+    __tablename__ = "ArkCommandAlias"
+    __table_args__ = (
+        UniqueConstraint("alias", name="ux_ark_cmd_alias"),
+        {"extend_existing": True},
+    )
+
+    id: int | None = Field(default=None, primary_key=True)
+    alias: str = Field(default="", title="触发词（小写）", index=True)
+    target: str = Field(default="", title="目标命令词（空=停用内置别名）")
+
+    @classmethod
+    @with_session
+    async def set_alias(cls, session: AsyncSession, alias: str, target: str) -> None:
+        """设置别名（同键覆盖，原子 upsert）。"""
+        stmt = (
+            update(cls)
+            .where(cls.alias == alias)
+            .values(target=target)
+            .execution_options(synchronize_session="fetch")
+        )
+        result = await session.execute(stmt)
+        if result.rowcount:
+            await session.commit()
+            return
+        session.add(cls(alias=alias, target=target))
+        try:
+            await session.flush()
+        except IntegrityError:
+            await session.rollback()
+            await session.execute(stmt)
+        await session.commit()
+
+    @classmethod
+    @with_session
+    async def delete_alias(cls, session: AsyncSession, alias: str) -> bool:
+        """删除别名行；不存在返回 False。"""
+        result = await session.execute(select(cls).where(cls.alias == alias))
+        existing = result.scalars().first()
+        if existing is None:
+            return False
+        await session.delete(existing)
+        await session.commit()
+        return True
+
+    @classmethod
+    @with_session
+    async def list_aliases(cls, session: AsyncSession) -> list[ArkCommandAlias]:
+        """全部别名行（含 tombstone）。"""
+        result = await session.execute(select(cls))
+        return list(result.scalars().all())
 
 
 @on_core_start
@@ -464,6 +505,8 @@ async def _ark_auto_migrate() -> None:
     await auto_add_missing_columns(__name__, log_prefix="[ARK·补列]")
     await ensure_ark_user_unique_index(log_prefix="[ARK·唯一索引]")
     await ensure_ark_alias_unique_index()
+    # 密钥首建/自愈的同步等待在线程内完成（避免落回事件循环）
+    await crypto_warmup()
     # 存量明文凭据升级为密文（幂等；加密不可用时下轮启动再试）
     try:
         await ArkUser.reencrypt_plaintext_credentials()

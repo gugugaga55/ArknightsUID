@@ -20,13 +20,13 @@ token 管理（v3，对齐 EndUID）：
   refresh 被拒（10001/220/10002）说明 cred 本身失效，标记账号无效。
 - 同一 cred 的 refresh 持进程锁（推送任务与用户命令并发时只刷一次）
 """
+
 from __future__ import annotations
 
 import asyncio
 import hashlib
 import hmac
 import json
-import re
 import time
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
@@ -42,6 +42,7 @@ from ..api.request_util import (
     SKLAND_APP_USER_AGENT,
     SKLAND_APP_VNAME,
     RespCode,
+    build_query_string as _query_string,
     get_device_id,
     get_skland_app_headers,
 )
@@ -66,6 +67,11 @@ GAME_BINDING_URL = f"{MAIN_URL}api/{API_VERSION}/game/player/binding"
 CULTIVATE_CHARACTER_URL = f"{MAIN_URL}api/{API_VERSION}/game/cultivate/character"
 CULTIVATE_INFO_URL = f"{MAIN_URL}api/{API_VERSION}/game/cultivate/info"
 CULTIVATE_PLAYER_URL = f"{MAIN_URL}api/{API_VERSION}/game/cultivate/player"
+# 肉鸽战绩（森空岛 App「战绩查询」页后端；参数形态见社区 nonebot-plugin-skland
+# 同名端点：GET uid + targetUserId + topicId，支持查指定玩家/指定主题/收藏标记。
+# topicId 用主题表键（rogue_1=傀影 … rogue_6=黑流树海，与社区实现一致），
+# 空串由服务端返回默认期（响应 topics[].isSelected 标记当前期）
+ARK_ROGUE_URL = f"{MAIN_URL}api/{API_VERSION}/game/arknights/rogue"
 
 # 明日方舟在 Skland 的"游戏 ID"实际是 channelMasterId（官服渠道 ID）。
 # 这个值跟 EndUID 的 ENDFIELD_GAME_ID=3 并存于同一套森空岛账号体系。
@@ -100,7 +106,6 @@ _REFRESH_MAX_ATTEMPTS = 3
 _REFRESH_RETRY_DELAY = 1.0
 _token_cache: dict[str, tuple[str, float]] = {}
 _refresh_locks: dict[str, asyncio.Lock] = {}
-_UNSAFE_QUERY_RE = re.compile(r"[^0-9A-Za-z_.\-]")
 
 
 def _safe_error(exc: Exception, *secrets: str) -> str:
@@ -149,28 +154,6 @@ def _generate_sign(
         "timestamp": timestamp,
         "sign": hashlib.md5(hmac_hash.encode("utf-8")).hexdigest(),
     }
-
-
-def _query_string(params: dict[str, Any] | None) -> str:
-    # 刻意不做 URL 编码：Skland 官方签名要求按原始键值拼接（sorted by key），
-    # 编码会破坏签名一致性。调用方应仅传入无特殊字符的参数（如 uid/gameId 数字）；
-    # 出现其它字符说明调用方破坏了这一契约，打 warning 暴露问题（不阻断）。
-    if not params:
-        return ""
-    pairs: list[str] = []
-    for key, value in sorted(params.items()):
-        pair = f"{key}={value}"
-        # '=' 是键值分隔符不属于参数内容，需对 key/value 分别校验；
-        # 对拼接串整体匹配会把每个请求都误报（'gameId=1' 事件）
-        if _UNSAFE_QUERY_RE.search(str(key)) or _UNSAFE_QUERY_RE.search(
-            str(value)
-        ):
-            logger.warning(
-                "[ArknightsUID] Skland 签名参数含特殊字符，签名可能失效: "
-                f"{pair!r}"
-            )
-        pairs.append(pair)
-    return "&".join(pairs)
 
 
 def _base_headers(
@@ -292,8 +275,7 @@ async def refresh_token(cred: str) -> str:
             # code=0 但缺 token：当未知错误继续重试
         elif code in CRED_INVALID_REFRESH_CODES:
             logger.warning(
-                "[ArknightsUID] Skland token refresh 被拒（cred 失效 "
-                f"code={code}）"
+                f"[ArknightsUID] Skland token refresh 被拒（cred 失效 code={code}）"
             )
             raise CredentialInvalidError(f"cred 失效 code={code}")
 
@@ -399,7 +381,7 @@ def _prune_token_state(*, keep: str = "") -> None:
 
 
 async def _signed_request(
-    credential: "ArkCredential",
+    credential: ArkCredential,
     *,
     url: str,
     method: str = "GET",
@@ -536,7 +518,7 @@ async def _signed_request(
     return result
 
 
-async def get_player_info(credential: "ArkCredential") -> dict[str, Any] | None:
+async def get_player_info(credential: ArkCredential) -> dict[str, Any] | None:
     """获取玩家信息（核心富数据 dump）。"""
     return await _signed_request(
         credential,
@@ -548,7 +530,7 @@ async def get_player_info(credential: "ArkCredential") -> dict[str, Any] | None:
     )
 
 
-async def ark_attendance(credential: "ArkCredential") -> dict[str, Any] | None:
+async def ark_attendance(credential: ArkCredential) -> dict[str, Any] | None:
     """明日方舟每日签到。"""
     return await _signed_request(
         credential,
@@ -564,12 +546,15 @@ async def ark_attendance(credential: "ArkCredential") -> dict[str, Any] | None:
     )
 
 
-async def get_user_info(credential: "ArkCredential") -> dict[str, Any] | None:
+async def get_user_info(credential: ArkCredential) -> dict[str, Any] | None:
     """获取森空岛用户基础信息（cred 作用域，不带角色头）。
 
     签名组合照搬 EndUID get_user_info：platform=SKLAND_APP_PLATFORM(1) /
     vName=SKLAND_APP_VNAME / SKLAND_APP_USER_AGENT + get_skland_app_headers
     风控头（language/os/nId/vCode/channel/manufacturer）+ use_device_id。
+
+    状态：联调探针端点——仅 tools/real_smoke.py 与单测使用，生产链路
+    未消费（业务用 get_binding / get_player_info）。
     """
     return await _signed_request(
         credential,
@@ -583,7 +568,7 @@ async def get_user_info(credential: "ArkCredential") -> dict[str, Any] | None:
     )
 
 
-async def get_binding(credential: "ArkCredential") -> dict[str, Any] | None:
+async def get_binding(credential: ArkCredential) -> dict[str, Any] | None:
     """获取玩家绑定列表（cred 作用域，不带角色头）。
 
     签名组合与 EndUID get_binding 一致：默认 platform=3 / SIGN_VNAME /
@@ -597,12 +582,14 @@ async def get_binding(credential: "ArkCredential") -> dict[str, Any] | None:
     )
 
 
-async def ark_attendance_query(credential: "ArkCredential") -> dict[str, Any] | None:
+async def ark_attendance_query(credential: ArkCredential) -> dict[str, Any] | None:
     """查询明日方舟签到状态（GET 变体，与 POST ark_attendance 同端点不同方法）。
 
     签名参数与 POST ark_attendance 保持一致（platform=1 / vName=ARK_SIGN_VNAME
     / iOS UA），params 带 uid+gameId（POST body 同款）。
     实测 code=0（2026-08-14 真实凭据 联调）。
+    状态：联调探针端点——仅 tools/real_smoke.py 与单测使用；生产签到
+    走 POST ark_attendance（签到即查询，无需先查状态）。
     """
     return await _signed_request(
         credential,
@@ -619,7 +606,7 @@ async def ark_attendance_query(credential: "ArkCredential") -> dict[str, Any] | 
 
 
 async def get_cultivate_character(
-    credential: "ArkCredential", character_id: str
+    credential: ArkCredential, character_id: str
 ) -> dict[str, Any] | None:
     """查询单干员养成材料（按 characterId，绑定角色）。"""
     return await _signed_request(
@@ -632,11 +619,13 @@ async def get_cultivate_character(
     )
 
 
-async def get_cultivate_info(credential: "ArkCredential") -> dict[str, Any] | None:
+async def get_cultivate_info(credential: ArkCredential) -> dict[str, Any] | None:
     """查询干员/材料通用信息（cred 作用域，接近静态）。
 
     签名同 get_binding/get_player_info（zonai.skland.com GET 同源默认签名）。
     实测 code=0（2026-08-14 真实凭据 联调；EndUID 无此接口，本插件首发验证）。
+    状态：联调探针端点——仅 tools/real_smoke.py 与单测使用；养成计算
+    用 get_cultivate_character / get_cultivate_player（静态信息本地 gamedata 已覆盖）。
     """
     return await _signed_request(
         credential,
@@ -645,7 +634,7 @@ async def get_cultivate_info(credential: "ArkCredential") -> dict[str, Any] | No
     )
 
 
-async def get_cultivate_player(credential: "ArkCredential") -> dict[str, Any] | None:
+async def get_cultivate_player(credential: ArkCredential) -> dict[str, Any] | None:
     """查询玩家养成进度（按 uid，绑定角色）。"""
     return await _signed_request(
         credential,
@@ -656,3 +645,29 @@ async def get_cultivate_player(credential: "ArkCredential") -> dict[str, Any] | 
         params={"uid": credential.uid},
     )
 
+
+async def get_rogue_records(
+    credential: ArkCredential, topic_id: str, target_uid: str = ""
+) -> dict[str, Any] | None:
+    """查询肉鸽战绩（按主题，可查指定玩家；森空岛 App「战绩查询」页同源）。
+
+    topic_id 是 roguelike_topic_table 的主题键（rogue_1=傀影 rogue_2=水月
+    rogue_3=萨米 rogue_4=萨卡兹 rogue_5=界园 rogue_6=黑流树海，空串=服务端
+    默认期；与社区 nonebot-plugin-skland Topics._MAPPING 一致）；
+    target_uid 缺省查自己（=credential.uid），指定则查他人（战绩页"@/UID 查询"）。
+
+    ⚠️ 端点与参数来自社区（nonebot-plugin-skland get_rogue）实测，签名
+    组合按 player/info 同族推断——尚未经本插件真实凭据联调。
+    """
+    return await _signed_request(
+        credential,
+        url=ARK_ROGUE_URL,
+        method="GET",
+        uid=credential.uid,
+        game_id=ARKNIGHTS_CHANNEL_OFFICIAL,
+        params={
+            "uid": credential.uid,
+            "targetUserId": target_uid or credential.uid,
+            "topicId": topic_id,
+        },
+    )

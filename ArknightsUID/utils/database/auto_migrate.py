@@ -9,7 +9,6 @@ column。这里配合 @on_core_start（reload 会重跑本插件该钩子）兜�
 表清单不手写：从调用方模块名推出本插件包前缀，扫 SQLModel 子类收集该前缀下的 table 即可，
 新增表/列自动覆盖。
 """
-from typing import List, Optional
 
 from sqlmodel import SQLModel
 from sqlalchemy import text
@@ -27,7 +26,7 @@ def _plugin_prefix(module_name: str) -> str:
     return module_name.rsplit(".", 1)[0]
 
 
-def _plugin_tables(module_name: str) -> List:
+def _plugin_tables(module_name: str) -> list:
     prefix = _plugin_prefix(module_name) + "."
     names = set()
     stack = list(SQLModel.__subclasses__())
@@ -50,7 +49,7 @@ def _plugin_tables(module_name: str) -> List:
     ]
 
 
-def _default_clause(column) -> Optional[str]:
+def _default_clause(column) -> str | None:
     server_default = column.server_default
     if server_default is not None:
         arg = getattr(server_default, "arg", None)
@@ -96,7 +95,7 @@ async def auto_add_missing_columns(
             return None
         return {col["name"] for col in insp.get_columns(table_name)}
 
-    pending: List[str] = []
+    pending: list[str] = []
     try:
         async with engine.connect() as conn:
             dialect = conn.dialect
@@ -125,7 +124,7 @@ async def ensure_table_unique_index(
     index_name: str,
     unique_cols: set,
     log_prefix: str,
-    engine_override: Optional[AsyncEngine] = None,
+    engine_override: AsyncEngine | None = None,
 ) -> bool:
     """通用唯一索引迁移（ArkUser / ArkAlias 共用），幂等。
 
@@ -232,7 +231,7 @@ async def ensure_table_unique_index(
 
 
 async def ensure_ark_user_unique_index(
-    engine_override: Optional[AsyncEngine] = None,
+    engine_override: AsyncEngine | None = None,
     log_prefix: str = "[ARK·唯一索引]",
 ) -> bool:
     """ArkUser (bot_id, user_id, uid) 唯一索引迁移。
@@ -246,14 +245,16 @@ async def ensure_ark_user_unique_index(
     from ..database.models import ArkUser
 
     return await ensure_table_unique_index(
-        ArkUser.__table__, "ux_ark_user_bot_uid",
+        ArkUser.__table__,
+        "ux_ark_user_bot_uid",
         {"bot_id", "user_id", "uid"},
-        log_prefix, engine_override,
+        log_prefix,
+        engine_override,
     )
 
 
 async def ensure_ark_alias_unique_index(
-    engine_override: Optional[AsyncEngine] = None,
+    engine_override: AsyncEngine | None = None,
     log_prefix: str = "[ARK·别名唯一索引]",
 ) -> bool:
     """ArkAlias (bot_id, user_id, alias) 唯一索引迁移（审计 #37）。
@@ -265,7 +266,9 @@ async def ensure_ark_alias_unique_index(
     from ..database.models import ArkAlias
 
     return await ensure_table_unique_index(
-        ArkAlias.__table__, "ux_ark_alias_key",
+        ArkAlias.__table__,
+        "ux_ark_alias_key",
         {"bot_id", "user_id", "alias"},
-        log_prefix, engine_override,
+        log_prefix,
+        engine_override,
     )

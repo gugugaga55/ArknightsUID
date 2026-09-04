@@ -7,9 +7,16 @@
     six_count: int        六星数量
     six_rate: str         六星率（如 "2.67"）
     avg_six: str          平均多少抽出六星（如 "37.5"）
+    five_count: int       五星数量
+    five_rate: str        五星率（如 "12.67"）
     pity: int             距上次六星已垫抽数
     pity_max: int         保底阈值
-    recent: [{name: str, pool: str, pull: int}]   最近六星（pull=该六星是第几抽出的/垫了几抽）
+    pity_fives: [{name: str, avatar: str}]   当前垫刀段已出五星（截断）
+    pity_fives_extra: int                    垫刀段五星溢出数（+N）
+    recent: [{name: str, pool: str, pull: int, date: str, avatar: str,
+              fives: [{name: str, avatar: str}], fives_extra: int}]
+                                    最近六星（pull=该六星是第几抽出的/垫了几抽；
+                                    date=MM-DD；fives=该段内五星，小黑盒式挂六星条目下）
     version: str
 -->
 <!DOCTYPE html>
@@ -48,6 +55,22 @@
                 <div class="cell-label">平均 AVG</div>
                 <div class="cell-value">{{ avg_six }}</div>
             </div>
+            <div class="cell">
+                <div class="cell-label">五星 5★</div>
+                <div class="cell-value">{{ five_count }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">五星率 5★RATE</div>
+                <div class="cell-value">{{ five_rate }}<span style="font-size: 12px;">%</span></div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">垫刀 PITY</div>
+                <div class="cell-value">{{ pity }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">保底 MAX</div>
+                <div class="cell-value">{{ pity_max }}</div>
+            </div>
         </div>
 
         <div class="sect">
@@ -57,6 +80,15 @@
         <div class="bar is-yellow" style="margin-top: var(--space-3);">
             <i style="width: {{ (pity * 100 / pity_max) | round | int }}%;"></i>
         </div>
+        {% if pity_fives %}
+        <div style="display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: var(--space-3);">
+            {% for f in pity_fives %}
+            {% if f.avatar %}<span class="aicon" title="{{ f.name }}"><img src="{{ f.avatar }}" alt="{{ f.name }}"></span>{% else %}<span class="chip chip--ghost">{{ f.name }}</span>{% endif %}
+            {% endfor %}
+            {% if pity_fives_extra %}<span class="chip chip--ghost">+{{ pity_fives_extra }}</span>{% endif %}
+            <span class="u-mute" style="font-size: 10px; margin-left: 2px;">本段已出五星 ×{{ pity_fives | length + pity_fives_extra }}</span>
+        </div>
+        {% endif %}
 
         <div class="sect">
             <span class="sect-label bk">最近六星</span>
@@ -64,10 +96,21 @@
         </div>
         <div class="rows">
             {% for r in recent %}
-            <div class="row">
-                <span class="row-value" style="display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px;">{% if r.avatar %}<span class="aicon"><img src="{{ r.avatar }}" alt=""></span>{% endif %}{{ r.name }}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 4px;">{{ r.pool }}</span></span>
+            <div class="row"{% if r.fives %} style="border-bottom: none; padding-bottom: 2px;"{% endif %}>
+                <span class="row-value" style="display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px;">{% if r.avatar %}<span class="aicon"><img src="{{ r.avatar }}" alt=""></span>{% endif %}{{ r.name }}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 4px;">{{ r.pool }}{% if r.date %} · {{ r.date }}{% endif %}</span></span>
                 <span class="bar-num">{{ r.pull }} 抽</span>
             </div>
+            {% if r.fives %}
+            <div class="row" style="padding-top: 2px;">
+                <span style="display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0;">
+                    {% for f in r.fives %}
+                    {% if f.avatar %}<span class="aicon" title="{{ f.name }}"><img src="{{ f.avatar }}" alt="{{ f.name }}"></span>{% else %}<span class="chip chip--ghost">{{ f.name }}</span>{% endif %}
+                    {% endfor %}
+                    {% if r.fives_extra %}<span class="chip chip--ghost">+{{ r.fives_extra }}</span>{% endif %}
+                </span>
+                <span class="row-label">五星 ×{{ r.fives | length + r.fives_extra }}</span>
+            </div>
+            {% endif %}
             {% endfor %}
         </div>
 

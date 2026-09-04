@@ -6,6 +6,7 @@
 - 攒抽 / 抽卡规划 [参数]：攒抽规划卡（自动垫刀 + 自动当前卡池，
   参数 玉: 石: 单: 十: 垫刀: 池: 类型:单UP|双UP 天数: 目标抽数）
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -16,74 +17,49 @@ from gsuid_core.logger import logger
 from gsuid_core.models import Event
 from gsuid_core.sv import SV
 
-try:
-    from ArknightsUID.ArknightsUID.utils.arg_utils import extract_index, extract_uid
-    from ArknightsUID.ArknightsUID.utils.card import send_card_or_text
-    from ArknightsUID.ArknightsUID.utils.enduid.adapter import (
-        hide_uid,
-        hide_uid_for,
-        resolve_credential,
-    )
-    from ArknightsUID.ArknightsUID.utils.gacha_plan import (
-        build_plan_context,
-        build_summary,
-        format_plan_text,
-        parse_plan_args,
-    )
-    from ArknightsUID.ArknightsUID.utils.hypergryph.client import (
-        exchange_gift_code,
-        login_gacha_chain,
-    )
-    from ArknightsUID.ArknightsUID.utils.gamedata.charinfo import load_char_index
-    from ArknightsUID.ArknightsUID.utils.hypergryph.gacha import (
-        analyze_gacha,
-        build_gacha_context,
-        format_gacha_text,
-        load_local_logs,
-        save_local_logs,
-        sync_gacha_logs,
-    )
-    from ArknightsUID.ArknightsUID.utils.player.context import char_avatar_b64
-    from ArknightsUID.ArknightsUID.utils.prts.client import query_gacha_pools
-    from ArknightsUID.ArknightsUID.utils.reply_safety import safe_external_message
-    from ArknightsUID.ArknightsUID.version import ArknightsUID_version
-except ModuleNotFoundError:
-    from ArknightsUID.utils.arg_utils import extract_index, extract_uid
-    from ArknightsUID.utils.card import send_card_or_text
-    from ArknightsUID.utils.enduid.adapter import (
-        hide_uid,
-        hide_uid_for,
-        resolve_credential,
-    )
-    from ArknightsUID.utils.gacha_plan import (
-        build_plan_context,
-        build_summary,
-        format_plan_text,
-        parse_plan_args,
-    )
-    from ArknightsUID.utils.hypergryph.client import (
-        exchange_gift_code,
-        login_gacha_chain,
-    )
-    from ArknightsUID.utils.gamedata.charinfo import load_char_index
-    from ArknightsUID.utils.hypergryph.gacha import (
-        analyze_gacha,
-        build_gacha_context,
-        format_gacha_text,
-        load_local_logs,
-        save_local_logs,
-        sync_gacha_logs,
-    )
-    from ArknightsUID.utils.player.context import char_avatar_b64
-    from ArknightsUID.utils.prts.client import query_gacha_pools
-    from ArknightsUID.utils.reply_safety import safe_external_message
-    from ArknightsUID.version import ArknightsUID_version
+from ArknightsUID.utils.arg_utils import (
+    extract_index,
+    extract_uid,
+)
+from ArknightsUID.utils.card import send_card_or_text
+from ArknightsUID.utils.enduid.adapter import (
+    hide_uid,
+    hide_uid_for,
+    resolve_credential,
+)
+from ArknightsUID.utils.gacha_plan import (
+    build_plan_context,
+    build_summary,
+    format_plan_text,
+    parse_plan_args,
+)
+from ArknightsUID.utils.hypergryph.client import (
+    exchange_gift_code,
+    login_gacha_chain,
+)
+from ArknightsUID.utils.gamedata.charinfo import load_char_index
+from ArknightsUID.utils.hypergryph.gacha import (
+    analyze_gacha,
+    build_gacha_context,
+    format_gacha_text,
+    load_local_logs,
+    save_local_logs,
+    sync_gacha_logs,
+)
+from ArknightsUID.utils.player.context import char_avatar_b64
+from ArknightsUID.utils.prts.client import query_gacha_pools
+from ArknightsUID.utils.reply_safety import safe_external_message
+from ArknightsUID.version import ArknightsUID_version
+
+# 凭据解析 + 失败即回复的统一入口（原各处四行样板）
+from ArknightsUID.utils.card import resolve_or_reply  # noqa: E402
 
 gacha_sv = SV("ArknightsUID抽卡", priority=5)
 
 
-async def _send_text(bot: Bot, ev: Event, msg: str) -> None:
-    await bot.send((" " if ev.group_id else "") + msg, at_sender=bool(ev.group_id))
+# 文本回复公共实现在 utils.card.send_text；保留模块级别名供调用点/测试 patch
+from ArknightsUID.utils.card import send_text as _send_text  # noqa: E402
+from datetime import UTC
 
 
 _PLAN_USAGE = (
@@ -118,9 +94,9 @@ def _gift_reply(response: dict) -> str:
 async def show_gacha_report(bot: Bot, ev: Event) -> None:
     uid = extract_uid(ev.text)
     index = extract_index(ev.text)
-    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-    if isinstance(credential, str):
-        return await _send_text(bot, ev, credential)
+    credential = await resolve_or_reply(bot, ev, uid, index)
+    if credential is None:
+        return
 
     records, warning = await sync_gacha_logs(credential)
     if not records:
@@ -128,27 +104,35 @@ async def show_gacha_report(bot: Bot, ev: Event) -> None:
 
     nickname = credential.nickname or ""
     shown_uid = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
-    context = build_gacha_context(
-        nickname, shown_uid, records, ArknightsUID_version
-    )
+    context = build_gacha_context(nickname, shown_uid, records, ArknightsUID_version)
     text = format_gacha_text(nickname, shown_uid, records, warning)
     if context is not None:
-        # 最近六星逐个挂初始头像（gamedata 索引精确名反查，失败空串降级）
+        # 最近六星（含分段五星/垫刀段五星）逐个挂初始头像
+        # （gamedata 索引精确名反查，失败空串降级）
         try:
             char_index = await load_char_index()
             if char_index:
-                for row in context.get("recent", []):
+
+                async def _bake(row: dict) -> None:
                     hit = next(
-                        (cid for cid, info in char_index.items()
-                         if info.get("name") == row.get("name")),
+                        (
+                            cid
+                            for cid, info in char_index.items()
+                            if info.get("name") == row.get("name")
+                        ),
                         "",
                     )
                     row["avatar"] = await char_avatar_b64(hit) if hit else ""
+
+                for row in context.get("recent", []):
+                    await _bake(row)
+                    for five in row.get("fives", []):
+                        await _bake(five)
+                for five in context.get("pity_fives", []):
+                    await _bake(five)
         except Exception:
             pass
-        return await send_card_or_text(
-            bot, ev, "ark_gacha_card.html", context, text
-        )
+        return await send_card_or_text(bot, ev, "ark_gacha_card.html", context, text)
     await _send_text(bot, ev, text)
 
 
@@ -167,9 +151,9 @@ async def redeem_gift_code(bot: Bot, ev: Event) -> None:
     shown = code if not ev.group_id else "****"
 
     uid = extract_uid(ev.text.replace(code, "", 1))
-    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, 0)
-    if isinstance(credential, str):
-        return await _send_text(bot, ev, credential)
+    credential = await resolve_or_reply(bot, ev, uid, 0)
+    if credential is None:
+        return
 
     auth = await login_gacha_chain(credential)
     if isinstance(auth, str):
@@ -178,9 +162,7 @@ async def redeem_gift_code(bot: Bot, ev: Event) -> None:
     try:
         response = await exchange_gift_code(credential, auth, code)
     except Exception as exc:
-        logger.warning(
-            f"[ArknightsUID·兑换] 兑换请求异常: {exc.__class__.__name__}"
-        )
+        logger.warning(f"[ArknightsUID·兑换] 兑换请求异常: {exc.__class__.__name__}")
         response = None
     if response is None:
         return await _send_text(bot, ev, f"兑换请求失败（{shown}），请稍后重试。")
@@ -209,6 +191,7 @@ async def _pick_pool(keyword: str) -> tuple[dict | None, str]:
         return None, ""
     if not pools:
         return None, ""
+
     def to_dict(pool) -> dict:
         return {"title": pool.title, "end": pool.end, "end_ts": pool.end_ts}
 
@@ -233,9 +216,7 @@ async def _pick_pool(keyword: str) -> tuple[dict | None, str]:
 async def plan_gacha_draws(bot: Bot, ev: Event) -> None:
     args = parse_plan_args(ev.text)
     if args.errors:
-        return await _send_text(
-            bot, ev, _PLAN_USAGE + "\n" + "；".join(args.errors)
-        )
+        return await _send_text(bot, ev, _PLAN_USAGE + "\n" + "；".join(args.errors))
 
     # 参数 token（key:value）与 1-4 位独立数字（=目标抽数）不参与
     # UID/序号提取，否则 `玉:60000` 的数字会被误认成 UID。
@@ -243,8 +224,10 @@ async def plan_gacha_draws(bot: Bot, ev: Event) -> None:
     # 旧版 `not t.isdigit()` 会把裸 UID 删掉，`ark攒抽 149809765`
     # 静默落到默认账号、垫刀数据查错人
     positional = " ".join(
-        t for t in ev.text.split()
-        if ":" not in t and "：" not in t
+        t
+        for t in ev.text.split()
+        if ":" not in t
+        and "：" not in t
         and not (t.isascii() and t.isdigit() and len(t) <= 4)
     )
     uid = extract_uid(positional)
@@ -256,9 +239,7 @@ async def plan_gacha_draws(bot: Bot, ev: Event) -> None:
     else:
         pity = await _auto_pity(credential)
         name = credential.nickname
-        uid_masked = await hide_uid_for(
-            credential.uid, ev.user_id, ev.bot_id
-        )
+        uid_masked = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
     if args.pity is not None:
         pity = args.pity
 
@@ -290,7 +271,7 @@ def _annual_report(records: list[dict], year: str) -> str | None:
     from collections import Counter
     from datetime import datetime
 
-    from ..utils.hypergryph.gacha import (
+    from ArknightsUID.utils.hypergryph.gacha import (
         _legacy_one_based,
         _normalize_rarity,
         _safe_pos,
@@ -317,10 +298,7 @@ def _annual_report(records: list[dict], year: str) -> str | None:
         return None
 
     total = len(year_records)
-    sixes = [
-        r for r in year_records
-        if _normalize_rarity(r, _legacy) >= 6
-    ]
+    sixes = [r for r in year_records if _normalize_rarity(r, _legacy) >= 6]
     six_count = len(sixes)
     new_chars = [r for r in sixes if r.get("is_new")]
 
@@ -338,26 +316,24 @@ def _annual_report(records: list[dict], year: str) -> str | None:
             pity_by_cate[cate] = 0
 
     # year_records 已按 _year_of 过滤（可解析该年），这里统一走 _safe_ts
-    months = Counter(
-        datetime.fromtimestamp(_safe_ts(r)).month for r in year_records
-    )
+    months = Counter(datetime.fromtimestamp(_safe_ts(r)).month for r in year_records)
     busiest = max(months.items(), key=lambda kv: kv[1])[0]
 
     lines = [
         f"「明日方舟」{year} 年寻访年度报告",
-        f"总抽数：{total}（六星 {six_count}，六星率 "
-        f"{six_count * 100 / total:.2f}%）",
+        f"总抽数：{total}（六星 {six_count}，六星率 {six_count * 100 / total:.2f}%）",
         f"平均 {total / six_count:.1f} 抽一个六星" if six_count else "全年无六星……节哀",
         f"六星新干员：{len(new_chars)} 位"
-        + (f"（{'、'.join(str(r.get('name') or r.get('char_id') or '?') for r in new_chars[:8])}）"
-           if new_chars else ""),
+        + (
+            f"（{'、'.join(str(r.get('name') or r.get('char_id') or '?') for r in new_chars[:8])}）"
+            if new_chars
+            else ""
+        ),
     ]
     if worst_record is not None:
         # 计数含出货那一抽（"第 N 抽"口径）；文案写"前垫"须减 1，
         # 否则首个六星会显示"前垫了 1 抽"
-        lines.append(
-            f"最非时刻：{worst_record['name']} 第 {worst_pity} 抽才出货"
-        )
+        lines.append(f"最非时刻：{worst_record['name']} 第 {worst_pity} 抽才出货")
     lines.append(f"最肝月份：{busiest} 月（{months[busiest]} 抽）")
     lines.append("（基于本地已同步记录；ark抽卡记录 先同步最新数据）")
     return "\n".join(lines)
@@ -368,18 +344,21 @@ async def send_annual_report(bot: Bot, ev: Event) -> None:
     from datetime import datetime
 
     args = (ev.text or "").strip().split()
-    year = args[0] if args and args[0].isdigit() and len(args[0]) == 4 else str(
-        datetime.now().year
+    year = (
+        args[0]
+        if args and args[0].isdigit() and len(args[0]) == 4
+        else str(datetime.now().year)
     )
     uid = extract_uid(ev.text or "")
-    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, 0)
-    if isinstance(credential, str):
-        return await _send_text(bot, ev, credential)
+    credential = await resolve_or_reply(bot, ev, uid, 0)
+    if credential is None:
+        return
 
     records = await load_local_logs(credential.uid)
     if not records:
         return await _send_text(
-            bot, ev,
+            bot,
+            ev,
             f"本地没有抽卡记录（{year} 年）。先用 ark抽卡记录 同步，再来看年度报告。",
         )
     report = _annual_report(records, year)
@@ -395,11 +374,9 @@ async def send_annual_report(bot: Bot, ev: Event) -> None:
 # ---------------------------------------------------------------------------
 
 
-def _simulate_context(
-    results: list[dict], summary: dict, count: int
-) -> dict[str, Any]:
+def _simulate_context(results: list[dict], summary: dict, count: int) -> dict[str, Any]:
     """模拟结果 → 卡片上下文（profession 代码转中文名）。"""
-    from ..utils.player.parse import PROFESSION_NAMES
+    from ArknightsUID.utils.player.parse import PROFESSION_NAMES
 
     rows = []
     for row in results:
@@ -408,9 +385,7 @@ def _simulate_context(
                 "rarity": row["rarity"],
                 "name": row["name"],
                 "char_id": row.get("char_id") or "",
-                "profession": PROFESSION_NAMES.get(
-                    row.get("profession") or "", ""
-                ),
+                "profession": PROFESSION_NAMES.get(row.get("profession") or "", ""),
                 "avatar": "",
                 "guarantee": bool(row.get("guarantee")),
             }
@@ -424,7 +399,7 @@ def _simulate_context(
 
 
 def _format_sim_text(summary: dict, results: list[dict]) -> str:
-    from ..utils.gamedata.gacha_sim import format_pulls_text
+    from ArknightsUID.utils.gamedata.gacha_sim import format_pulls_text
 
     lines = ["「明日方舟」寻访模拟（概率同官方，仅供娱乐）"]
     lines.append(
@@ -436,23 +411,14 @@ def _format_sim_text(summary: dict, results: list[dict]) -> str:
     return "\n".join(lines)
 
 
-async def _run_gacha_simulation(
-    bot: Bot, ev: Event, count: int
-) -> None:
+async def _run_gacha_simulation(bot: Bot, ev: Event, count: int) -> None:
     import random as _random
 
-    try:
-        from ArknightsUID.utils.gamedata.gacha_sim import (
-            build_draw_pools,
-            simulate_pulls,
-            summarize_pulls,
-        )
-    except ModuleNotFoundError:
-        from ArknightsUID.ArknightsUID.utils.gamedata.gacha_sim import (
-            build_draw_pools,
-            simulate_pulls,
-            summarize_pulls,
-        )
+    from ArknightsUID.utils.gamedata.gacha_sim import (
+        build_draw_pools,
+        simulate_pulls,
+        summarize_pulls,
+    )
 
     char_index = await load_char_index()
     if not char_index:
@@ -467,10 +433,16 @@ async def _run_gacha_simulation(
     summary = summarize_pulls(results)
     context = _simulate_context(results, summary, count)
 
-    # 逐抽头像（hycdn 初始头像，失败空串降级）
+    # 逐抽头像（hycdn 初始头像，并发受限，失败空串降级）
     try:
-        for row in context["results"]:
-            row["avatar"] = await char_avatar_b64(str(row.get("char_id") or ""))
+        from ArknightsUID.utils.image import gather_b64
+
+        avatars = await gather_b64(
+            char_avatar_b64,
+            [str(row.get("char_id") or "") for row in context["results"]],
+        )
+        for row, avatar in zip(context["results"], avatars):
+            row["avatar"] = avatar
     except Exception:
         pass
     await send_card_or_text(
@@ -493,13 +465,14 @@ async def simulate_single_pull(bot: Bot, ev: Event) -> None:
 # ---------------------------------------------------------------------------
 
 
-def build_export_payload(
-    uid: str, records: list[dict[str, Any]]
-) -> dict[str, Any]:
+def build_export_payload(uid: str, records: list[dict[str, Any]]) -> dict[str, Any]:
     """本地记录 → 自描述 JSON 存档（时间旧→新，字段名明确，含原始量纲）。"""
-    from datetime import datetime, timezone
+    from datetime import datetime
 
-    from ..utils.hypergryph.gacha import _safe_pos, _safe_ts
+    from ArknightsUID.utils.hypergryph.gacha import (
+        _safe_pos,
+        _safe_ts,
+    )
 
     def _safe_int(raw: Any) -> int:
         try:
@@ -507,17 +480,13 @@ def build_export_payload(
         except (TypeError, ValueError):
             return 0
 
-    ordered = sorted(
-        records, key=lambda r: (_safe_ts(r), _safe_pos(r))
-    )
+    ordered = sorted(records, key=lambda r: (_safe_ts(r), _safe_pos(r)))
     export_records = []
     for record in ordered:
         ts = _safe_ts(record)
         try:
             time_text = (
-                datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(
-                    timespec="seconds"
-                )
+                datetime.fromtimestamp(ts, tz=UTC).isoformat(timespec="seconds")
                 if ts
                 else ""
             )
@@ -541,9 +510,7 @@ def build_export_payload(
             "app": "ArknightsUID",
             "game": "arknights",
             "uid": uid,
-            "exported_at": datetime.now(tz=timezone.utc).isoformat(
-                timespec="seconds"
-            ),
+            "exported_at": datetime.now(tz=UTC).isoformat(timespec="seconds"),
             "count": len(export_records),
             # rarity 为官方 inquiry 接口原始量纲（0 基或 1 基并存，
             # 见 utils/hypergryph/gacha._normalize_rarity 的说明）
@@ -558,9 +525,9 @@ async def delete_gacha_records(bot: Bot, ev: Event) -> None:
     """隐私清理：删除该账号的本地寻访记录存档（官方服务器数据不受影响）。"""
     uid = extract_uid(ev.text)
     index = extract_index(ev.text)
-    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-    if isinstance(credential, str):
-        return await _send_text(bot, ev, credential)
+    credential = await resolve_or_reply(bot, ev, uid, index)
+    if credential is None:
+        return
 
     shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
     records = await load_local_logs(credential.uid)
@@ -568,7 +535,8 @@ async def delete_gacha_records(bot: Bot, ev: Event) -> None:
         return await _send_text(bot, ev, f"UID {shown} 本地没有抽卡记录。")
     await save_local_logs(credential.uid, [])
     await _send_text(
-        bot, ev,
+        bot,
+        ev,
         f"已删除 UID {shown} 的 {len(records)} 条本地抽卡记录。\n"
         "（仅清本地存档；如需重新统计，ark抽卡记录 会从官方接口重新拉取。）",
     )
@@ -580,19 +548,21 @@ async def export_gacha_records(bot: Bot, ev: Event) -> None:
     # 把账号标识和消费记录公开给全体群成员——仅允许私聊使用
     if ev.group_id:
         return await _send_text(
-            bot, ev,
+            bot,
+            ev,
             "抽卡存档含完整 UID 与全部寻访历史，请在私聊中使用 ark导出抽卡。",
         )
     uid = extract_uid(ev.text)
     index = extract_index(ev.text)
-    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-    if isinstance(credential, str):
-        return await _send_text(bot, ev, credential)
+    credential = await resolve_or_reply(bot, ev, uid, index)
+    if credential is None:
+        return
 
     records = await load_local_logs(credential.uid)
     if not records:
         return await _send_text(
-            bot, ev,
+            bot,
+            ev,
             "本地没有抽卡记录可导出。先 ark抽卡记录 同步官方寻访记录。",
         )
 
@@ -616,7 +586,7 @@ async def export_gacha_records(bot: Bot, ev: Event) -> None:
             f"[ArknightsUID·抽卡导出] 文件发送失败: {exc.__class__.__name__}"
         )
         await _send_text(
-            bot, ev,
-            f"文件发送失败（{exc.__class__.__name__}），改发存档路径：\n"
-            f"{summary}",
+            bot,
+            ev,
+            f"文件发送失败（{exc.__class__.__name__}），改发存档路径：\n{summary}",
         )

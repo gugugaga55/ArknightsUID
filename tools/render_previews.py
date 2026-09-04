@@ -192,14 +192,14 @@ MOCK_CONTEXTS = {
         "main_skill_lvl": 7,
         "skills": [
             {"icon": asset_b64("skill_amiya_1"), "name": "战术咏唱·γ型", "specialize": 3,
-             "current": "攻击速度+60", "current_level": "专3",
-             "final": "", "final_level": ""},
+             "current": "攻击速度+60", "current_level": "专3", "current_meta": "初动5·消耗25·持续30秒",
+             "final": "", "final_level": "", "final_meta": ""},
             {"icon": asset_b64("skill_amiya_2"), "name": "精神爆发", "specialize": 3,
-             "current": "每秒消耗最大生命2%，攻击力+200%", "current_level": "专3",
-             "final": "", "final_level": ""},
+             "current": "每秒消耗最大生命2%，攻击力+200%", "current_level": "专3", "current_meta": "初动10·消耗68·持续25秒",
+             "final": "", "final_level": "", "final_meta": ""},
             {"icon": asset_b64("skill_amiya_3"), "name": "奇美拉", "specialize": 1,
-             "current": "攻击力+170%，攻击间隔增大", "current_level": "专1",
-             "final": "攻击力+220%，攻击间隔增大，攻击范围扩大", "final_level": "专3"},
+             "current": "攻击力+170%，攻击间隔增大", "current_level": "专1", "current_meta": "初动15·消耗100·持续60秒",
+             "final": "攻击力+220%，攻击间隔增大，攻击范围扩大", "final_level": "专3", "final_meta": "初动20·消耗90·持续60秒"},
         ],
         "equips": [
             {"name": "暗语", "stage": 3},
@@ -248,13 +248,23 @@ MOCK_CONTEXTS = {
         "six_count": 8,
         "six_rate": "2.67",
         "avg_six": "37.5",
+        "five_count": 38,
+        "five_rate": "12.67",
         "pity": 23,
         "pity_max": 80,
+        "pity_fives": [{"name": "阿米娅"}, {"name": "极境"}],
+        "pity_fives_extra": 0,
         "recent": [
-            {"name": "维什戴尔", "pool": "限定·重逢", "pull": 62},
-            {"name": "逻各斯", "pool": "常驻", "pull": 41},
-            {"name": "纯烬艾雅法拉", "pool": "限定·火山", "pull": 78},
-            {"name": "左乐", "pool": "常驻", "pull": 12},
+            {"name": "维什戴尔", "pool": "限定·重逢", "pull": 62, "date": "09-04",
+             "fives": [{"name": "白面鸮"}, {"name": "拉普兰德"}, {"name": "蓝毒"}],
+             "fives_extra": 0},
+            {"name": "逻各斯", "pool": "常驻", "pull": 41, "date": "08-21",
+             "fives": [{"name": "德克萨斯"}], "fives_extra": 0},
+            {"name": "纯烬艾雅法拉", "pool": "限定·火山", "pull": 78, "date": "08-10",
+             "fives": [{"name": "红"}, {"name": "食铁兽"}, {"name": "崖心"}, {"name": "天火"}],
+             "fives_extra": 0},
+            {"name": "左乐", "pool": "常驻", "pull": 12, "date": "08-01",
+             "fives": [], "fives_extra": 0},
         ],
         "version": VERSION,
     },
@@ -265,33 +275,69 @@ MOCK_CONTEXTS = {
             {
                 "id": "uniequip_002_svrash",
                 "name": "雪境羽兽护理套组",
-                "type": "X",
+                "type": "LOR-X",
                 "type_name": "领袖的远见",
-                "desc": "出击时若在部署位 Operator 列表内，自身与「血狼」的嘲讽等级提高",
+                "desc": "醒来的时候，它正躺在一个温暖的房间里。陌生的环境令它恐惧，它想要离开，却发现自己疼得动不了。",
                 "unlock_phase": 2,
                 "unlock_level": 60,
                 "unlock_favor": 100,
-                "costs": [
-                    {"name": "模组数据块", "count": 4, "icon": ""},
-                    {"name": "晶体电子单元", "count": 2, "icon": ""},
-                    {"name": "龙门币", "count": 120000, "icon": ""},
+                "trait": "攻击附带10%攻击力的法术伤害\n※于计算伤害时触发，造成预计算的法术附加伤害",
+                "talent_updates": [
+                    {"level": "Lv2", "text": "天赋【领袖】更新：攻击力+20%且攻击精英与领袖敌人时攻击力提升至110%，编入队伍时所有我方单位的再部署时间-10%"},
+                    {"level": "Lv3", "text": "天赋【领袖】更新：攻击力+25%且攻击精英与领袖敌人时攻击力提升至115%，编入队伍时所有我方单位的再部署时间-10%，银灰及周围8格的其他友军再部署时间额外-10%"},
                 ],
+                "potential_talents": [
+                    {"level": "Lv2·满潜", "text": "满潜：攻击力+22%（+2%），再部署时间-12%（+2%）"},
+                ],
+                "missions": [
+                    "战斗中非助战银灰累计使用真银斩10次",
+                    "3星通关别传BI-7；必须编入非助战银灰并上场，且使用银灰至少击败1名山雪鬼",
+                ],
+                "costs": [
+                    {"name": "模组数据块", "count": "4", "icon": ""},
+                    {"name": "聚合剂", "count": "2", "icon": ""},
+                    {"name": "龙门币", "count": "8万", "icon": ""},
+                ],
+                "tier_costs": {
+                    "1": [
+                        {"name": "模组数据块", "count": "4", "icon": ""},
+                        {"name": "聚合剂", "count": "2", "icon": ""},
+                        {"name": "龙门币", "count": "8万", "icon": ""},
+                    ],
+                    "2": [
+                        {"name": "模组数据块", "count": "4", "icon": ""},
+                        {"name": "数据增补条", "count": "60", "icon": ""},
+                        {"name": "晶体电子单元", "count": "3", "icon": ""},
+                        {"name": "龙门币", "count": "10万", "icon": ""},
+                    ],
+                    "3": [
+                        {"name": "模组数据块", "count": "4", "icon": ""},
+                        {"name": "数据增补仪", "count": "20", "icon": ""},
+                        {"name": "烧结核凝晶", "count": "4", "icon": ""},
+                        {"name": "龙门币", "count": "12万", "icon": ""},
+                    ],
+                },
                 "level_attrs": {
-                    "L1": "攻击 +45，防御 +25",
-                    "L2": "攻击 +55，防御 +30",
-                    "L3": "攻击 +65，防御 +35",
+                    "L1": "生命 +190，攻击 +45",
+                    "L2": "生命 +270，攻击 +60",
+                    "L3": "生命 +330，攻击 +70",
                 },
             },
             {
                 "id": "uniequip_001_svrash",
                 "name": "银灰证章",
-                "type": "ORIGINAL",
-                "type_name": "基础证章",
-                "desc": "干员银灰的模组证章，喀兰贸易颁发了这枚象征信任的证章。",
+                "type": "基础证章",
+                "type_name": "ORIGINAL",
+                "desc": "干员银灰擅长在较大范围内阻击敌人。根据外勤部门决议，在外勤任务中划分为近卫干员，行使领主职责。",
                 "unlock_phase": 0,
                 "unlock_level": 0,
                 "unlock_favor": 0,
+                "trait": "",
+                "talent_updates": [],
+                "potential_talents": [],
+                "missions": [],
                 "costs": [],
+                "tier_costs": {},
                 "level_attrs": {},
             },
         ],
@@ -410,16 +456,16 @@ MOCK_CONTEXTS = {
             {
                 "name": "战术咏唱·γ型",
                 "skill_type": "自动回复 · 手动触发",
-                "range": "",
+                "range": "攻击范围",
                 "levels": [
-                    {"level": "1", "description": "攻击速度+15", "sp_init": "0", "sp_cost": "40", "duration": "30"},
-                    {"level": "4", "description": "攻击速度+30", "sp_init": "0", "sp_cost": "37", "duration": "30"},
-                    {"level": "7", "description": "攻击速度+45", "sp_init": "0", "sp_cost": "34", "duration": "30"},
-                    {"level": "专精1", "description": "攻击速度+50", "sp_init": "0", "sp_cost": "33", "duration": "30"},
-                    {"level": "专精3", "description": "攻击速度+60", "sp_init": "0", "sp_cost": "30", "duration": "30"},
+                    {"level": "1", "description": "攻击速度+15", "sp_init": "5", "sp_cost": "40", "duration": "30"},
+                    {"level": "4", "description": "攻击速度+30", "sp_init": "5", "sp_cost": "37", "duration": "30"},
+                    {"level": "7", "description": "攻击速度+45", "sp_init": "5", "sp_cost": "34", "duration": "30"},
+                    {"level": "专精1", "description": "攻击速度+50", "sp_init": "5", "sp_cost": "33", "duration": "30"},
+                    {"level": "专精3", "description": "攻击速度+60", "sp_init": "5", "sp_cost": "30", "duration": "30"},
                 ],
-                "current": {"level": "专精1", "description": "攻击速度+50", "sp_init": "0", "sp_cost": "33", "duration": "30", "meta": "33耗·30s"},
-                "final": {"level": "专精3", "description": "攻击速度+60", "sp_init": "0", "sp_cost": "30", "duration": "30", "meta": "30耗·30s"},
+                "current": {"level": "专精1", "description": "攻击速度+50", "sp_init": "5", "sp_cost": "33", "duration": "30", "meta": "初动5·消耗33·持续30秒"},
+                "final": {"level": "专精3", "description": "攻击速度+60", "sp_init": "5", "sp_cost": "30", "duration": "30", "meta": "初动5·消耗30·持续30秒"},
                 "mastery_costs": [
                     {"mastery": "专精1", "materials": ["技巧概要·卷3", "固源岩组"]},
                     {"mastery": "专精3", "materials": ["技巧概要·卷3", "D32钢", "提纯源岩"]},
@@ -430,12 +476,12 @@ MOCK_CONTEXTS = {
                 "skill_type": "自动回复 · 手动触发",
                 "range": "",
                 "levels": [
-                    {"level": "1", "description": "每秒消耗最大生命3%，攻击力+120%", "sp_init": "0", "sp_cost": "80", "duration": "25"},
-                    {"level": "7", "description": "每秒消耗最大生命3%，攻击力+160%", "sp_init": "0", "sp_cost": "74", "duration": "25"},
-                    {"level": "专精3", "description": "每秒消耗最大生命2%，攻击力+200%", "sp_init": "0", "sp_cost": "68", "duration": "25"},
+                    {"level": "1", "description": "每秒消耗最大生命3%，攻击力+120%", "sp_init": "10", "sp_cost": "80", "duration": "25"},
+                    {"level": "7", "description": "每秒消耗最大生命3%，攻击力+160%", "sp_init": "10", "sp_cost": "74", "duration": "25"},
+                    {"level": "专精3", "description": "每秒消耗最大生命2%，攻击力+200%", "sp_init": "10", "sp_cost": "68", "duration": "25"},
                 ],
-                "current": {"level": "7", "description": "每秒消耗最大生命3%，攻击力+160%", "sp_init": "0", "sp_cost": "74", "duration": "25", "meta": "74耗·25s"},
-                "final": {"level": "专精3", "description": "每秒消耗最大生命2%，攻击力+200%", "sp_init": "0", "sp_cost": "68", "duration": "25", "meta": "68耗·25s"},
+                "current": {"level": "7", "description": "每秒消耗最大生命3%，攻击力+160%", "sp_init": "10", "sp_cost": "74", "duration": "25", "meta": "初动10·消耗74·持续25秒"},
+                "final": {"level": "专精3", "description": "每秒消耗最大生命2%，攻击力+200%", "sp_init": "10", "sp_cost": "68", "duration": "25", "meta": "初动10·消耗68·持续25秒"},
                 "mastery_costs": [],
             },
         ],
@@ -445,6 +491,15 @@ MOCK_CONTEXTS = {
             "skills": {"战术咏唱·γ型": 1, "精神爆发": 0},
             "training_remain": "剩约2小时15分",
         },
+        "modules": [
+            {
+                "name": "“破坏者的日程”",
+                "type": "CHG-X",
+                "trait": "攻击范围内的敌方单位受到的神经损伤提升15%",
+                "talent_brief": "天赋【情绪吸收】更新：技力回复速度+0.45/秒（+0.05/秒）",
+                "description": "罗德岛制药部为她定制的辅助装置，能够稳定释放源石技艺。",
+            },
+        ],
         "source_url": "https://prts.wiki/w/阿米娅",
         "version": VERSION,
     },
@@ -763,6 +818,148 @@ MOCK_CONTEXTS = {
             },
         ],
         "version": VERSION,
+    },
+    "ark_rogue_record.html": {
+        "name": "刀客塔不吃香菜",
+        "level": 120,
+        "uid": "12****89",
+        "theme_name": "岁的界园志异",
+        "topics": [
+            {"id": "rogue_1", "name": "傀影与猩红孤钻", "short": "傀影", "selected": False},
+            {"id": "rogue_2", "name": "水月与深蓝之树", "short": "水月", "selected": False},
+            {"id": "rogue_3", "name": "萨米的腐朽安眠", "short": "萨米", "selected": False},
+            {"id": "rogue_4", "name": "萨卡兹的无终奇语", "short": "萨卡兹", "selected": False},
+            {"id": "rogue_5", "name": "岁的界园志异", "short": "界园", "selected": True},
+            {"id": "rogue_6", "name": "沉沦者的黑流树海", "short": "树海", "selected": False},
+        ],
+        "banner": "",  # 特殊填充：PRTS 主题 KV（与生产同源）
+        "mode": "标准",
+        "mode_grade": 15,
+        "score": 4318,
+        "bp_level": 155,
+        "medal_current": 78,
+        "medal_total": 120,
+        "medal_pct": 65.0,
+        "games": 147,
+        "nodes": 3821,
+        "relics": 932,
+        "invest": 5420,
+        "endings_total": 4,
+        "fav_chars": [  # avatar 特殊填充（char_id → 官方头像缓存）
+            {"name": "维什戴尔", "char_id": "char_1035_wisdel", "avatar": ""},
+            {"name": "逻各斯", "char_id": "char_4133_logos", "avatar": ""},
+            {"name": "荒芜拉普兰德", "char_id": "char_1038_whitw2", "avatar": ""},
+            {"name": "乌尔比安", "char_id": "char_4145_ulpia", "avatar": ""},
+            {"name": "娜仁图亚", "char_id": "char_4138_narant", "avatar": ""},
+            {"name": "纯烬艾雅法拉", "char_id": "char_1016_agoat2", "avatar": ""},
+        ],
+        "records": [
+            {
+                "index": 1,
+                "success": True, "mode": "标准", "mode_grade": 15, "score": 1888,
+                "band": "突击战术分队", "ending": "大群所向", "last_stage": "",
+                "time": "08-30 22:31", "duration": "用时 52 分钟",
+                "zones": 6, "battles": "普通 12 · 精英 3 · 领袖 1",
+                "relic_count": 24, "recruit_count": 9, "tags": [],
+                "chars": [
+                    {"name": "维什戴尔", "char_id": "char_1035_wisdel", "avatar": ""},
+                    {"name": "逻各斯", "char_id": "char_4133_logos", "avatar": ""},
+                    {"name": "乌尔比安", "char_id": "char_4145_ulpia", "avatar": ""},
+                    {"name": "纯烬艾雅法拉", "char_id": "char_1016_agoat2", "avatar": ""},
+                    {"name": "桃金娘", "char_id": "char_151_myrtle", "avatar": ""},
+                ],
+            },
+            {
+                "index": 2,
+                "success": False, "mode": "标准", "mode_grade": 14, "score": 1210,
+                "band": "堡垒战术分队", "ending": "", "last_stage": "拆东补西",
+                "time": "08-29 21:05", "duration": "用时 34 分钟",
+                "zones": 3, "battles": "普通 7 · 精英 1",
+                "relic_count": 11, "recruit_count": 5, "tags": [],
+                "chars": [
+                    {"name": "荒芜拉普兰德", "char_id": "char_1038_whitw2", "avatar": ""},
+                    {"name": "娜仁图亚", "char_id": "char_4138_narant", "avatar": ""},
+                    {"name": "古米", "char_id": "char_196_sunbr", "avatar": ""},
+                ],
+            },
+        ],
+        "favour_records": [
+            {
+                "index": 1,
+                "success": True, "mode": "标准", "mode_grade": 18, "score": 2466,
+                "band": "突击战术分队", "ending": "天使之城", "last_stage": "",
+                "time": "08-12 23:47", "duration": "用时 61 分钟",
+                "zones": 6, "battles": "普通 14 · 精英 4 · 领袖 2",
+                "relic_count": 31, "recruit_count": 11, "tags": [],
+                "chars": [
+                    {"name": "维什戴尔", "char_id": "char_1035_wisdel", "avatar": ""},
+                    {"name": "逻各斯", "char_id": "char_4133_logos", "avatar": ""},
+                ],
+            },
+        ],
+        "record_total": 10,
+        "version": VERSION,
+    },
+    "ark_rogue_run.html": {
+        "name": "刀客塔不吃香菜",
+        "uid": "12****89",
+        "theme_name": "岁的界园志异",
+        "banner": "",  # 特殊填充：PRTS 主题 KV
+        "run_index": 1,
+        "run_total": 10,
+        "favour": False,
+        "success": True,
+        "mode": "标准",
+        "mode_grade": 15,
+        "score": 1888,
+        "band": "突击战术分队",
+        "ending": "大群所向",
+        "ending_segments": [
+            {"text": "你抵达了园林的尽头，", "color": ""},
+            {"text": "大群所向", "color": "#c8ab3d"},
+            {"text": "。", "color": ""},
+        ],
+        "last_stage": "",
+        "time": "08-30 22:31",
+        "duration": "用时 52 分钟",
+        "zones": 6,
+        "nodes": 47,
+        "battle_normal": 12,
+        "battle_elite": 3,
+        "battle_boss": 1,
+        "relic_count": 24,
+        "recruit_count": 9,
+        "seed": "",
+        "tags": [],
+        "init_chars": [  # avatar 特殊填充
+            {"name": "维什戴尔", "char_id": "char_1035_wisdel", "avatar": ""},
+            {"name": "桃金娘", "char_id": "char_151_myrtle", "avatar": ""},
+            {"name": "古米", "char_id": "char_196_sunbr", "avatar": ""},
+        ],
+        "final_chars": [
+            {"name": "维什戴尔", "char_id": "char_1035_wisdel", "avatar": ""},
+            {"name": "逻各斯", "char_id": "char_4133_logos", "avatar": ""},
+            {"name": "乌尔比安", "char_id": "char_4145_ulpia", "avatar": ""},
+            {"name": "纯烬艾雅法拉", "char_id": "char_1016_agoat2", "avatar": ""},
+            {"name": "荒芜拉普兰德", "char_id": "char_1038_whitw2", "avatar": ""},
+            {"name": "桃金娘", "char_id": "char_151_myrtle", "avatar": ""},
+        ],
+        "relics": [  # icon 特殊填充（tomimi 藏品图标，真实 icon_id；失败空串）
+            {"id": "rogue_5_relic_legacy_55", "name": "钝爪-爆发", "icon": ""},
+            {"id": "rogue_5_relic_legacy_98", "name": "钝爪-突破", "icon": ""},
+            {"id": "rogue_5_relic_return_12", "name": "教母的信物", "icon": ""},
+            {"id": "rogue_5_relic_return_13", "name": "开裂的束缚带", "icon": ""},
+            {"id": "rogue_5_relic_legacy_92", "name": "难闻的止血剂", "icon": ""},
+            {"id": "rogue_5_relic_legacy_143", "name": "《麻木与庸俗》", "icon": ""},
+        ],
+        "version": VERSION,
+    },
+    "ark_help_overview.html": {
+        # 特殊填充：生产 _overview_context()（单一事实源，预览与帮助卡同步）
+        "version": VERSION,
+        "core_cmds": [],
+        "groups": [],
+        "total": 0,
     },
     "ark_cultivate.html": {
         "version": VERSION,
@@ -1302,15 +1499,24 @@ async def _enrich_icons(name: str, context: dict) -> None:
             # 静态兜底 / gacha 卡：按名字补头像
         char_index = await load_char_index()
         rows_key = "rows" if name == "ark_recruit.html" else "recent"
-        for row in context.get(rows_key, []):
+
+        async def _bake_named(row: dict) -> None:
             if row.get("avatar"):
-                continue
+                return
             hit = next(
                 (cid for cid, info in char_index.items()
                  if info.get("name") == row.get("name")),
                 "",
             )
             row["avatar"] = await char_avatar_b64(hit) if hit else ""
+
+        for row in context.get(rows_key, []):
+            await _bake_named(row)
+            # gacha 卡：六星条目下挂的分段五星小头像（小黑盒式）
+            for five in row.get("fives", []):
+                await _bake_named(five)
+        for five in context.get("pity_fives", []):
+            await _bake_named(five)
 
     if name == "ark_craft.html":
         # 目标材料图标 + 首两层子材料图标（与生产 show_craft_tree 同规则）
@@ -1618,6 +1824,77 @@ async def _enrich_icons(name: str, context: dict) -> None:
         from ArknightsUID.arknightsuid_help import HELP_GROUPS, assign_group_icons
 
         context["groups"] = assign_group_icons(HELP_GROUPS)
+
+    if name == "ark_help_overview.html":
+        # 生产总览上下文（与 send_ark_help 无参视图同源）
+        from ArknightsUID.arknightsuid_help import _overview_context
+
+        context.update(_overview_context())
+        context["version"] = VERSION  # 预览统一用预览版号（与其他卡一致）
+
+    if name == "ark_rogue_record.html":
+        # 期 KV 与生产同源；头像走官方缓存（char_id → b64，失败空串降级）
+        try:
+            from ArknightsUID.utils.prts.client import activity_banner_urls
+            from ArknightsUID.utils.render import get_image_b64_with_cache
+            from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
+
+            theme = str(context.get("theme_name") or "")
+            url = (await activity_banner_urls([theme])).get(theme, "")
+            if url:
+                context["banner"] = await get_image_b64_with_cache(
+                    url, CACHE_PATH / "rogue_theme", quality=82
+                )
+        except Exception as e:
+            print(f"⚠️  ark_rogue_record 主题图拉取失败，按无图降级: {e}")
+        try:
+            from ArknightsUID.utils.player.context import char_avatar_b64
+
+            slots = list(context.get("fav_chars") or [])
+            for row in (context.get("records") or []) + (
+                context.get("favour_records") or []
+            ):
+                slots.extend(row.get("chars") or [])
+            for slot in slots:
+                slot["avatar"] = await char_avatar_b64(
+                    str(slot.get("char_id") or "")
+                )
+        except Exception as e:
+            print(f"⚠️  ark_rogue_record 头像拉取失败，按无图降级: {e}")
+
+    if name == "ark_rogue_run.html":
+        # 期 KV / 头像 / 藏品图标均与生产同源（失败降级无图）
+        try:
+            from ArknightsUID.utils.prts.client import activity_banner_urls
+            from ArknightsUID.utils.render import get_image_b64_with_cache
+            from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
+
+            theme = str(context.get("theme_name") or "")
+            url = (await activity_banner_urls([theme])).get(theme, "")
+            if url:
+                context["banner"] = await get_image_b64_with_cache(
+                    url, CACHE_PATH / "rogue_theme", quality=82
+                )
+        except Exception as e:
+            print(f"⚠️  ark_rogue_run 主题图拉取失败，按无图降级: {e}")
+        try:
+            from ArknightsUID.utils.player.context import char_avatar_b64
+
+            for slot in (context.get("init_chars") or []) + (
+                context.get("final_chars") or []
+            ):
+                slot["avatar"] = await char_avatar_b64(
+                    str(slot.get("char_id") or "")
+                )
+        except Exception as e:
+            print(f"⚠️  ark_rogue_run 头像拉取失败，按无图降级: {e}")
+        try:
+            from ArknightsUID.utils.gamedata.rogue_relic import relic_icon_b64
+
+            for relic in context.get("relics") or []:
+                relic["icon"] = await relic_icon_b64(str(relic.get("id") or ""))
+        except Exception as e:
+            print(f"⚠️  ark_rogue_run 藏品图标拉取失败，按无图降级: {e}")
 
     if name == "ark_recruit_plan.html":
         # 与生产同源：真实公招数据（PRTS 公开招募池）跑 recommend_combos

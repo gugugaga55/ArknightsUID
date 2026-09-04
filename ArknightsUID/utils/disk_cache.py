@@ -9,17 +9,24 @@ read_text/write_text 会阻塞事件循环数百毫秒，写入也非原子。
 - 原子写：先写临时文件再 os.replace（崩溃不留半个文件）
 - 包装格式与旧缓存文件兼容（prts/yituliu/gamedata 历史缓存可直接读取）
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from gsuid_core.logger import logger
+
+# 包装格式写侧固定 _cache_time 在首位（json.dumps 保序），判鲜时
+# 只读文件头即可取到时间戳，避免为一个 float 解析 15-18MB payload
+_HEAD_TS_RE = re.compile(rb'"_cache_time"\s*:\s*([0-9][0-9.eE+-]*)')
+_HEAD_READ_BYTES = 256
 
 
 def _read_sync(path: Path) -> tuple[Any | None, float]:
@@ -45,9 +52,7 @@ def _write_sync(path: Path, payload: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     # tmp 名必须每次唯一：同进程内并发写同一路径（to_thread 并行）时，
     # 只按 pid 命名会让两个线程共用同一 tmp，互相截断/删除对方半成品
-    tmp_path = path.with_name(
-        f"{path.name}.tmp{os.getpid()}.{uuid4().hex[:8]}"
-    )
+    tmp_path = path.with_name(f"{path.name}.tmp{os.getpid()}.{uuid4().hex[:8]}")
     try:
         tmp_path.write_text(
             json.dumps(
@@ -66,6 +71,37 @@ def _write_sync(path: Path, payload: Any) -> None:
                 pass
 
 
+def _saved_ts_sync(path: Path) -> float:
+    """同步轻量读时间戳：头部命中直接用；未命中退回全量解析（语义与 cache_read 一致）。"""
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(_HEAD_READ_BYTES)
+    except OSError:
+        return 0.0
+    match = _HEAD_TS_RE.search(head)
+    if match is None:
+        _payload, saved_ts = _read_sync(path)
+        return saved_ts
+    try:
+        return float(match.group(1))
+    except ValueError:
+        return 0.0
+
+
+async def cache_saved_ts(path: Path) -> float:
+    """读缓存时间戳（不解析 payload）；缺失/损坏返回 0。判鲜专用。"""
+    if not path.exists():
+        return 0.0
+    try:
+        return await asyncio.to_thread(_saved_ts_sync, path)
+    except Exception as exc:
+        # 同 cache_read：异常 message 一律不进日志（只打类名）
+        logger.debug(
+            f"[ArknightsUID·缓存] 时间戳读取失败 {path.name}: {exc.__class__.__name__}"
+        )
+        return 0.0
+
+
 async def cache_read(path: Path) -> tuple[Any | None, float]:
     """读缓存 → (payload, saved_ts)。损坏/缺失返回 (None, 0)。
 
@@ -78,8 +114,7 @@ async def cache_read(path: Path) -> tuple[Any | None, float]:
     except Exception as exc:
         # 缓存层拿不到业务敏感值做脱敏，异常 message 一律不进日志（只打类名）
         logger.debug(
-            f"[ArknightsUID·缓存] 读取失败 {path.name}: "
-            f"{exc.__class__.__name__}"
+            f"[ArknightsUID·缓存] 读取失败 {path.name}: {exc.__class__.__name__}"
         )
         return None, 0.0
 
@@ -90,8 +125,7 @@ async def cache_write(path: Path, payload: Any) -> None:
         await asyncio.to_thread(_write_sync, path, payload)
     except Exception as exc:
         logger.debug(
-            f"[ArknightsUID·缓存] 写入失败 {path.name}: "
-            f"{exc.__class__.__name__}"
+            f"[ArknightsUID·缓存] 写入失败 {path.name}: {exc.__class__.__name__}"
         )
 
 

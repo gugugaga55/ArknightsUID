@@ -9,12 +9,14 @@ playwright 可用时额外做一次真实出图（bytes 校验）；不可用时
 """
 from __future__ import annotations
 
+import re
 import unittest
 
 from test_player_parse import _envelope
 
 from ArknightsUID.utils.gamedata import charinfo
 from ArknightsUID.utils.hypergryph import gacha as gacha_svc
+from ArknightsUID.utils.path import TEMPLATES_PATH
 from ArknightsUID.utils.player import (
     build_box_context,
     build_campaign_context,
@@ -85,7 +87,7 @@ class CardContractTest(unittest.TestCase):
         self.assertEqual(context["rarity"], 5)
 
     def test_char_card_contract_with_skill_effects(self) -> None:
-        """PRTS 技能效果增强：当前级/满级描述进 context 并渲染上卡。"""
+        """PRTS 技能效果增强：当前级/满级描述 + 初动/消耗/持续进 context 并渲染上卡。"""
         import asyncio
 
         entry = self.data.chars[0]
@@ -94,12 +96,25 @@ class CardContractTest(unittest.TestCase):
         # 直接取 context 里解析出的 name 回填验证渲染链路
         probe = asyncio.run(build_char_card_context(entry, VERSION))
         first_name = probe["skills"][0]["name"]
+        # utils.skillfx 的等级上下文结构（_char_skill_effects 的产物）
         effects = {
             first_name: {
-                "current": "攻击力+120%",
-                "current_level": "7",
-                "final": "攻击力+200%",
-                "final_level": "专3",
+                "current": {
+                    "level": "7",
+                    "description": "攻击力+120%",
+                    "sp_init": "10",
+                    "sp_cost": "24",
+                    "duration": "",
+                    "meta": "初动10·消耗24",
+                },
+                "final": {
+                    "level": "专3",
+                    "description": "攻击力+200%",
+                    "sp_init": "15",
+                    "sp_cost": "24",
+                    "duration": "30",
+                    "meta": "初动15·消耗24·持续30秒",
+                },
             }
         }
         context = asyncio.run(build_char_card_context(entry, VERSION, effects))
@@ -107,14 +122,17 @@ class CardContractTest(unittest.TestCase):
         skill = context["skills"][0]
         self.assertEqual(skill["current"], "攻击力+120%")
         self.assertEqual(skill["current_level"], "7")
+        self.assertEqual(skill["current_meta"], "初动10·消耗24")
         self.assertEqual(skill["final"], "攻击力+200%")
         self.assertEqual(skill["final_level"], "专3")
+        self.assertEqual(skill["final_meta"], "初动15·消耗24·持续30秒")
         # 未命中的技能不携带效果字段值（空串降级）
         if len(context["skills"]) > 1:
             self.assertEqual(context["skills"][1]["current"], "")
         html = _render("ark_char_card.html", context)
         self.assertIn("攻击力+200%", html)
         self.assertIn("专3", html)
+        self.assertIn("初动15·消耗24·持续30秒", html)
 
     def test_gacha_card_contract(self) -> None:
         records = [
@@ -135,6 +153,25 @@ class CardContractTest(unittest.TestCase):
         )
         self.assertIn("ark练度卡", html)  # 新命令进入帮助卡
         self.assertIn("ark抽卡记录", html)
+
+    def test_cjk_fallback_font_face_names(self) -> None:
+        """字体栈回归：CJK 兜底必须写系统 TTC 的真实 face 名。
+
+        takumi 挂载的 NotoSansCJK-Regular.ttc face 名是 "Noto Sans CJK SC"，
+        只写 "Noto Sans SC" 匹配不到 → generic 回退落到 TTC 首 face（JP），
+        关/直/与/门 等字渲染成日文字形。这里锁住两条栈的 face 名与次序。
+        """
+        css = (TEMPLATES_PATH / "ark_base.css").read_text(encoding="utf-8")
+        body = re.search(r'font-family:\s*"MiSans"[^;]+;', css)
+        mono = re.search(r'--mono:[^;]+;', css)
+        assert body and mono
+        for stack, cjk_name in (
+            (body.group(0), "Noto Sans CJK SC"),
+            (mono.group(0), "Noto Sans Mono CJK SC"),
+        ):
+            self.assertIn(cjk_name, stack)
+            # CJK face 必须在 generic 族名之前，否则 generic 先命中（JP face）
+            self.assertLess(stack.index(cjk_name), stack.index("sans-serif") if "sans-serif" in stack else stack.index("monospace"))
 
     def test_daily_card_zero_total_does_not_divide_by_zero(self) -> None:
         envelope = _envelope()

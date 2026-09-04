@@ -7,6 +7,7 @@
 - `ark下载资源 [分类…] [校验]`（pm=1）：批量预下载全部渲染图片（已存在跳过，重跑只补新增；带「校验」逐档验完整性，坏档自动重下；进度不逐类刷屏，结束后以一条转发消息汇总）
 - `ark安装依赖 [名字]`（pm=1）：兜底 core 自动装依赖失败的补装（白名单：ocr/takumi）
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -18,32 +19,23 @@ from gsuid_core.models import Event
 from gsuid_core.server import on_core_start
 from gsuid_core.sv import SV
 
-try:
-    from ArknightsUID.ArknightsUID.utils.cache_clean import (
-        CACHE_DAYS_TO_KEEP,
-        clean_cache_directories,
-    )
-    from ArknightsUID.ArknightsUID.utils.database.models import ArkUser
-    from ArknightsUID.ArknightsUID.utils.enduid.adapter import hide_uid
-except ModuleNotFoundError:
-    from ArknightsUID.utils.cache_clean import (
-        CACHE_DAYS_TO_KEEP,
-        clean_cache_directories,
-    )
-    from ArknightsUID.utils.database.models import ArkUser
-    from ArknightsUID.utils.enduid.adapter import hide_uid
+from ArknightsUID.utils.cache_clean import (
+    CACHE_DAYS_TO_KEEP,
+    clean_cache_directories,
+)
+from ArknightsUID.utils.database.models import ArkUser
+from ArknightsUID.utils.enduid.adapter import hide_uid
+from ArknightsUID.utils.card import send_text as _send_text  # noqa: E402
+
 
 maintenance_sv = SV("ArknightsUID维护", pm=1, priority=5)
 refresh_sv = SV("ArknightsUID刷新", priority=5)
 
 
-async def _send_text(bot: Bot, ev: Event, msg: str) -> None:
-    await bot.send((" " if ev.group_id else "") + msg, at_sender=bool(ev.group_id))
-
-
 # ---------------------------------------------------------------------------
 # 缓存清理：手动命令 + 定时 + 启动
 # ---------------------------------------------------------------------------
+
 
 @maintenance_sv.on_fullmatch(("清理缓存", "删除缓存"), block=True)
 async def clean_cache_command(bot: Bot, ev: Event) -> None:
@@ -51,9 +43,7 @@ async def clean_cache_command(bot: Bot, ev: Event) -> None:
     await _send_text(bot, ev, result)
 
 
-@scheduler.scheduled_job(
-    "cron", hour=3, minute=30, id="ark_cache_clean_daily"
-)
+@scheduler.scheduled_job("cron", hour=3, minute=30, id="ark_cache_clean_daily")
 async def ark_cache_clean_daily() -> None:
     await clean_cache_directories(CACHE_DAYS_TO_KEEP)
 
@@ -69,6 +59,7 @@ async def ark_cache_clean_on_startup() -> None:
 # 更新记录：最近 git 提交
 # ---------------------------------------------------------------------------
 
+
 @maintenance_sv.on_fullmatch(("更新记录", "更新日志"), block=True)
 async def show_update_log(bot: Bot, ev: Event) -> None:
     from pathlib import Path
@@ -79,7 +70,9 @@ async def show_update_log(bot: Bot, ev: Event) -> None:
         # core 检出里（无独立 .git）时，git 会向上命中 gsuid_core 的仓库，
         # 把 core 的提交历史当成插件的展示——宁缺毋错，明确提示
         proc = await asyncio.create_subprocess_exec(
-            "git", "rev-parse", "--show-toplevel",
+            "git",
+            "rev-parse",
+            "--show-toplevel",
             cwd=str(plugin_dir),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -92,12 +85,16 @@ async def show_update_log(bot: Bot, ev: Event) -> None:
             or Path(toplevel).resolve() != plugin_dir
         ):
             return await _send_text(
-                bot, ev,
+                bot,
+                ev,
                 "更新记录仅对独立 git 部署可用（当前部署未检测到插件自身的"
                 " .git，插件可能随 core 仓库一同部署）。",
             )
         proc = await asyncio.create_subprocess_exec(
-            "git", "log", "--oneline", "-10",
+            "git",
+            "log",
+            "--oneline",
+            "-10",
             cwd=str(plugin_dir),
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
@@ -121,6 +118,7 @@ async def show_update_log(bot: Bot, ev: Event) -> None:
 # 删除无效凭据：清理 cookie_status=无效 的本地登录
 # ---------------------------------------------------------------------------
 
+
 @maintenance_sv.on_command(("删除无效凭据", "清理无效账号"), block=True)
 async def delete_invalid_creds(bot: Bot, ev: Event) -> None:
     rows = await ArkUser.select_rows(cookie_status="无效")
@@ -143,21 +141,17 @@ async def delete_invalid_creds(bot: Bot, ev: Event) -> None:
     shown = "、".join(hide_uid(u) for u in uids[:10])
     more = f" 等 {len(uids)} 个" if len(uids) > 10 else ""
     suffix = f"（跳过 {skipped} 条 uid 为空的异常行，请人工核查）" if skipped else ""
-    await _send_text(
-        bot, ev, f"已删除 {len(uids)} 条无效登录：{shown}{more}{suffix}"
-    )
+    await _send_text(bot, ev, f"已删除 {len(uids)} 条无效登录：{shown}{more}{suffix}")
 
 
 # ---------------------------------------------------------------------------
 # 刷新：删游戏数据表缓存，下次查询重新下载
 # ---------------------------------------------------------------------------
 
+
 @refresh_sv.on_fullmatch(("刷新", "刷新数据", "更新数据"), block=True)
 async def refresh_gamedata_cache(bot: Bot, ev: Event) -> None:
-    try:
-        from ArknightsUID.ArknightsUID.utils.path import CACHE_BASE
-    except ModuleNotFoundError:
-        from ArknightsUID.utils.path import CACHE_BASE
+    from ArknightsUID.utils.path import CACHE_BASE
 
     gamedata_dir = CACHE_BASE / "gamedata"
     removed = 0
@@ -169,7 +163,8 @@ async def refresh_gamedata_cache(bot: Bot, ev: Event) -> None:
             except OSError:
                 continue
     await _send_text(
-        bot, ev,
+        bot,
+        ev,
         f"「明日方舟」已清理 {removed} 个游戏数据缓存文件，"
         "下次查询会自动重新下载最新数据（首次会稍慢）。",
     )
@@ -179,12 +174,10 @@ async def refresh_gamedata_cache(bot: Bot, ev: Event) -> None:
 # 安装依赖：core AutoInstallDep 失败时的聊天内兜底（白名单，见 dep_install）
 # ---------------------------------------------------------------------------
 
+
 @maintenance_sv.on_command(("安装依赖", "安装组件"), block=True)
 async def install_dependency_command(bot: Bot, ev: Event) -> None:
-    try:
-        from ArknightsUID.ArknightsUID.utils import dep_install
-    except ModuleNotFoundError:
-        from ArknightsUID.utils import dep_install
+    from ArknightsUID.utils import dep_install
 
     arg = (ev.text or "").strip()
     if not arg:
@@ -193,7 +186,9 @@ async def install_dependency_command(bot: Bot, ev: Event) -> None:
             state = "✅ 已安装" if entry.installed else "❌ 未安装"
             keys = "/".join(entry.keys)
             lines.append(f"- {keys}（{entry.spec}）：{state}")
-        lines.append("依赖通常由 core 启动时自动安装（AutoInstallDep），本命令兜底补装。")
+        lines.append(
+            "依赖通常由 core 启动时自动安装（AutoInstallDep），本命令兜底补装。"
+        )
         return await _send_text(bot, ev, "\n".join(lines))
 
     resolved = dep_install.resolve_dependency(arg)
@@ -204,9 +199,7 @@ async def install_dependency_command(bot: Bot, ev: Event) -> None:
     spec, module = resolved
     if dep_install.is_installed(module):
         return await _send_text(bot, ev, f"{module} 已安装，无需重复安装。")
-    await _send_text(
-        bot, ev, f"正在安装 {spec}（多镜像回退，约需 1-2 分钟）…"
-    )
+    await _send_text(bot, ev, f"正在安装 {spec}（多镜像回退，约需 1-2 分钟）…")
     ok, msg = await dep_install.install_dependency(arg)
     await _send_text(bot, ev, msg)
 
@@ -215,33 +208,29 @@ async def install_dependency_command(bot: Bot, ev: Event) -> None:
 # 下载资源：批量预下载全部渲染图片（已存在跳过，重跑只补 diff）
 # ---------------------------------------------------------------------------
 
+
 @maintenance_sv.on_command(
     ("下载资源", "全部下载", "下载全部资源", "预下载资源"), block=True
 )
 async def bulk_download_resources(bot: Bot, ev: Event) -> None:
-    try:
-        from ArknightsUID.ArknightsUID.utils.resource import bulk_download
-    except ModuleNotFoundError:
-        from ArknightsUID.utils.resource import bulk_download
+    from ArknightsUID.utils.resource import bulk_download
 
     category_keys = bulk_download.parse_category_args(ev.text or "")
     if isinstance(category_keys, str):
         return await _send_text(bot, ev, category_keys)
 
     if not bulk_download.try_acquire_run():
-        return await _send_text(
-            bot, ev, "资源下载正在进行中，请等本轮结束再试。"
-        )
+        return await _send_text(bot, ev, "资源下载正在进行中，请等本轮结束再试。")
     try:
-        labels = "、".join(
-            bulk_download.CATEGORY_LABELS[key] for key in category_keys
-        )
+        labels = "、".join(bulk_download.CATEGORY_LABELS[key] for key in category_keys)
         verify_note = (
             "；校验模式：存量文件逐个验完整性，坏档自动重下（耗时更长）"
-            if category_keys.verify else ""
+            if category_keys.verify
+            else ""
         )
         await _send_text(
-            bot, ev,
+            bot,
+            ev,
             f"「明日方舟」开始预下载资源（{labels}{verify_note}）："
             "已存在的图片会跳过，首次运行需先拉取游戏数据表，"
             "耗时较长，结束后汇总一条转发消息回报，期间请耐心等待…",
@@ -250,11 +239,11 @@ async def bulk_download_resources(bot: Bot, ev: Event) -> None:
         # 进度不逐类刷屏：收集各分类回报行，跑完连总结一起打包成
         # 一条转发消息发回本会话（本命令 pm=1，会话即管理员）
         summary = await bulk_download.run_bulk_download(
-            category_keys, verify=category_keys.verify,
+            category_keys,
+            verify=category_keys.verify,
         )
         forward_lines = [
-            bulk_download.format_category_line(result)
-            for result in summary.results
+            bulk_download.format_category_line(result) for result in summary.results
         ] + [bulk_download.format_summary(summary)]
         try:
             from gsuid_core.segment import MessageSegment

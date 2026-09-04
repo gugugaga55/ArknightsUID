@@ -1,13 +1,12 @@
 import asyncio
 import os
 import threading
+from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 
 from PIL import Image
 
 from gsuid_core.logger import logger
-
-ICON = Path(__file__).parent.parent.parent / "ICON.png"
 
 # per-文件 single-flight（审计 #19）：check 与 download 之间有 await，
 # 并发协程会重复下载/双写同一路径，一方可能读到半写文件
@@ -39,8 +38,37 @@ async def _path_lock(target: Path) -> asyncio.Lock:
         return lock
 
 
-def get_ICON():
-    return Image.open(ICON)
+# 受限并发批量取图的默认信号量（PRTS 页面/CDN 图标口径）
+DEFAULT_FETCH_CONCURRENCY = 4
+
+
+async def gather_b64(
+    fetch: Callable[[str], Awaitable[str]],
+    keys: Sequence[str],
+    *,
+    limit: int = DEFAULT_FETCH_CONCURRENCY,
+) -> list[str]:
+    """受限并发批量取图 b64：失败/异常降级空串，结果与 keys 保序对齐。
+
+    收编 wiki._gather_b64 与 rogue 五处内联的「Semaphore(4) + gather」
+    形状；单飞/负缓存等可靠性语义在各 fetch 内部，这里只管并发上限
+    与失败降级。串行逐个 await 在冷缓存下是命令级卡顿（公招推荐最重
+    6×24=144 次图标）。
+    """
+    if not keys:
+        return []
+    semaphore = asyncio.Semaphore(limit)
+
+    async def _one(key: str) -> str:
+        if not key:
+            return ""
+        async with semaphore:
+            try:
+                return await fetch(key)
+            except Exception:
+                return ""
+
+    return list(await asyncio.gather(*(_one(k) for k in keys)))
 
 
 async def pic_download_from_url(
@@ -59,9 +87,9 @@ async def pic_download_from_url(
     new_name, legacy_name = cache_names_for_url(pic_url)
     if not new_name:
         raise ValueError(f"URL 无有效文件名: {pic_url[:80]}")
-    _path = path / new_name                  # 新键：下载/转换的写入目标
+    _path = path / new_name  # 新键：下载/转换的写入目标
     webp_path = _path.with_suffix(".webp")
-    legacy_path = path / legacy_name         # 旧键：只读回退（存量缓存）
+    legacy_path = path / legacy_name  # 旧键：只读回退（存量缓存）
     legacy_webp = legacy_path.with_suffix(".webp")
 
     def _candidates() -> list[Path]:
@@ -80,9 +108,7 @@ async def pic_download_from_url(
             try:
                 return Image.open(existing).convert("RGBA")
             except Exception:
-                logger.warning(
-                    f"[ARK·图像] 缓存损坏，删除并重下: {existing.name}"
-                )
+                logger.warning(f"[ARK·图像] 缓存损坏，删除并重下: {existing.name}")
                 try:
                     existing.unlink()
                 except OSError:
@@ -109,26 +135,20 @@ async def pic_download_from_url(
         # （写者随即 FileNotFoundError）。原子替换后读者要么看不到、
         # 要么看到完整文件。失败时显式抛错——download 失败只返回
         # 非 200/None，静默会让下游拿着不存在的文件当下载成功
-        tmp_name = (
-            f".{new_name}.{os.getpid()}.{threading.get_ident()}.download.tmp"
-        )
+        tmp_name = f".{new_name}.{os.getpid()}.{threading.get_ident()}.download.tmp"
         tmp_download = path / tmp_name
         retcode = await download(
             pic_url, path, tmp_name, sess=await get_client(), tag="[Ark]"
         )
         try:
             if retcode != 200 or not tmp_download.exists():
-                raise FileNotFoundError(
-                    f"下载失败 HTTP {retcode}: {pic_url[:80]}"
-                )
+                raise FileNotFoundError(f"下载失败 HTTP {retcode}: {pic_url[:80]}")
             os.replace(tmp_download, _path)
         finally:
             tmp_download.unlink(missing_ok=True)
 
         try:
-            img = await asyncio.to_thread(
-                lambda: Image.open(_path).convert("RGBA")
-            )
+            img = await asyncio.to_thread(lambda: Image.open(_path).convert("RGBA"))
         except Exception as e:
             # 刚下载的文件打不开（CDN 错误页/半截响应）：删掉毒药文件，
             # 否则下次调用在候选里命中它、永远失败
@@ -144,9 +164,7 @@ async def pic_download_from_url(
             try:
                 # 唯一 tmp + 原子替换：并发读者不会拿到半写的 webp；
                 # 编码下放线程，不在事件循环上跑
-                await asyncio.to_thread(
-                    img.save, tmp_webp, "WEBP", quality=85
-                )
+                await asyncio.to_thread(img.save, tmp_webp, "WEBP", quality=85)
                 os.replace(tmp_webp, webp_path)
                 _path.unlink(missing_ok=True)
                 logger.debug(f"[ARK·图像] 已将图片转为webp: {webp_path.name}")

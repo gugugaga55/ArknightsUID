@@ -9,6 +9,7 @@ iconId/rarity，type=RELIC）。同名藏品跨期复用（钝爪-典训 每期�
 玩家数据 rogue_N 从灰蕈迷境起编——表 rogue_5 = 岁的界园志异 = 玩家 rogue_6。
 本模块只用主题表自身 id+name，不与玩家侧编号互转。
 """
+
 from __future__ import annotations
 
 import base64
@@ -50,8 +51,7 @@ RARITY_NAMES = {
 # 其内部 httpx 客户端默认 5s 超时且不跟随重定向，实测此源必超时；
 # 这里自带 20s + follow_redirects 的客户端，失败落 .miss 负缓存（1h）。
 _TOMIMI_STATIC_BASE = (
-    "https://cdn.jsdelivr.net/gh/tanch-p/tomimi-dev@master"
-    "/static/images/relics"
+    "https://cdn.jsdelivr.net/gh/tanch-p/tomimi-dev@master/static/images/relics"
 )
 _ICON_MISS_TTL = 3600.0
 
@@ -123,9 +123,7 @@ async def load_relic_index() -> dict[str, list[dict]]:
     return index
 
 
-def match_relics(
-    query: str, index: dict[str, list[dict]], limit: int = 8
-) -> list[str]:
+def match_relics(query: str, index: dict[str, list[dict]], limit: int = 8) -> list[str]:
     """按名匹配：精确 → 唯一前缀 → 唯一子串（书名号/引号开头的名常见）。
 
     多命中返回候选列表（≤limit），由调用方提示补全。

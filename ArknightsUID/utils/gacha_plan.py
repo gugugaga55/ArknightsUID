@@ -15,22 +15,23 @@ bundle main-DPBXoxQ6.js 的预计算概率表 lEe/sEe 与 gacha-calc-test chunk
 本模块的 build_up_table 与一图流 lEe（双UP单限定）/sEe（双UP双限定）
 两张 301 项表逐点校验（tests/test_gacha_plan.py）。
 """
+
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
 
 # === 官方公示常量 ===
-SIX_BASE = 0.02           # 六星基础概率
-SIX_INC = 0.025           # 50 抽后每抽递增
-PITY_START = 50           # 递增起始抽数
-WELL_PULLS = 300          # 井（定向兑换）抽数
-ORUNDUM_PER_DRAW = 600    # 600 合成玉 = 1 抽
+SIX_BASE = 0.02  # 六星基础概率
+SIX_INC = 0.025  # 50 抽后每抽递增
+PITY_START = 50  # 递增起始抽数
+WELL_PULLS = 300  # 井（定向兑换）抽数
+ORUNDUM_PER_DRAW = 600  # 600 合成玉 = 1 抽
 DRAWS_PER_ORIGINIUM = 0.3  # 1 源石 = 180 玉 = 0.3 抽（一图流口径）
 
 # UP 占比（六星内限定占比）
-UP_SHARE_SINGLE = 0.70    # 单 UP 限定池
-UP_SHARE_DOUBLE = 0.35    # 双 UP 限定池（指定其中一个）
+UP_SHARE_SINGLE = 0.70  # 单 UP 限定池
+UP_SHARE_DOUBLE = 0.35  # 双 UP 限定池（指定其中一个）
 
 
 def six_rate(pity: int) -> float:
@@ -143,6 +144,7 @@ def chance_within(
 
 # === 命令参数解析 ===
 
+
 @dataclass(slots=True)
 class PlanArgs:
     """ark攒抽 的用户参数（全部可选，未提供走自动值）。"""
@@ -151,24 +153,36 @@ class PlanArgs:
     originium: float = 0.0
     single_tickets: float = 0.0
     ten_tickets: float = 0.0
-    pity: int | None = None        # None = 自动读本地记录
-    pool_keyword: str = ""         # 空 = 自动取下一个结束的卡池
-    up_mode: str = "单UP"          # 单UP(70%) / 双UP(各35%)
-    days: int | None = None        # None = 按卡池结束时间算
+    pity: int | None = None  # None = 自动读本地记录
+    pool_keyword: str = ""  # 空 = 自动取下一个结束的卡池
+    up_mode: str = "单UP"  # 单UP(70%) / 双UP(各35%)
+    days: int | None = None  # None = 按卡池结束时间算
     target_draws: int | None = None  # 目标抽数（缺省 300 井）
     errors: list[str] = field(default_factory=list)
 
 
 _ALIASES: dict[str, str] = {
-    "玉": "orundum", "合成玉": "orundum", "orundum": "orundum",
-    "石": "originium", "源石": "originium", "石头": "originium",
+    "玉": "orundum",
+    "合成玉": "orundum",
+    "orundum": "orundum",
+    "石": "originium",
+    "源石": "originium",
+    "石头": "originium",
     "originium": "originium",
-    "单": "single_tickets", "单抽": "single_tickets",
-    "十": "ten_tickets", "十连": "ten_tickets",
-    "刀": "pity", "垫刀": "pity", "pity": "pity",
-    "池": "pool_keyword", "卡池": "pool_keyword", "pool": "pool_keyword",
-    "类型": "up_mode", "up": "up_mode",
-    "天": "days", "天数": "days",
+    "单": "single_tickets",
+    "单抽": "single_tickets",
+    "十": "ten_tickets",
+    "十连": "ten_tickets",
+    "刀": "pity",
+    "垫刀": "pity",
+    "pity": "pity",
+    "池": "pool_keyword",
+    "卡池": "pool_keyword",
+    "pool": "pool_keyword",
+    "类型": "up_mode",
+    "up": "up_mode",
+    "天": "days",
+    "天数": "days",
     "目标": "target_draws",
 }
 
@@ -253,8 +267,8 @@ class PlanSummary:
     pool_end: str = ""
     days_left: float = 0.0
     pity: int = 0
-    pity_source: str = "默认"           # 默认 / 本地记录 / 手动指定
-    current_draws: float = 0.0          # 库存资源折算抽数
+    pity_source: str = "默认"  # 默认 / 本地记录 / 手动指定
+    current_draws: float = 0.0  # 库存资源折算抽数
     orundum: float = 0.0
     originium: float = 0.0
     single_tickets: float = 0.0
@@ -269,7 +283,7 @@ class PlanSummary:
     chance_150: float = 0.0
     # 井缺口（按本池抽数计，不含垫刀——井计数不跨池继承）
     well_gap: int = WELL_PULLS
-    daily_needed: float = 0.0          # 到 300 井每天需攒抽数（0=已达/无期限）
+    daily_needed: float = 0.0  # 到 300 井每天需攒抽数（0=已达/无期限）
     notes: list[str] = field(default_factory=list)
 
 
@@ -283,8 +297,11 @@ def build_summary(args: PlanArgs, pool: dict | None, pity: int) -> PlanSummary:
 
     summary = PlanSummary(
         pity=pity if pity >= 0 else 0,
-        pity_source=("手动指定" if args.pity is not None else
-                     ("本地记录" if pity > 0 else "默认")),
+        pity_source=(
+            "手动指定"
+            if args.pity is not None
+            else ("本地记录" if pity > 0 else "默认")
+        ),
         current_draws=resources_to_draws(
             args.orundum, args.originium, args.single_tickets, args.ten_tickets
         ),
@@ -324,7 +341,9 @@ def build_summary(args: PlanArgs, pool: dict | None, pity: int) -> PlanSummary:
 
     if have <= 0:
         summary.notes.append("未提供库存资源，按 0 抽计算；可用 玉:石:单:十: 参数补充")
-    summary.notes.append(f"井计数按本池抽数累计（不继承垫刀），目标 {summary.target_draws} 抽")
+    summary.notes.append(
+        f"井计数按本池抽数累计（不继承垫刀），目标 {summary.target_draws} 抽"
+    )
     summary.notes.append(
         f"UP 占比按{summary.up_mode}口径"
         f"（{'各 35%' if summary.up_share == UP_SHARE_DOUBLE else '70%'}），"
@@ -350,12 +369,14 @@ def build_plan_context(
 ) -> dict:
     """PlanSummary → 模板上下文（与 format_plan_text 同源）。"""
     res_parts = [
-        p for p in (
+        p
+        for p in (
             _fmt_res(summary.orundum, " 玉"),
             _fmt_res(summary.originium, " 石"),
             _fmt_res(summary.single_tickets, " 单"),
             _fmt_res(summary.ten_tickets, " 十"),
-        ) if p
+        )
+        if p
     ] or ["无"]
     return {
         "name": name or "博士",
@@ -384,16 +405,12 @@ def build_plan_context(
     }
 
 
-def format_plan_text(
-    summary: PlanSummary, name: str, uid_masked: str
-) -> str:
+def format_plan_text(summary: PlanSummary, name: str, uid_masked: str) -> str:
     ctx = build_plan_context(summary, name, uid_masked)
     lines = ["「明日方舟」攒抽规划"]
     if summary.pool_name:
         end_info = f"，{summary.pool_end} 结束" if summary.pool_end else ""
-        lines.append(
-            f"卡池：{summary.pool_name}（剩 {ctx['days_left']} 天{end_info}）"
-        )
+        lines.append(f"卡池：{summary.pool_name}（剩 {ctx['days_left']} 天{end_info}）")
     lines.append(f"垫刀：{summary.pity}（{summary.pity_source}）")
     lines.append(f"库存：{ctx['res_text']} ≈ {ctx['current_draws']} 抽")
     lines.append(f"→ 现有抽数内拿到限定概率：{ctx['chance_now']}%")
@@ -403,9 +420,7 @@ def format_plan_text(
     )
     if summary.well_gap > 0:
         daily = (
-            f"，每天需攒 {ctx['daily_needed']} 抽"
-            if summary.daily_needed > 0
-            else ""
+            f"，每天需攒 {ctx['daily_needed']} 抽" if summary.daily_needed > 0 else ""
         )
         lines.append(
             f"井缺口：{summary.target_draws} - {ctx['current_draws']}"
@@ -415,5 +430,3 @@ def format_plan_text(
         lines.append(f"已攒够 {summary.target_draws} 抽井线 ✅")
     lines.append(f"（{summary.up_mode}口径，UP 占六星 {ctx['up_share_pct']}%）")
     return "\n".join(lines)
-
-

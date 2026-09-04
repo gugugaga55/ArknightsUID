@@ -11,6 +11,7 @@ character_table 的 itemObtainApproach=招募寻访 区分不了公招池与寻�
 
 rarity 口径：PRTS SMW 稀有度存 0-5，展示 +1（0=1★ … 5=6★）。
 """
+
 from __future__ import annotations
 
 import time
@@ -32,10 +33,7 @@ _RECRUIT_TTL_SECONDS = 7 * 24 * 3600
 # 旧格式缓存一律视为失效，强制重建
 _CACHE_VERSION = 2
 
-_POOL_QUERY = (
-    "[[分类:干员]][[获得方式::公开招募]]"
-    "|?稀有度|?职业|?位置|?标签|limit=500"
-)
+_POOL_QUERY = "[[分类:干员]][[获得方式::公开招募]]|?稀有度|?职业|?位置|?标签|limit=500"
 
 
 def _first(values: Any) -> str:
@@ -123,16 +121,12 @@ async def load_recruit_data() -> list[dict[str, Any]]:
             from .charinfo import load_char_index
 
             index = await load_char_index()
-            name2id = {
-                str(v.get("name") or ""): cid for cid, v in index.items()
-            }
+            name2id = {str(v.get("name") or ""): cid for cid, v in index.items()}
             for entry in entries:
                 entry["id"] = name2id.get(entry["name"], "")
         except Exception:
             pass
-        _write_sidecar(
-            RECRUIT_DATA_PATH, {"v": _CACHE_VERSION, "entries": entries}
-        )
+        _write_sidecar(RECRUIT_DATA_PATH, {"v": _CACHE_VERSION, "entries": entries})
         return entries
     return cached or []
 
@@ -147,6 +141,35 @@ def _read_cache() -> list[dict[str, Any]]:
     return []
 
 
+def _prepare_entries(
+    data: list[dict[str, Any]],
+) -> list[tuple[dict[str, Any], frozenset[str], int]]:
+    """预计算 (词条, 标签frozenset, 稀有度)：组合枚举时不再逐词条重建 set。"""
+    prepared: list[tuple[dict[str, Any], frozenset[str], int]] = []
+    for entry in data:
+        try:
+            rarity = int(entry.get("rarity") or 0)
+        except (TypeError, ValueError):
+            rarity = 0
+        prepared.append((entry, frozenset(entry.get("all_tags") or ()), rarity))
+    return prepared
+
+
+def _match_prepared(
+    qset: frozenset[str] | set[str],
+    prepared: list[tuple[dict[str, Any], frozenset[str], int]],
+    senior_plus_selected: bool,
+) -> list[dict[str, Any]]:
+    """match_recruit 的预计算内核（同一语义，免去 per-combo 的 set 重建）。"""
+    matched = [
+        entry
+        for entry, entry_tags, rarity in prepared
+        if qset <= entry_tags and (rarity < 6 or senior_plus_selected)
+    ]
+    matched.sort(key=lambda e: (-e["rarity"], e["name"]))
+    return matched
+
+
 def match_recruit(
     query_tags: list[str], data: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
@@ -159,14 +182,7 @@ def match_recruit(
     qset = {t.strip() for t in query_tags if t.strip()}
     if not qset:
         return []
-    matched = [
-        e
-        for e in data
-        if qset.issubset(set(e.get("all_tags", [])))
-        and (int(e.get("rarity") or 0) < 6 or SENIOR_PLUS_TAG in qset)
-    ]
-    matched.sort(key=lambda e: (-e["rarity"], e["name"]))
-    return matched
+    return _match_prepared(qset, _prepare_entries(data), SENIOR_PLUS_TAG in qset)
 
 
 # ==================== 公招组合推荐（ark公招推荐） ====================
@@ -175,6 +191,11 @@ def match_recruit(
 # - 单次公招最多同时勾选 3 个标签
 # - 勾选资深/高级资深并以 9:00:00 招募：标签不被划去，必得 5★/6★ 档
 MAX_SELECT_TAGS = 3
+
+# 文本输入的已知标签数上限：游戏界面单次只刷 5 个标签，文本口放宽到 8。
+# 不设上限时 C(20,3)=1140 个组合 × ~300 词条的逐词条集合重建会同步占用
+# 事件循环数百毫秒；截断只影响 >8 标签的极端输入（取前 8 个）。
+MAX_INPUT_TAGS = 8
 
 
 def build_tag_universe(data: list[dict[str, Any]]) -> set[str]:
@@ -185,7 +206,9 @@ def build_tag_universe(data: list[dict[str, Any]]) -> set[str]:
     return universe
 
 
-def _combo_tier(matches: list[dict[str, Any]], combo: tuple[str, ...]) -> tuple[int, str]:
+def _combo_tier(
+    matches: list[dict[str, Any]], combo: tuple[str, ...]
+) -> tuple[int, str]:
     """组合价值分层：返回 (tier, 标签文案)。tier 越小越优。
 
     - 1：6★ 保底（池内最低 6★——6★ 只在组合含高级资深时入池
@@ -217,10 +240,14 @@ def recommend_combos(
     - combos：[{tags, tier, tier_name, min_rarity, max_rarity, matches,
                 match_names}]，按（tier 升序，max_rarity 降序，池更集中）排序
     - 空匹配组合剔除（公招不允许空集）；unknown：输入里不在标签全集的词
+    - 已知标签超过 MAX_INPUT_TAGS 时截断取前 N（防文本口的组合枚举爆炸）
     """
     from itertools import combinations
 
-    universe = build_tag_universe(data)
+    prepared = _prepare_entries(data)
+    universe: set[str] = set()
+    for _entry, entry_tags, _rarity in prepared:
+        universe.update(entry_tags)
     known: list[str] = []
     unknown: list[str] = []
     seen: set[str] = set()
@@ -231,10 +258,15 @@ def recommend_combos(
         seen.add(tag)
         (known if tag in universe else unknown).append(tag)
 
+    if len(known) > MAX_INPUT_TAGS:
+        known = known[:MAX_INPUT_TAGS]
+
     combos: list[dict[str, Any]] = []
     for size in range(1, min(max_select, len(known)) + 1):
         for combo in combinations(known, size):
-            matches = match_recruit(list(combo), data)
+            matches = _match_prepared(
+                frozenset(combo), prepared, SENIOR_PLUS_TAG in combo
+            )
             if not matches:
                 continue
             rarities = [int(e.get("rarity") or 0) for e in matches]

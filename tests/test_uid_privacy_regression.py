@@ -42,6 +42,7 @@ class _FakeBot:
 class GachaUidMaskTest(unittest.IsolatedAsyncioTestCase):
     async def test_gacha_report_uses_user_level_mask(self) -> None:
         import ArknightsUID.arknightsuid_gacha as gacha_mod
+        import ArknightsUID.utils.card as ark_card
 
         captured: dict = {}
 
@@ -56,7 +57,7 @@ class GachaUidMaskTest(unittest.IsolatedAsyncioTestCase):
             return MASKED in text
 
         with mock.patch.object(
-            gacha_mod, "resolve_credential",
+            ark_card, "resolve_credential",
             new=mock.AsyncMock(return_value=_credential()),
         ), mock.patch.object(
             gacha_mod, "sync_gacha_logs",
@@ -75,6 +76,7 @@ class GachaUidMaskTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_gacha_plan_uses_user_level_mask(self) -> None:
         import ArknightsUID.arknightsuid_gacha as gacha_mod
+        import ArknightsUID.utils.card as ark_card
 
         captured: dict = {}
 
@@ -83,6 +85,10 @@ class GachaUidMaskTest(unittest.IsolatedAsyncioTestCase):
             return {}
 
         with mock.patch.object(
+            ark_card, "resolve_credential",
+            new=mock.AsyncMock(return_value=_credential()),
+        ), mock.patch.object(
+            # plan 的 _auto_pity 路径仍直调 gacha 模块内的 resolve_credential
             gacha_mod, "resolve_credential",
             new=mock.AsyncMock(return_value=_credential()),
         ), mock.patch.object(

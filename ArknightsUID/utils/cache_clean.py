@@ -4,6 +4,7 @@
 可再生缓存），按修改时间早于 keep_days 天删除；目录结构保留。
 玩家数据（players/）、推送状态、别名库一律不碰。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -12,10 +13,7 @@ from pathlib import Path
 
 from gsuid_core.logger import logger
 
-try:
-    from ArknightsUID.ArknightsUID.utils.path import CACHE_BASE
-except ModuleNotFoundError:
-    from ArknightsUID.utils.path import CACHE_BASE
+from .path import CACHE_BASE
 
 # 保留天数（头像等体积小但数量多，30 天与 gamedata 静态缓存 TTL 对齐）
 CACHE_DAYS_TO_KEEP = 30

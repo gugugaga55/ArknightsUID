@@ -12,6 +12,7 @@
 spm 为一图流口径的关卡效率值（样本 >300 的关卡才收录），越大越优先。
 掉率 = quantity / times（每把期望件数）；单件期望理智 = apCost / 掉率。
 """
+
 from __future__ import annotations
 
 import json
@@ -21,22 +22,9 @@ from typing import Any
 
 from gsuid_core.logger import logger
 
-try:
-    from ArknightsUID.ArknightsUID.utils.http import download_bytes
-    from ArknightsUID.ArknightsUID.utils.disk_cache import (
-        cache_read,
-        cache_write,
-        is_fresh,
-    )
-    from ArknightsUID.ArknightsUID.utils.path import CACHE_BASE
-except ModuleNotFoundError:
-    from ArknightsUID.utils.http import download_bytes
-    from ArknightsUID.utils.disk_cache import (
-        cache_read,
-        cache_write,
-        is_fresh,
-    )
-    from ArknightsUID.utils.path import CACHE_BASE
+from ..http import download_bytes
+from ..disk_cache import cache_read, cache_write, is_fresh
+from ..path import CACHE_BASE
 
 STAGE_INFO_URL = "https://backend.yituliu.cn/stage/info"
 DROP_MATRIX_URL = "https://cos.yituliu.cn/arknights/stage-drop/matrix.json"
@@ -188,9 +176,7 @@ async def fetch_drop_matrix(force: bool = False) -> list[dict[str, Any]] | None:
     """
     if not force:
         payload, saved_ts = await cache_read(_MATRIX_CACHE)
-        if isinstance(payload, list) and payload and is_fresh(
-            saved_ts, _MATRIX_TTL
-        ):
+        if isinstance(payload, list) and payload and is_fresh(saved_ts, _MATRIX_TTL):
             return payload
     raw = await _download_json(DROP_MATRIX_URL)
     data = raw.get("matrix") if isinstance(raw, dict) else None
@@ -210,9 +196,7 @@ def latest_matrix_by_item(
         if not isinstance(record, dict):
             continue
         key = (str(record.get("itemId", "")), str(record.get("stageId", "")))
-        if key not in best or _num(record.get("end")) > _num(
-            best[key].get("end")
-        ):
+        if key not in best or _num(record.get("end")) > _num(best[key].get("end")):
             best[key] = record
     by_item: dict[str, list[dict[str, Any]]] = {}
     for (item_id, _stage_id), record in best.items():

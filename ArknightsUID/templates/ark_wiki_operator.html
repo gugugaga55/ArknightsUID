@@ -120,13 +120,16 @@
             <div class="row" style="display: block;">
                 <div style="display: flex; justify-content: space-between; align-items: center;">
                     <span class="row-value" style="display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px;">{% if s.icon %}<span class="icon" style="width: 28px; height: 28px;"><img src="{{ s.icon }}" alt=""></span>{% endif %}{{ s.name }}</span>
-                    {% if s.skill_type %}<span class="chip chip--ink" style="height: 20px;">{{ s.skill_type }}</span>{% endif %}
+                    <span style="display: inline-flex; align-items: center; gap: 4px;">
+                        {% if s.skill_type %}<span class="chip chip--ink" style="height: 20px;">{{ s.skill_type }}</span>{% endif %}
+                        {% if s.range %}<span class="chip chip--ghost mono" style="height: 20px; font-size: 10px;">{{ s.range }}</span>{% endif %}
+                    </span>
                 </div>
                 {% if s.levels %}
                 <div style="margin-top: 6px; display: flex; flex-wrap: wrap; gap: 4px;">
                     {% for lv in s.levels %}
                     {% if loop.index0 in (0, 3, 6, 7, 9) %}
-                    <span class="chip chip--ghost mono" style="height: 20px; font-size: 10px;">{{ lv.level }}{% if lv.sp_cost %} · {{ lv.sp_cost }}耗{% endif %}{% if lv.duration %} · {{ lv.duration }}s{% endif %}</span>
+                    <span class="chip chip--ghost mono" style="height: 20px; font-size: 10px;">{{ lv.level }}{% if lv.sp_init %} · 初动{{ lv.sp_init }}{% endif %}{% if lv.sp_cost %} · 消耗{{ lv.sp_cost }}{% endif %}{% if lv.duration %} · 持续{{ lv.duration }}秒{% endif %}</span>
                     {% endif %}
                     {% endfor %}
                 </div>
@@ -144,6 +147,35 @@
                 {% for mc in s.mastery_costs %}
                 <div style="margin-top: 4px; font-size: 10px; color: var(--tx-3);">{{ mc.mastery }}：{{ mc.materials | join("、") }}</div>
                 {% endfor %}
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if modules %}
+        <div class="sect" style="margin-top: var(--space-4);">
+            <span class="sect-label bk">模组</span>
+            <span class="sect-en">MODULES // {{ modules | length }} · 详情 ark模组 {{ name }}</span>
+        </div>
+        <div class="rows">
+            {% for m in modules %}
+            <div class="row" style="display: block;">
+                <div style="display: flex; justify-content: space-between; align-items: baseline;">
+                    <span class="row-value" style="font-size: 13px;">{% if m.type %}<span class="chip chip--ink" style="height: 18px; font-size: 10px; margin-right: 6px;">{{ m.type }}</span>{% endif %}{{ m.name }}</span>
+                </div>
+                {% if m.trait %}
+                <div style="margin-top: 4px; font-size: 11px; color: var(--tx-1); line-height: 1.7;">
+                    <span class="chip chip--yellow mono" style="height: 16px; font-size: 9px; margin-right: 6px;">特性追加</span>{{ m.trait }}
+                </div>
+                {% endif %}
+                {% if m.talent_brief %}
+                <div style="margin-top: 4px; font-size: 11px; color: var(--tx-1); line-height: 1.7;">
+                    <span class="chip chip--ghost mono" style="height: 16px; font-size: 9px; margin-right: 6px;">天赋更新</span>{{ m.talent_brief }}
+                </div>
+                {% endif %}
+                {% if m.description %}
+                <div style="margin-top: 4px; font-size: 10px; color: var(--tx-3); line-height: 1.6;">{{ m.description[:80] }}{% if m.description | length > 80 %}…{% endif %}</div>
+                {% endif %}
             </div>
             {% endfor %}
         </div>

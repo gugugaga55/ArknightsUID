@@ -12,6 +12,7 @@
 卡池类型标签：优先 cate 的 name（官方口径，如「限定寻访」），记录内 poolName
 （卡池副标题）作补充；weedy.prts 卡池表留作后续增强（开池时间等）。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -33,6 +34,9 @@ _MAX_PAGES = 50
 _KEEP_LIMIT = 20000
 # 保底显示上限（明日方舟六星概率 50 抽后递增，无硬保底，社区惯例显示 /80）
 PITY_DISPLAY_MAX = 80
+
+# 单个六星段/垫刀段展示的五星头像上限（超出折叠为 +N）
+_FIVES_DISPLAY_MAX = 12
 
 _LOGS_NAME = "gacha_logs.json"
 # 历史补拉游标状态（保险丝中断处，按类别记下一页起点）
@@ -69,9 +73,9 @@ async def _save_sync_floors(uid: str, floors: dict[str, dict[str, Any]]) -> None
         await write_player_json(_sync_state_path(uid), {"floors": floors})
     except Exception as exc:
         logger.warning(
-            f"[ArknightsUID·抽卡] 补拉游标写入失败 uid={uid}: "
-            f"{exc.__class__.__name__}"
+            f"[ArknightsUID·抽卡] 补拉游标写入失败 uid={uid}: {exc.__class__.__name__}"
         )
+
 
 # 同 UID 同步 single-flight（审计 #11）：两个同步任务并发读同一份旧日志、
 # 各自拉取合并写回，后写者会覆盖先写者新增的记录且检查点已推进、永久丢失
@@ -188,9 +192,7 @@ def merge_records(
         merged[_record_key(record)] = record
     for record in incoming:
         merged[_record_key(record)] = record
-    result = sorted(
-        merged.values(), key=lambda r: (-_safe_ts(r), -_safe_pos(r))
-    )
+    result = sorted(merged.values(), key=lambda r: (-_safe_ts(r), -_safe_pos(r)))
     return result[:_KEEP_LIMIT]
 
 
@@ -218,7 +220,7 @@ async def save_local_logs(uid: str, records: list[dict[str, Any]]) -> None:
 
 
 async def sync_gacha_logs(
-    credential: "ArkCredential",
+    credential: ArkCredential,
 ) -> tuple[list[dict[str, Any]], str]:
     """增量拉取并累积。返回 (records, 错误文案)；records 可能为本地兜底。
 
@@ -231,7 +233,7 @@ async def sync_gacha_logs(
 
 
 async def _sync_gacha_logs_locked(
-    credential: "ArkCredential",
+    credential: ArkCredential,
 ) -> tuple[list[dict[str, Any]], str]:
     from .client import (
         get_gacha_categories,
@@ -330,9 +332,7 @@ async def _sync_gacha_logs_locked(
         )
         floor = floors.get(category)
 
-        outcome, records, cursor = await _page_category(
-            category, None, local_max_ts
-        )
+        outcome, records, cursor = await _page_category(category, None, local_max_ts)
         if outcome == "failed":
             return [], False, floor  # 增量段失败：本类整批丢弃，游标不动
         complete = True
@@ -346,9 +346,7 @@ async def _sync_gacha_logs_locked(
 
         if floor is not None:
             # 补拉段：从游标继续往旧翻（无停止线，只认 hasMore/保险丝）
-            outcome_b, records_b, cursor_b = await _page_category(
-                category, floor, 0
-            )
+            outcome_b, records_b, cursor_b = await _page_category(category, floor, 0)
             if outcome_b != "failed":
                 records = records + records_b
                 floor = cursor_b if outcome_b == "fused" else None
@@ -357,9 +355,7 @@ async def _sync_gacha_logs_locked(
             floor = None
         return records, complete, floor
 
-    category_ids = [
-        str(cate.get("id") or "") for cate in categories if cate.get("id")
-    ]
+    category_ids = [str(cate.get("id") or "") for cate in categories if cate.get("id")]
     # 各类别并发拉取（此前串行：3 类 × 最多 50 页 × 25s 超时）。
     # 不完整类目整批丢弃（审计 #12），完整类目照常合并
     incoming: list[dict[str, Any]] = []
@@ -367,9 +363,7 @@ async def _sync_gacha_logs_locked(
     new_floors: dict[str, dict[str, Any]] = dict(floors)
     for category, (records, complete, floor) in zip(
         category_ids,
-        await asyncio.gather(
-            *(fetch_category(category) for category in category_ids)
-        ),
+        await asyncio.gather(*(fetch_category(category) for category in category_ids)),
     ):
         if not complete:
             # 首页就失败（records 为空）同样算未并入——统计静默变旧
@@ -416,32 +410,44 @@ async def _sync_gacha_logs_locked(
 
 
 def analyze_gacha(records: list[dict[str, Any]]) -> dict[str, Any]:
-    """统计：总抽数/六星数/六星率/平均六星/垫刀/最近六星。"""
+    """统计：总抽数/六星数/六星率/平均六星/垫刀/最近六星/五星明细。
+
+    五星口径（小黑盒式展示）：两个六星之间（同类别内）出现的五星挂在
+    该段末尾的六星条目下（recent[].fives）；当前垫刀段（最新六星之后）
+    的五星归入 pity_fives；均按抽取顺序（旧→新）保留，超长截断 +N。
+    """
     if not records:
         return {}
     legacy_one_based = _legacy_one_based(records)
     total = len(records)
-    sixes = [
-        r for r in records
-        if _normalize_rarity(r, legacy_one_based) >= 6
-    ]
+    sixes = [r for r in records if _normalize_rarity(r, legacy_one_based) >= 6]
     six_count = len(sixes)
     six_rate = f"{six_count * 100 / total:.2f}" if total else "0.00"
     avg_six = f"{total / six_count:.1f}" if six_count else "0.0"
+    five_count = sum(1 for r in records if _normalize_rarity(r, legacy_one_based) == 5)
+    five_rate = f"{five_count * 100 / total:.2f}" if total else "0.00"
 
     # 按时间旧→新，按类别计数：六星的垫刀数 = 同类别内上一个六星之后的抽数
-    ordered = sorted(
-        records, key=lambda r: (_safe_ts(r), _safe_pos(r))
-    )
+    ordered = sorted(records, key=lambda r: (_safe_ts(r), _safe_pos(r)))
     pulls_in_cate: dict[str, int] = {}
     last_six_in_cate: dict[str, int] = {}
-    pull_of_six: list[tuple[dict[str, Any], int]] = []
+    # 本段（上个六星之后）累积的五星，按类别暂存，遇六星结算挂到该六星
+    pending_fives: dict[str, list[dict[str, Any]]] = {}
+    pull_of_six: list[tuple[dict[str, Any], int, list[dict[str, Any]]]] = []
     for record in ordered:
         cate = str(record.get("category", ""))
         pulls_in_cate[cate] = pulls_in_cate.get(cate, 0) + 1
-        if _normalize_rarity(record, legacy_one_based) >= 6:
+        rarity = _normalize_rarity(record, legacy_one_based)
+        if rarity == 5:
+            pending_fives.setdefault(cate, []).append(
+                {
+                    "name": record.get("name") or record.get("char_id", "?"),
+                    "ts": _safe_ts(record),
+                }
+            )
+        elif rarity >= 6:
             pull = pulls_in_cate[cate] - last_six_in_cate.get(cate, 0)
-            pull_of_six.append((record, pull))
+            pull_of_six.append((record, pull, pending_fives.pop(cate, [])))
             last_six_in_cate[cate] = pulls_in_cate[cate]
     recent = [
         {
@@ -449,24 +455,37 @@ def analyze_gacha(records: list[dict[str, Any]]) -> dict[str, Any]:
             "pool": (r.get("pool_name") or "")[:10] or "—",
             "pull": pull,
             "ts": _safe_ts(r),
+            "date": (
+                time.strftime("%m-%d", time.localtime(_safe_ts(r)))
+                if _safe_ts(r)
+                else ""
+            ),
             "category": str(r.get("category", "")),
+            "fives": fives[:_FIVES_DISPLAY_MAX],
+            "fives_extra": max(0, len(fives) - _FIVES_DISPLAY_MAX),
         }
-        for r, pull in reversed(pull_of_six[-6:])
+        for r, pull, fives in reversed(pull_of_six[-6:])
     ]
 
     # 垫刀进度：最新有记录的类别里，距最新六星的抽数
     pity = 0
+    pity_fives: list[dict[str, Any]] = []
     if ordered:
         latest_cate = str(ordered[-1].get("category", ""))
         pity = pulls_in_cate.get(latest_cate, 0) - last_six_in_cate.get(latest_cate, 0)
+        pity_fives = pending_fives.get(latest_cate, [])
 
     return {
         "total": total,
         "six_count": six_count,
         "six_rate": six_rate,
         "avg_six": avg_six,
+        "five_count": five_count,
+        "five_rate": five_rate,
         "pity": pity,
         "pity_max": PITY_DISPLAY_MAX,
+        "pity_fives": pity_fives[:_FIVES_DISPLAY_MAX],
+        "pity_fives_extra": max(0, len(pity_fives) - _FIVES_DISPLAY_MAX),
         "recent": recent,
     }
 
@@ -500,13 +519,24 @@ def format_gacha_text(
         lines.append(
             f"总抽数 {stats['total']} | 六星 {stats['six_count']} "
             f"（{stats['six_rate']}%，平均 {stats['avg_six']} 抽/六星）"
+            f" | 五星 {stats['five_count']}（{stats['five_rate']}%）"
         )
         lines.append(f"当前垫刀：{stats['pity']} 抽")
         for item in stats["recent"][:4]:
-            ts = time.strftime("%y-%m-%d", time.localtime(item["ts"])) if item["ts"] else ""
+            ts = (
+                time.strftime("%y-%m-%d", time.localtime(item["ts"]))
+                if item["ts"]
+                else ""
+            )
             lines.append(
                 f"  {item['name']}（{item['pool']}，第 {item['pull']} 抽）{ts}"
             )
+            fives = item.get("fives") or []
+            if fives:
+                total_fives = len(fives) + int(item.get("fives_extra") or 0)
+                names = "、".join(str(f.get("name", "?")) for f in fives[:4])
+                suffix = f" 等{total_fives}个" if total_fives > 4 else ""
+                lines.append(f"    本段五星 ×{total_fives}：{names}{suffix}")
     if warning:
         lines.append(f"⚠️ {warning}")
     return "\n".join(lines)

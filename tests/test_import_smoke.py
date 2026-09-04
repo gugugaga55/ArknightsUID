@@ -34,6 +34,7 @@ REQUIRED_MODULES = [
     "ArknightsUID",
     "ArknightsUID.utils.enduid.adapter",
     "ArknightsUID.arknightsuid_account",
+    "ArknightsUID.arknightsuid_alias",
     "ArknightsUID.arknightsuid_bind",
     "ArknightsUID.arknightsuid_notify",
     "ArknightsUID.arknightsuid_rogue",

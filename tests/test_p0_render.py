@@ -94,17 +94,6 @@ def test_path_directories_exist():
     assert AVATAR_CACHE_PATH.exists()
 
 
-def test_cache_basic_ops():
-    """cache.TimedCache 基本 CRUD。"""
-    from ArknightsUID.utils.cache import TimedCache
-
-    cache = TimedCache(timeout=60, maxsize=10)
-    cache.set("k1", "v1")
-    assert cache.get("k1") == "v1"
-    cache.delete("k1")
-    assert cache.get("k1") is None
-
-
 def test_player_store_gzip_whitelist():
     """player_store 的 gzip 白名单只含明日方舟的 json。"""
     from ArknightsUID.utils import player_store

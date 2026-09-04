@@ -1,14 +1,19 @@
 <!--
   ark_module.html —— 干员模组一览卡（#28）
   设计语言：罗德岛终端（见 ark_base.css 头部注释）
-  上下文（由 arknightsuid_wiki.send_module_info 组装）：
+  上下文（由 gamedata.modules_info.build_module_context 组装）：
     name: str   干员名
     modules: [{
         name: str, type: str(X/Y/ORIGINAL), type_name: str,
         desc: str,
         icon: str,                                模组图标 b64（PRTS torappu，可空）
         unlock_phase: int, unlock_level: int, unlock_favor: int,
-        costs: [{name: str, count: int, icon: str}],   解锁档材料（icon 可空）
+        trait: str,                               特性追加（PRTS，可空）
+        talent_updates: [{level: "Lv2", text}],   天赋更新（PRTS，可空）
+        potential_talents: [{level: "Lv2·满潜", text}],  满潜变体（可空）
+        missions: [str],                          解锁任务（PRTS，可空）
+        tier_costs: {1: [{name, count, icon}], 2: [...], 3: [...]},  解锁/升级三档材料
+        costs: [...],                             兼容键 = tier_costs["1"]
         level_attrs: {L1: str, L2: str, L3: str},      各等级属性（可缺）
     }]
     version: str
@@ -20,12 +25,12 @@
     <div class="container" data-ghost="MODULE">
         <div class="mast">
             <span class="mast-brand">ArknightsUID <em>// 模组档案 EQUIPMENT</em></span>
-            <span class="mast-meta"><span class="idx">28</span>GAMEDATA</span>
+            <span class="mast-meta"><span class="idx">28</span>PRTS + GAMEDATA</span>
         </div>
 
         <div class="titleblock" style="align-items: center;">
             <div>
-                <div class="eyebrow">干员模组 · 解锁条件与属性增量</div>
+                <div class="eyebrow">干员模组 · 具体效果与升级材料</div>
                 <h1 class="title title--s"><em>{{ name }}</em></h1>
             </div>
             <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_mastery.b64" %}" alt="">
@@ -51,9 +56,33 @@
                 {% for level, text in (m.level_attrs or {}).items() %}
                 <div class="mono" style="font-size: 10px; color: var(--tx-2); margin-top: 3px; letter-spacing: 0.3px;">{{ level }} <span style="color: var(--tx-0);">{{ text }}</span></div>
                 {% endfor %}
-                {% if m.costs %}
-                <div class="chip-flow" style="margin-top: 7px;">
-                    {% for c in m.costs %}<span class="chip">{% if c.icon %}<img src="{{ c.icon }}" alt="" style="width: 16px; height: 16px; object-fit: contain; vertical-align: -3px; margin-right: 4px;">{% endif %}{{ c.name }}×{{ c.count }}</span>{% endfor %}
+                {% if m.trait %}
+                <div class="prose prose--blue" style="margin-top: 6px; font-size: 11px; line-height: 1.7;"><strong>特性追加</strong>　{{ m.trait }}</div>
+                {% endif %}
+                {% if m.talent_updates %}
+                <div style="margin-top: 6px;">
+                    {% for row in m.talent_updates %}
+                    <div class="prose" style="font-size: 11px; line-height: 1.7; margin-top: 2px;"><span class="chip chip--yellow mono" style="height: 18px; font-size: 10px; margin-right: 6px;">{{ row.level }}</span>{{ row.text }}</div>
+                    {% endfor %}
+                    {% for row in m.potential_talents %}
+                    <div class="u-mute" style="font-size: 10px; line-height: 1.7; margin-top: 2px;"><span class="chip chip--ghost mono" style="height: 16px; font-size: 9px; margin-right: 6px;">{{ row.level }}</span>{{ row.text }}</div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+                {% for tier, label in [("1", "解锁材料"), ("2", "Lv2 升级"), ("3", "Lv3 升级")] %}
+                {% set rows = (m.tier_costs or {}).get(tier) or [] %}
+                {% if rows %}
+                <div class="chip-flow" style="margin-top: 6px;">
+                    <span class="u-mute" style="font-size: 10px; flex-shrink: 0; align-self: center; margin-right: 2px;">{{ label }}</span>
+                    {% for c in rows %}<span class="chip">{% if c.icon %}<img src="{{ c.icon }}" alt="" style="width: 16px; height: 16px; object-fit: contain; vertical-align: -3px; margin-right: 4px;">{% endif %}{{ c.name }}{% if c.count %}×{{ c.count }}{% endif %}</span>{% endfor %}
+                </div>
+                {% endif %}
+                {% endfor %}
+                {% if m.missions %}
+                <div style="margin-top: 6px;">
+                    {% for mission in m.missions %}
+                    <div class="u-mute" style="font-size: 10px; line-height: 1.6;">◦ {{ mission }}</div>
+                    {% endfor %}
                 </div>
                 {% endif %}
             </div>
@@ -65,9 +94,10 @@
             <span class="foot-meta mono">VER {{ version }}</span>
         </div>
         <div class="ticker">
-            <span>// UNIEQUIP // ARKNIGHTS GAMEDATA</span>
+            <span>// UNIEQUIP // PRTS + GAMEDATA</span>
             <span>// RHODES ISLAND TERMINAL</span>
         </div>
     </div>
 </body>
 </html>
+
