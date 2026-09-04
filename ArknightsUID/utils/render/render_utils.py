@@ -4,7 +4,6 @@ import logging
 import os
 import threading
 import time
-from typing import Union, Optional
 from pathlib import Path
 
 import httpx
@@ -24,24 +23,34 @@ logging.getLogger("uvicorn.access").addFilter(
 
 TEMPLATES_ABS_PATH = TEMPLATES_PATH
 
+
 class CORSStaticFiles(StaticFiles):
     """Custom StaticFiles class to add CORS headers only for served files."""
+
     async def get_response(self, path: str, scope):
         response = await super().get_response(path, scope)
         response.headers["Access-Control-Allow-Origin"] = "*"
         response.headers["Access-Control-Allow-Methods"] = "GET, HEAD"
         return response
 
+
 def _import_playwright():
     try:
         from playwright.async_api import async_playwright
+
         return async_playwright
     except ImportError:
         if not ArkConfig.get_config("RemoteRenderEnable").data:
             logger.warning("[ARK·渲染] 未安装 playwright，无法渲染卡片。")
-            logger.warning("[ARK·渲染] 可选择配置外置渲染（RemoteRenderEnable + RemoteRenderUrl）。")
-            logger.info("[ARK·渲染] 安装方法 Linux/Mac: source .venv/bin/activate && uv pip install playwright && uv run playwright install chromium")
-            logger.info("[ARK·渲染] 安装方法 Windows: .venv\\Scripts\\activate; uv pip install playwright; uv run playwright install chromium")
+            logger.warning(
+                "[ARK·渲染] 可选择配置外置渲染（RemoteRenderEnable + RemoteRenderUrl）。"
+            )
+            logger.info(
+                "[ARK·渲染] 安装方法 Linux/Mac: source .venv/bin/activate && uv pip install playwright && uv run playwright install chromium"
+            )
+            logger.info(
+                "[ARK·渲染] 安装方法 Windows: .venv\\Scripts\\activate; uv pip install playwright; uv run playwright install chromium"
+            )
         return None
 
 
@@ -58,6 +67,7 @@ TAKUMI_RENDER_WIDTH = 560  # 与 ark_base.css 的 .container 同宽
 def _import_takumi():
     try:
         import pytakumi
+
         return pytakumi
     except ImportError:
         return None
@@ -82,7 +92,8 @@ def _takumi_module():
             logger.info("[ARK·渲染] 检测到 pytakumi 已安装，本进程即时启用")
     return pytakumi
 
-_local_font_bytes: Optional[list] = None
+
+_local_font_bytes: list | None = None
 
 
 def _local_cjk_fonts() -> list:
@@ -149,7 +160,7 @@ def _render_scale() -> float:
     return float(value) if value >= 1 else 2.0
 
 
-async def _render_local_takumi(html_content: str) -> Optional[bytes]:
+async def _render_local_takumi(html_content: str) -> bytes | None:
     """引擎选择与执行；不可用/失败返回 None（打日志），由调用方回退 playwright。
 
     判定走 _takumi_module()：运行时刚装好 pytakumi 的进程也能即时启用。
@@ -173,6 +184,7 @@ async def _render_local_takumi(html_content: str) -> Optional[bytes]:
     except Exception as e:
         logger.warning(f"[ARK·渲染] takumi 渲染失败，回退 playwright: {e}")
         return None
+
 
 _playwright = None
 _browser = None
@@ -412,13 +424,13 @@ def _looks_like_rendered_image(data: bytes) -> bool:
     if not data:
         return False
     return (
-        data[:3] == b"\xff\xd8\xff"                     # JPEG
-        or data[:8] == b"\x89PNG\r\n\x1a\n"             # PNG
+        data[:3] == b"\xff\xd8\xff"  # JPEG
+        or data[:8] == b"\x89PNG\r\n\x1a\n"  # PNG
         or (data[:4] == b"RIFF" and data[8:12] == b"WEBP")  # WebP
     )
 
 
-async def _render_via_remote(html_content: str, remote_url: str) -> Optional[bytes]:
+async def _render_via_remote(html_content: str, remote_url: str) -> bytes | None:
     """使用外置渲染服务渲染 HTML"""
     start_time = time.time()
     try:
@@ -443,22 +455,30 @@ async def _render_via_remote(html_content: str, remote_url: str) -> Optional[byt
                 return None
             elapsed_time = time.time() - start_time
             html_kb = len(html_content) / 1024
-            logger.info(f"[ARK·渲染] 外置渲染成功，耗时: {elapsed_time:.2f}s，HTML大小: {html_kb:.1f}KB，图片大小: {len(image_data)} bytes")
+            logger.info(
+                f"[ARK·渲染] 外置渲染成功，耗时: {elapsed_time:.2f}s，HTML大小: {html_kb:.1f}KB，图片大小: {len(image_data)} bytes"
+            )
             return image_data
         else:
-            logger.warning(f"[ARK·渲染] 外置渲染失败，状态码: {response.status_code}, 错误: {response.text}")
+            logger.warning(
+                f"[ARK·渲染] 外置渲染失败，状态码: {response.status_code}, 错误: {response.text}"
+            )
             return None
     except httpx.TimeoutException:
         elapsed_time = time.time() - start_time
-        logger.warning(f"[ARK·渲染] 外置渲染超时 ({elapsed_time:.2f}s)，将回退到本地渲染")
+        logger.warning(
+            f"[ARK·渲染] 外置渲染超时 ({elapsed_time:.2f}s)，将回退到本地渲染"
+        )
         return None
     except Exception as e:
         elapsed_time = time.time() - start_time
-        logger.warning(f"[ARK·渲染] 外置渲染异常 ({elapsed_time:.2f}s): {e}，将回退到本地渲染")
+        logger.warning(
+            f"[ARK·渲染] 外置渲染异常 ({elapsed_time:.2f}s): {e}，将回退到本地渲染"
+        )
         return None
 
 
-async def render_html(ark_templates, template_name: str, context: dict) -> Optional[bytes]:
+async def render_html(ark_templates, template_name: str, context: dict) -> bytes | None:
     global _active_renders
 
     try:
@@ -467,7 +487,11 @@ async def render_html(ark_templates, template_name: str, context: dict) -> Optio
         template = ark_templates.get_template(template_name)
 
         remote_render_enable = ArkConfig.get_config("RemoteRenderEnable").data
-        remote_url = ArkConfig.get_config("RemoteRenderUrl").data if remote_render_enable else None
+        remote_url = (
+            ArkConfig.get_config("RemoteRenderUrl").data
+            if remote_render_enable
+            else None
+        )
 
         if remote_render_enable and remote_url:
             try:
@@ -508,7 +532,9 @@ async def render_html(ark_templates, template_name: str, context: dict) -> Optio
             # 回退到下方 playwright 路径
 
         if not PLAYWRIGHT_AVAILABLE or async_playwright is None:
-            logger.warning("[ARK·渲染] Playwright 未安装，无法渲染，将回退到 PIL 渲染（如有）")
+            logger.warning(
+                "[ARK·渲染] Playwright 未安装，无法渲染，将回退到 PIL 渲染（如有）"
+            )
             return None
 
         logger.debug("[ARK·渲染] 使用本地 Playwright 渲染")
@@ -520,7 +546,7 @@ async def render_html(ark_templates, template_name: str, context: dict) -> Optio
             if page is None:
                 return None
 
-            await page.set_content(html_content, wait_until='load')
+            await page.set_content(html_content, wait_until="load")
 
             container = page.locator(".container")
             await page.wait_for_selector(".container", timeout=2000)
@@ -541,10 +567,12 @@ async def render_html(ark_templates, template_name: str, context: dict) -> Optio
                     }
                 )
 
-            screenshot = await container.screenshot(type='jpeg', quality=90)
+            screenshot = await container.screenshot(type="jpeg", quality=90)
             render_time = time.time() - local_start_time
             html_kb = len(html_content) / 1024
-            logger.info(f"[ARK·渲染] 本地渲染成功，耗时: {render_time:.2f}s，HTML: {html_kb:.0f}KB，图片: {len(screenshot)} bytes")
+            logger.info(
+                f"[ARK·渲染] 本地渲染成功，耗时: {render_time:.2f}s，HTML: {html_kb:.0f}KB，图片: {len(screenshot)} bytes"
+            )
             return screenshot
         except Exception as e:
             logger.error(f"[ARK·渲染] Playwright execution failed: {e}")
@@ -568,37 +596,11 @@ async def render_html(ark_templates, template_name: str, context: dict) -> Optio
         return None
 
 
-def image_to_base64(image_path: Union[str, Path], quality: int = 0) -> str:
-    """图片文件转 base64 data URL。
-
-    quality=0: 原格式直读（无损）
-    quality>0: WebP 有损压缩
-    """
-    if not isinstance(image_path, Path):
-        image_path = Path(image_path)
-    if not image_path.exists():
-        return ""
-    try:
-        if quality > 0:
-            from PIL import Image
-            from io import BytesIO
-            img = Image.open(image_path).convert("RGBA")
-            buf = BytesIO()
-            img.save(buf, format="WEBP", quality=quality)
-            return "data:image/webp;base64," + base64.b64encode(buf.getvalue()).decode('utf-8')
-        with open(image_path, "rb") as f:
-            data = f.read()
-        ext = image_path.suffix.lstrip(".").lower()
-        if ext == "jpg":
-            ext = "jpeg"
-        return f"data:image/{ext};base64,{base64.b64encode(data).decode('utf-8')}"
-    except Exception as e:
-        logger.warning(f"[ARK·渲染] 图片转 base64 失败: {image_path}, {e}")
-        return ""
-
-
 async def get_image_b64_with_cache(
-    url: str, cache_path: Path, quality=None, cover_size: tuple = None,
+    url: str,
+    cache_path: Path,
+    quality=None,
+    cover_size: tuple = None,
     anchor: str = "center",
 ) -> str:
     if not url:
@@ -647,6 +649,7 @@ async def get_image_b64_with_cache(
 
         # 烘焙缓存: bake/{文件名}_{路径hash}_{quality}_{宽x高}{锚点}.webp
         import hashlib
+
         path_hash = hashlib.md5(str(local_path.resolve()).encode()).hexdigest()[:8]
         stem = local_path.stem
         size_tag = f"_{cover_size[0]}x{cover_size[1]}" if cover_size else ""
@@ -654,11 +657,16 @@ async def get_image_b64_with_cache(
         bake_name = f"{stem}_{path_hash}_q{quality or 80}{size_tag}{anchor_tag}.webp"
         bake_path = BAKE_PATH / bake_name
 
-        if bake_path.exists() and bake_path.stat().st_mtime >= local_path.stat().st_mtime:
+        if (
+            bake_path.exists()
+            and bake_path.stat().st_mtime >= local_path.stat().st_mtime
+        ):
             with open(bake_path, "rb") as f:
                 data = f.read()
             if _looks_like_rendered_image(data):
-                return f"data:image/webp;base64,{base64.b64encode(data).decode('utf-8')}"
+                return (
+                    f"data:image/webp;base64,{base64.b64encode(data).decode('utf-8')}"
+                )
             # 坏 bake（旧版本直写半文件/磁盘坏块）：魔数不过即删除重烘，
             # 否则它会被 mtime 命中长期当缓存喂给上游
             logger.warning(f"[ARK·渲染] 烘焙缓存损坏，删除重烘: {bake_path.name}")
@@ -688,7 +696,7 @@ async def get_image_b64_with_cache(
                 f".{os.getpid()}.{threading.get_ident()}.webp.tmp"
             )
             try:
-                img.save(tmp_bake, 'WEBP', quality=quality or 80)
+                img.save(tmp_bake, "WEBP", quality=quality or 80)
                 os.replace(tmp_bake, bake_path)
             except Exception:
                 # 失败清理 tmp（磁盘满/权限）：残档加剧磁盘紧张（审计 #39）

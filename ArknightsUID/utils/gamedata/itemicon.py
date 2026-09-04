@@ -8,6 +8,7 @@ iconId 无关（PRTS 按中文名建档）。示例：固源岩组 → /2/2e/道
 下载走 `render_utils.get_image_b64_with_cache`（webp 磁盘缓存），失败返回空串，
 模板侧 `{% if icon %}` 优雅降级为纯文本行。
 """
+
 from __future__ import annotations
 
 import hashlib

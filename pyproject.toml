@@ -1,6 +1,7 @@
 [project]
 name = "arknightsuid"
-version = "0.2.0"
+# 与 ArknightsUID/version.py 的 ArknightsUID_version 保持一致（单一展示源在 version.py）
+version = "0.3.0"
 # 对齐 parent gsuid_core 的 Python 约束，避免无谓收紧兼容范围。
 requires-python = ">=3.11,<4.0"
 # 声明插件直接使用的第三方依赖；其余运行时依赖由 parent gsuid_core 提供。
@@ -23,3 +24,31 @@ ocr = [
 takumi = [
     "pytakumi>=0.1.4",
 ]
+
+# ── 代码风格（既有代码事实标准的成文化：~88 列、f-string、中文注释）──
+# E402 忽略：本插件惯用"注册 SV 后再补导入"的模块级布局（见各 handler）
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+extend-exclude = ["tools", "docs"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "W",   # pycodestyle warnings
+    "B",   # bugbear（常见坑）
+    "UP",  # pyupgrade（现代语法）
+]
+ignore = [
+    "E402",  # 模块级导入不在文件头（handler 惯用布局）
+    "E501",  # 行长由 formatter 管；既有中文注释偶有超宽
+    "UP015", # 保留显式 open(mode="r") 等可读性写法
+    "B905",  # zip 加 strict= 在长度不等时会抛异常，与现行为（静默截断）不同——不为此改 20 处
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
+
+[tool.ruff.format]
+quote-style = "double"

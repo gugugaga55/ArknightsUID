@@ -174,6 +174,11 @@ class ModuleInfoTest(unittest.IsolatedAsyncioTestCase):
                 mi, "module_stat_modifiers",
                 side_effect=lambda battle, eid, lv: {"atk": 8.0} if lv == 3 else {},
             ),
+            # PRTS 增强路径打桩（避免测试依赖真实网络；此处验证 GameData 兜底全链路）
+            mock.patch(
+                "ArknightsUID.utils.prts.client.query_operator",
+                new=mock.AsyncMock(return_value=None),
+            ),
         ):
             context = await mi.build_module_context("银灰")
         self.assertNotIsInstance(context, str)
@@ -181,10 +186,20 @@ class ModuleInfoTest(unittest.IsolatedAsyncioTestCase):
         module = context["modules"][0]
         self.assertEqual(module["name"], "领袖的远见")
         self.assertEqual(module["level_attrs"], {"L3": "攻击 +8"})
-        self.assertEqual(module["costs"], [{"name": "基础材料", "count": 4}])
+        # GameData 兜底：GOLD 归一为龙门币行；材料行附 icon 字段（可空）
+        self.assertEqual(
+            [(c["name"], c["count"]) for c in module["costs"]],
+            [("基础材料", 4), ("龙门币", 2)],
+        )
+        # itemCost 三档全量（"2" 档为 Lv2 升级材料）
+        self.assertEqual(
+            [(c["name"], c["count"]) for c in module["tier_costs"]["2"]],
+            [("基础材料", 8)],
+        )
         text = mi.format_module_context(context)
         self.assertIn("领袖的远见", text)
-        self.assertIn("解锁材料：基础材料×4", text)
+        self.assertIn("解锁材料：基础材料×4、龙门币×2", text)
+        self.assertIn("Lv2 升级材料：基础材料×8", text)
 
     async def test_build_module_context_ambiguous(self) -> None:
         from ArknightsUID.utils.gamedata import modules_info as mi

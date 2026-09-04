@@ -94,6 +94,8 @@ class TriggerOrderInvariantTest(unittest.TestCase):
             ("ark订阅理智", "ark订阅理智提醒"),
             ("ark订阅训练", "ark订阅专精训练"),
             ("ark订阅基建", "ark订阅基建推送"),
+            ("ark理智", "ark理智推送"),
+            ("ark基建", "ark基建推送"),
             ("arkBOX", "arkBOX分析"),
             ("ark练度", "ark练度卡"),
             ("ark养成", "ark养成计划"),

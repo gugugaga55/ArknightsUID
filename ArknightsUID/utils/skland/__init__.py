@@ -1,2 +1,1 @@
 """Skland API helpers."""
-

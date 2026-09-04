@@ -13,8 +13,8 @@
     favor: int            信赖 0-200
     main_skill_lvl: int   主技能等级 1-7
     skills: [{icon: str, name: str, specialize: int,
-              current/current_level: str（玩家当前级效果，PRTS 增强，可空）,
-              final/final_level: str（满级效果，可空）}]
+              current/current_level/current_meta: str（玩家当前级效果+SP，PRTS 增强，可空）,
+              final/final_level/final_meta: str（满级效果+SP，可空）}]
     equips: [{name: str, stage: int}]  模组（可为空列表）
     version: str
 -->
@@ -88,12 +88,12 @@
                 </div>
                 {% if sk.current %}
                 <div style="margin-top: 4px; font-size: 11px; color: var(--tx-1); line-height: 1.7; white-space: pre-line;">
-                    <span class="chip chip--ink" style="height: 18px; font-size: 10px; margin-right: 6px;">当前 {{ sk.current_level }}</span>{{ sk.current }}
+                    <span class="chip chip--ink" style="height: 18px; font-size: 10px; margin-right: 6px;">当前 {{ sk.current_level }}</span>{{ sk.current }}{% if sk.current_meta %}<span class="mono" style="color: var(--tx-3);">（{{ sk.current_meta }}）</span>{% endif %}
                 </div>
                 {% endif %}
                 {% if sk.final %}
                 <div style="margin-top: 4px; font-size: 11px; color: var(--tx-1); line-height: 1.7; white-space: pre-line;">
-                    <span class="chip chip--ghost mono" style="height: 18px; font-size: 10px; margin-right: 6px;">{{ sk.final_level }}</span>{{ sk.final }}
+                    <span class="chip chip--ghost mono" style="height: 18px; font-size: 10px; margin-right: 6px;">{{ sk.final_level }}</span>{{ sk.final }}{% if sk.final_meta %}<span class="mono" style="color: var(--tx-3);">（{{ sk.final_meta }}）</span>{% endif %}
                 </div>
                 {% endif %}
             </div>

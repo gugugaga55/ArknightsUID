@@ -12,6 +12,7 @@
 关键藏品按「名字」在各期 items 里反查（iconId → tomimi 图标），名字不在
 表内时仅显示无图 chip；攻略条目里的 ending_id 是表内结局 id 的 join 键。
 """
+
 from __future__ import annotations
 
 import time
@@ -518,8 +519,7 @@ async def load_all_endings() -> dict[str, dict[str, Any]]:
         return _cache["themes"]
     table = await ensure_rogue_topic_table()
     themes = {
-        theme_dir: _merge_theme(theme_dir, table)
-        for theme_dir in THEME_TABLE_IDS
+        theme_dir: _merge_theme(theme_dir, table) for theme_dir in THEME_TABLE_IDS
     }
     _cache["themes"] = themes
     _cache["ts"] = now
@@ -531,9 +531,7 @@ async def load_theme_endings(theme_dir: str) -> dict[str, Any] | None:
     return themes.get(theme_dir)
 
 
-def find_theme(
-    query: str, extra_aliases: dict[str, str] | None = None
-) -> str | None:
+def find_theme(query: str, extra_aliases: dict[str, str] | None = None) -> str | None:
     """期名（用户别名 > 内建别名 > 显示名/目录名）→ 期目录。"""
     text = (query or "").strip()
     if not text:
@@ -546,9 +544,7 @@ def find_theme(
     return resolve_theme_dir(text)
 
 
-def _match_hits(
-    query: str, themes: dict[str, dict[str, Any]]
-) -> list[dict[str, str]]:
+def _match_hits(query: str, themes: dict[str, dict[str, Any]]) -> list[dict[str, str]]:
     """跨期按结局名匹配（精确 → 唯一前缀 → 唯一子串），命中带期目录。"""
     q = (query or "").strip()
     if not q:
@@ -574,9 +570,7 @@ def _match_hits(
     return contains[:6]
 
 
-def _relic_hits(
-    query: str, themes: dict[str, dict[str, Any]]
-) -> list[dict[str, str]]:
+def _relic_hits(query: str, themes: dict[str, dict[str, Any]]) -> list[dict[str, str]]:
     """关键藏品名反查结局（精确 → 唯一前缀 → 唯一子串）。"""
     q = (query or "").strip()
     if not q:
@@ -637,9 +631,7 @@ async def resolve_query(
             for h in hits
         )
         return f"找到 {len(hits)} 个候选：{shown}（请用完整名）"
-    known = "、".join(
-        str(data["theme_name"]) for data in themes.values()
-    )
+    known = "、".join(str(data["theme_name"]) for data in themes.values())
     return f"未找到「{text}」。可查期名（{known}）、结局名或关键藏品名（如：ark肉鸽结局 巴别塔誓言）。"
 
 

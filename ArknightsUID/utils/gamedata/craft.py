@@ -11,6 +11,7 @@
 - 副产物按期望产出摊薄：extraOutcomeRate × group 期望件数计入产出，
   仅在展示层提示，不参与叶子成本折算。
 """
+
 from __future__ import annotations
 
 from typing import Any
@@ -120,8 +121,8 @@ def leaf_materials(node: dict[str, Any]) -> dict[str, int]:
 
     def walk(current: dict[str, Any]) -> None:
         if not current.get("craftable"):
-            leaves[current["item_id"]] = (
-                leaves.get(current["item_id"], 0) + int(current.get("need") or 0)
+            leaves[current["item_id"]] = leaves.get(current["item_id"], 0) + int(
+                current.get("need") or 0
             )
             return
         for child in current.get("children") or []:
@@ -131,7 +132,9 @@ def leaf_materials(node: dict[str, Any]) -> dict[str, int]:
     return leaves
 
 
-def format_craft_tree(node: dict[str, Any], item_index: dict[str, dict[str, Any]]) -> list[str]:
+def format_craft_tree(
+    node: dict[str, Any], item_index: dict[str, dict[str, Any]]
+) -> list[str]:
     """合成树文本行（缩进层级展开）。"""
     lines: list[str] = []
 
@@ -148,7 +151,9 @@ def format_craft_tree(node: dict[str, Any], item_index: dict[str, dict[str, Any]
                 f"\n{indent}    ← 单次成本 {costs}"
             )
         else:
-            lines.append(f"{indent}{mark}{current['name']} ×{current.get('need')}（刷取）")
+            lines.append(
+                f"{indent}{mark}{current['name']} ×{current.get('need')}（刷取）"
+            )
         for child in current.get("children") or []:
             walk(child, indent + "  ")
 

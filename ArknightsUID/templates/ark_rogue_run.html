@@ -1,0 +1,227 @@
+<!--
+  ark_rogue_run.html —— 肉鸽单局战况详情卡（#37）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  数据源：森空岛 App「战绩查询」端点单条战绩（arknights/rogue records[N]）。
+  上下文（由 arknightsuid_rogue._build_run_detail_context 组装）：
+    name: str, uid: str（已脱敏）
+    theme_name: str, banner: str（期 KV，可空）
+    run_index/run_total: int   局号（1-based）/ 该列表总局数
+    favour: bool               是否取自收藏战绩列表
+    success: bool, mode/mode_grade, score: 结果 / 难度 / 得分
+    band: str                  分队名
+    ending: str                结局纯文本（分段拼接）
+    ending_segments: [{text, color}]       结局回顾分段（带官方配色）
+    last_stage: str            止步关卡（失败时）
+    time: str, duration: str
+    zones/nodes: int           探索层数 / 经过节点
+    battle_normal/elite/boss: int          战斗场次
+    relic_count/recruit_count: int         藏品数 / 招募次数
+    seed: str                  种子号（可空）
+    tags: [str]                局内标签（月度/深入调查等）
+    init_chars/final_chars: [{name, avatar}]   开局 / 结算阵容
+    relics: [{id, name, icon}]             获得藏品
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}
+<style>
+    /* 结果横幅：通关=信号黄底黑字，失败=灰底（色条母题与战绩卡一致） */
+    .result {
+        margin-top: var(--space-4);
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        padding: 10px 14px;
+        border: 1px solid var(--line);
+        border-left: 4px solid var(--line);
+        background: var(--panel);
+    }
+    .result--win {
+        border-left-color: var(--yellow);
+        background: var(--yellow-dim);
+    }
+    .result-word {
+        font-size: 22px;
+        font-weight: 800;
+        letter-spacing: var(--tracking-label);
+        color: var(--tx-0);
+    }
+    .result-mode {
+        font-family: var(--mono);
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--tx-1);
+    }
+    .result-score {
+        margin-left: auto;
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--tx-2);
+        text-align: right;
+    }
+    .result-score b {
+        display: block;
+        font-size: 20px;
+        font-weight: 800;
+        color: var(--tx-0);
+    }
+    /* 结局回顾：分段着色（接口自带官方配色） */
+    .ending-review {
+        margin-top: var(--space-3);
+        padding: 10px 12px;
+        border: 1px solid var(--hairline);
+        font-size: 12px;
+        line-height: 1.8;
+        color: var(--tx-1);
+    }
+    /* 藏品格：图标 + 名称两行小格 */
+    .relic-grid {
+        display: grid;
+        grid-template-columns: repeat(6, 1fr);
+        gap: 6px;
+        margin-top: var(--space-3);
+    }
+    .relic-cell {
+        border: 1px solid var(--hairline);
+        background: var(--panel);
+        padding: 6px 4px 5px;
+        text-align: center;
+        min-width: 0;
+    }
+    .relic-cell img { width: 34px; height: 34px; display: block; margin: 0 auto; }
+    .relic-cell .relic-name {
+        margin-top: 3px;
+        font-size: 9px;
+        color: var(--tx-2);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .rogue-kv {
+        display: block;
+        width: 100%;
+        height: 96px;
+        object-fit: cover;
+        object-position: center 30%;
+        border: 1px solid var(--hairline);
+        margin-top: var(--space-3);
+    }
+</style>
+</head>
+<body>
+    <div class="container" data-ghost="IS-RUN">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 单局战况 RUN DETAIL</em></span>
+            <span class="mast-meta">{% if uid %}<span class="idx">37</span>UID {{ uid }}{% endif %}</span>
+        </div>
+
+        <div class="titleblock" style="align-items: center;">
+            <div>
+                <div class="eyebrow">{{ name }} · {% if favour %}收藏战绩{% else %}最近战绩{% endif %} #{{ run_index }}<span style="color: var(--tx-3);">/{{ run_total }}</span></div>
+                <h1 class="title title--s">{{ theme_name }}</h1>
+                <div class="title-rule"><span class="en">IS. RUN DETAIL</span></div>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_rogue.b64" %}" alt="">
+        </div>
+
+        {% if banner %}
+        <img class="rogue-kv" src="{{ banner }}" alt="">
+        {% endif %}
+
+        <div class="result{% if success %} result--win{% endif %}">
+            <span class="result-word">{% if success %}通关{% else %}失败{% endif %}</span>
+            <span class="result-mode">{% if mode %}{{ mode }}·{% endif %}N{{ mode_grade }}</span>
+            {% if band %}<span class="chip chip--ink" style="height: 18px;">{{ band }}</span>{% endif %}
+            {% for tag in tags %}<span class="chip chip--blue" style="height: 18px;">{{ tag }}</span>{% endfor %}
+            <span class="result-score">得分<b>{{ score }}</b></span>
+        </div>
+
+        {% if ending_segments %}
+        <div class="ending-review">
+            {% for seg in ending_segments %}<span{% if seg.color %} style="color: {{ seg.color }};"{% endif %}>{{ seg.text }}</span>{% endfor %}
+        </div>
+        {% elif ending %}
+        <div class="ending-review">结局：{{ ending }}</div>
+        {% elif last_stage %}
+        <div class="ending-review">止步：{{ last_stage }}</div>
+        {% endif %}
+
+        <div class="grid grid-4" style="margin-top: var(--space-3);">
+            <div class="cell">
+                <div class="cell-label">探索层数 ZONES</div>
+                <div class="cell-value">{{ zones }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">经过节点 NODES</div>
+                <div class="cell-value">{{ nodes }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">获得藏品 RELICS</div>
+                <div class="cell-value">{{ relic_count }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">招募进阶 RECRUIT</div>
+                <div class="cell-value">{{ recruit_count }}</div>
+            </div>
+        </div>
+        <div class="career" style="margin-top: var(--space-3); font-family: var(--mono); font-size: 10px; color: var(--tx-2); display: flex; gap: 10px; flex-wrap: wrap;">
+            <span>战斗</span>
+            {% if battle_normal %}<span>普通 <b style="color: var(--tx-0);">{{ battle_normal }}</b></span>{% endif %}
+            {% if battle_elite %}<span>精英 <b style="color: var(--tx-0);">{{ battle_elite }}</b></span>{% endif %}
+            {% if battle_boss %}<span>领袖 <b style="color: var(--tx-0);">{{ battle_boss }}</b></span>{% endif %}
+            {% if duration %}<span>{{ duration }}</span>{% endif %}
+            {% if time %}<span>{{ time }}</span>{% endif %}
+            {% if seed %}<span>种子 <b style="color: var(--tx-0);">{{ seed }}</b></span>{% endif %}
+        </div>
+
+        {% if init_chars %}
+        <div class="sect" style="margin-top: var(--space-4);">
+            <span class="sect-label bk">初始干员</span>
+            <span class="sect-en">INITIAL // {{ init_chars | length }}</span>
+        </div>
+        <div class="wall">
+            {% for c in init_chars %}
+            <span class="aicon aicon--md" title="{{ c.name }}">{% if c.avatar %}<img src="{{ c.avatar }}" alt="{{ c.name }}">{% endif %}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if final_chars %}
+        <div class="sect" style="margin-top: var(--space-4);">
+            <span class="sect-label bk">结算阵容</span>
+            <span class="sect-en">FINAL SQUAD // {{ final_chars | length }}</span>
+        </div>
+        <div class="wall">
+            {% for c in final_chars %}
+            <span class="aicon aicon--md" title="{{ c.name }}">{% if c.avatar %}<img src="{{ c.avatar }}" alt="{{ c.name }}">{% endif %}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if relics %}
+        <div class="sect" style="margin-top: var(--space-4);">
+            <span class="sect-label bk">获得藏品</span>
+            <span class="sect-en">RELICS // {{ relics | length }}</span>
+        </div>
+        <div class="relic-grid">
+            {% for r in relics %}
+            <div class="relic-cell" title="{{ r.name }}">
+                {% if r.icon %}<img src="{{ r.icon }}" alt="{{ r.name }}">{% endif %}
+                <div class="relic-name">{{ r.name }}</div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 肉鸽战绩</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// IS. RUN DETAIL</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

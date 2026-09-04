@@ -5,6 +5,7 @@
   （"on" 强制隐藏 / "off" 强制不隐藏 / "" 跟随全局 HideUid 配置），
   对 ark账号 / ark理智 / ark日常 / ark基建 等查询输出即时生效。
 """
+
 from __future__ import annotations
 
 from gsuid_core.bot import Bot
@@ -12,36 +13,28 @@ from gsuid_core.logger import logger
 from gsuid_core.models import Event
 from gsuid_core.sv import SV
 
-try:
-    from ArknightsUID.ArknightsUID.utils.account_switch import get_default_uid
-    from ArknightsUID.ArknightsUID.utils.database.models import ArkUser
-    from ArknightsUID.ArknightsUID.utils.enduid.adapter import (
-        hide_uid_for,
-        resolve_accounts,
-    )
-except ModuleNotFoundError:
-    from ArknightsUID.utils.account_switch import get_default_uid
-    from ArknightsUID.utils.database.models import ArkUser
-    from ArknightsUID.utils.enduid.adapter import (
-        hide_uid_for,
-        resolve_accounts,
-    )
+from ArknightsUID.utils.account_switch import get_default_uid
+from ArknightsUID.utils.database.models import ArkUser
+from ArknightsUID.utils.enduid.adapter import (
+    hide_uid_for,
+    resolve_accounts,
+)
 
 GAME_TITLE = "「明日方舟」"
 
 user_config_sv = SV("ArknightsUID用户配置", priority=5)
 
-
-async def _send_text(bot: Bot, ev: Event, msg: str) -> None:
-    await bot.send((" " if ev.group_id else "") + msg, at_sender=bool(ev.group_id))
+# 文本回复公共实现在 utils.card.send_text；保留模块级别名供调用点/测试 patch
+from ArknightsUID.utils.card import send_text as _send_text  # noqa: E402
 
 
 async def _resolve_bound_uid(ev: Event) -> str:
     """当前实际查询账号的 UID，与查询命令同口径（ark切换 的默认账号
     优先，否则首个可用账号）。
 
-    此前用 ArkBind.get_bound_uid 恒返回第一个绑定行：多账号下设置
-    会写到别的账号行上，用户明确要求的隐藏在其后查询里不生效。
+    此前用 ArkBind 首个绑定行（旧方法 get_bound_uid，已删）恒返回第一个
+    UID：多账号下设置会写到别的账号行上，用户明确要求的隐藏在其后查询
+    里不生效。
     """
     result = await resolve_accounts(ev.user_id, ev.bot_id)
     if not result.accounts:

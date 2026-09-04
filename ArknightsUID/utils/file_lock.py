@@ -9,6 +9,16 @@
 - ``unique_tmp(path)``：带 pid+线程 id 的临时文件名，防并发写者互踩
   同一 tmp 后 os.replace 到一半被覆盖。
 
+flock 等待自适应超时（审计 #锁超时）：flock 随持锁进程退出自动释放，
+正常临界区（小 JSON 读-改-写）毫秒级完成；等待只会出现在多进程撞车
+瞬间或对端异常挂起。为避免"外进程持锁不放 → 本进程事件循环被同步
+flock 无限期冻死"，加锁改为非阻塞轮询：
+
+- 工作线程内等锁上限 2s；
+- 事件循环线程内上限 0.2s（阻塞循环的代价远高于降级）；
+- 超时降级为无锁继续并告警——与无锁平台同档"尽力而为"：写侧仍是
+  唯一 tmp + os.replace 原子写，最坏丢失一次并发合并，不会撕裂文件。
+
 用法（同步上下文，状态写路径三步全在锁内）：
 
     with file_locked(state_path):
@@ -18,16 +28,34 @@
         tmp.write_text(json.dumps(state))
         os.replace(tmp, state_path)
 """
+
 from __future__ import annotations
 
+import asyncio
 import os
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterator
+from collections.abc import Iterator
 
+from gsuid_core.logger import logger
+
+# 工作线程 / 事件循环线程各自的等锁上限与轮询间隔（秒）
+_LOCK_TIMEOUT_WORKER = 2.0
+_LOCK_TIMEOUT_EVENT_LOOP = 0.2
+_LOCK_POLL_INTERVAL = 0.02
 
 _held = threading.local()
+
+
+def _lock_timeout() -> float:
+    """当前线程的等锁上限：跑在事件循环线程里时尽快放弃。"""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return _LOCK_TIMEOUT_WORKER
+    return _LOCK_TIMEOUT_EVENT_LOOP
 
 
 @contextmanager
@@ -50,8 +78,13 @@ def file_locked(state_path: Path) -> Iterator[None]:
     try:
         lock_path.parent.mkdir(parents=True, exist_ok=True)
         handle = open(lock_path, "a+")
-        _acquire(handle)
+        acquired = _acquire(handle, _lock_timeout())
         held.add(key)
+        if not acquired:
+            logger.warning(
+                f"[ArknightsUID·文件锁] {lock_path.name} 等锁超时，"
+                "降级为无锁写入（多进程部署下可能丢失一次并发合并）"
+            )
         yield
     finally:
         held.discard(key)
@@ -63,20 +96,31 @@ def file_locked(state_path: Path) -> Iterator[None]:
             handle.close()
 
 
-def _acquire(handle) -> None:
+def _acquire(handle, timeout: float) -> bool:
+    """非阻塞轮询加锁，超时放弃；返回是否真正持锁。"""
     try:
         import fcntl
-
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-        return
     except ImportError:
-        pass
+        fcntl = None
+    if fcntl is not None:
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return True
+            except OSError:
+                if time.monotonic() >= deadline:
+                    return False
+                time.sleep(_LOCK_POLL_INTERVAL)
     try:
         import msvcrt
 
+        # LK_LOCK 自带 ~10s 重试语义；Windows 路径维持旧行为
         msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        return True
     except (ImportError, OSError):
-        pass  # 无锁可用平台：退化为无进程间互斥（不劣化现状）
+        # 无锁可用平台：退化为无进程间互斥（不劣化现状）
+        return False
 
 
 def _release(handle) -> None:

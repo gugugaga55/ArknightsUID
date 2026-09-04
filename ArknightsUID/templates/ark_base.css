@@ -65,7 +65,8 @@
     /* 容器内边距（ticker 全幅条用负边距对齐）*/
     --pad-x: 26px;
 
-    --mono: "JetBrains Mono", "Google Sans Flex", "Consolas", monospace;
+    --mono: "JetBrains Mono", "Google Sans Flex", "Consolas",
+        "Noto Sans Mono CJK SC", monospace;
 }
 
 * {
@@ -75,8 +76,12 @@
 }
 
 body {
-    font-family: "MiSans", "Google Sans Flex", "Noto Sans SC",
-        "PingFang SC", "Microsoft YaHei", sans-serif;
+    /* CJK 兜底必须写系统 TTC 的真实 face 名（Noto Sans CJK SC）：
+       只写 "Noto Sans SC" 匹配不到 NotoSansCJK-Regular.ttc 里的任何 face，
+       takumi 下 generic sans-serif 会落到 TTC 首个 face（JP），
+       关/直/与 等字渲染成日文字形（实机踩坑：通关 chip 白字最显眼） */
+    font-family: "MiSans", "Google Sans Flex", "Noto Sans CJK SC",
+        "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
     background: var(--paper);
     color: var(--tx-0);
     font-size: 14px;

@@ -1,44 +1,46 @@
 from __future__ import annotations
 
-import asyncio
 import re
 
 from gsuid_core.bot import Bot
 from gsuid_core.models import Event
 from gsuid_core.sv import SV
 
-try:
-    from ArknightsUID.ArknightsUID.utils.arg_utils import extract_index, extract_uid
-    from ArknightsUID.ArknightsUID.utils.dict_utils import path
-    from ArknightsUID.ArknightsUID.utils.enduid.adapter import (
-        fetch_player_info,
-        hide_uid_for,
-        resolve_credential,
-    )
-    from ArknightsUID.ArknightsUID.utils.gamedata.rogue_enemy import (
-        STAT_LABELS,
-        THEME_ALIASES,
-    )
-    from ArknightsUID.ArknightsUID.utils.rogue import flatten_rogue, parse_rogue
-    from ArknightsUID.ArknightsUID.version import ArknightsUID_version
-except ModuleNotFoundError:
-    from ArknightsUID.utils.arg_utils import extract_index, extract_uid
-    from ArknightsUID.utils.dict_utils import path
-    from ArknightsUID.utils.enduid.adapter import (
-        fetch_player_info,
-        hide_uid_for,
-        resolve_credential,
-    )
-    from ArknightsUID.utils.gamedata.rogue_enemy import (
-        STAT_LABELS,
-        THEME_ALIASES,
-    )
-    from ArknightsUID.utils.rogue import flatten_rogue, parse_rogue
-    from ArknightsUID.version import ArknightsUID_version
+from ArknightsUID.utils.arg_utils import (
+    extract_index,
+    extract_uid,
+)
+from ArknightsUID.utils.dict_utils import path
+from ArknightsUID.utils.enduid.adapter import (
+    fetch_player_info,
+    fetch_rogue_records,
+    hide_uid_for,
+)
+from ArknightsUID.utils.gamedata.rogue_enemy import (
+    STAT_LABELS,
+    THEME_ALIASES,
+    THEME_DIRS,
+    resolve_theme_dir,
+)
+from ArknightsUID.utils.reply_safety import safe_external_message
+from ArknightsUID.utils.rogue import (
+    flatten_rogue,
+    parse_rogue,
+)
+from ArknightsUID.utils.rogue.records import (
+    RogueTopicStats,
+    format_run_ts,
+    parse_rogue_records,
+    topic_id_for,
+)
+from ArknightsUID.version import ArknightsUID_version
 
 # 注册顺序约束：rogue_alias_sv 必须先于 rogue_sv 创建——core 按 SV 注册序
 # startswith 分发，否则「肉鸽别名/肉鸽别名删除」会被「肉鸽」命令抢走
 # （别名命令的 handler 定义在文件末尾，SV 创建序即分发序）。
+# 凭据解析 + 失败即回复的统一入口（原各处四行样板）
+from ArknightsUID.utils.card import resolve_or_reply  # noqa: E402
+
 rogue_alias_sv = SV("ArknightsUID肉鸽别名", priority=5)
 rogue_sv = SV("ArknightsUID肉鸽", priority=5)
 
@@ -56,8 +58,8 @@ ROGUE_THEME_NAMES = {
 }
 
 
-async def _send_text(bot: Bot, ev: Event, msg: str) -> None:
-    await bot.send((" " if ev.group_id else "") + msg, at_sender=bool(ev.group_id))
+# 文本回复公共实现在 utils.card.send_text；保留模块级别名供调用点/测试 patch
+from ArknightsUID.utils.card import send_text as _send_text  # noqa: E402
 
 
 def _rogue_sort_key(rogue_id: str) -> int:
@@ -95,8 +97,7 @@ def _format_rogue(response: object) -> str:
                 f"奖章 {r.medal.current}/{r.medal.total}"
             )
         lines.append(
-            f"合计通关 {sum(r.clear_time for r in records)} 次"
-            f"（{len(records)} 期主题）"
+            f"合计通关 {sum(r.clear_time for r in records)} 次（{len(records)} 期主题）"
         )
         return "\n".join(lines)
     # 无 records 但有 rogue dict：通用遍历兜底
@@ -165,9 +166,9 @@ async def _fill_rogue_theme_images(context: dict) -> None:
     if not names:
         return
     try:
-        from ..utils.prts.client import activity_banner_urls
-        from ..utils.render import get_image_b64_with_cache
-        from ..utils.resource.RESOURCE_PATH import CACHE_PATH
+        from ArknightsUID.utils.prts.client import activity_banner_urls
+        from ArknightsUID.utils.render import get_image_b64_with_cache
+        from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
 
         banner_urls = await activity_banner_urls(names)
         for r in records:
@@ -183,6 +184,237 @@ async def _fill_rogue_theme_images(context: dict) -> None:
         from gsuid_core.logger import logger
 
         logger.debug("[ArknightsUID] 肉鸽主题图获取失败", exc_info=True)
+
+
+# ---------------------------------------------------------------------------
+# 肉鸽战绩（ark肉鸽战绩）：森空岛 App「战绩查询」页独立端点（与 ark肉鸽 的
+# player_info 进度卡不同源——战绩页有难度/得分/结算阵容/结局明细）。
+# ---------------------------------------------------------------------------
+
+# 卡片单期展示上限：最近战绩/收藏战绩各自条数、每条战绩的阵容头像数
+_RECORD_CARD_LIMIT = 8
+_RECORD_CHARS_LIMIT = 8
+_FAV_CHARS_LIMIT = 6
+
+
+def _resolve_record_theme(
+    text: str, extra_aliases: dict[str, str]
+) -> tuple[str, str] | str:
+    """战绩命令的期名解析 → (topic_id, 期显示名)；空输入=服务端默认期。
+
+    主题名是单个 token（别名/显示名/目录名均不含空格）；多 token 或不可
+    解析时返回错误文案（列出可选期名）。
+    """
+    theme_text = (text or "").strip(" ：:")
+    if not theme_text:
+        return "", ""
+    tokens = theme_text.split()
+    theme_dir = None
+    if len(tokens) == 1:
+        theme_dir = extra_aliases.get(tokens[0].lower()) or resolve_theme_dir(tokens[0])
+    if theme_dir is None:
+        names = "、".join(THEME_DIRS.values())
+        return (
+            f"无法识别的期名「{theme_text}」。可用：{names}"
+            "（也可用 ark肉鸽别名 自定义期名）。"
+        )
+    return topic_id_for(theme_dir), THEME_DIRS.get(theme_dir, theme_dir)
+
+
+def _run_duration(start_ts: str, end_ts: str) -> str:
+    """起止时间戳（秒字符串）→ '用时 xx 分钟'；异常/倒挂返回空串。"""
+    if not (start_ts.isdigit() and end_ts.isdigit()):
+        return ""
+    minutes = (int(end_ts) - int(start_ts)) // 60
+    if minutes <= 0 or minutes > 60 * 24:
+        return ""
+    return f"用时 {minutes} 分钟"
+
+
+def _run_row(run, index: int) -> dict:
+    """单条战绩 → 卡片行（结局文本优先，失败显示止步关卡）。"""
+    battles = []
+    if run.battle_normal:
+        battles.append(f"普通 {run.battle_normal}")
+    if run.battle_elite:
+        battles.append(f"精英 {run.battle_elite}")
+    if run.battle_boss:
+        battles.append(f"领袖 {run.battle_boss}")
+    return {
+        "index": index,
+        "success": run.success,
+        "mode": run.mode,
+        "mode_grade": run.mode_grade,
+        "score": run.score,
+        "band": run.band,
+        "ending": run.ending_text,
+        "last_stage": run.last_stage,
+        "time": format_run_ts(run.end_ts),
+        "duration": _run_duration(run.start_ts, run.end_ts),
+        "zones": run.zones,
+        "battles": " · ".join(battles),
+        "relic_count": run.relic_count,
+        "recruit_count": run.recruit_count,
+        "tags": run.tags,
+        "chars": [
+            {"name": c.name, "char_id": c.char_id, "avatar": ""}
+            for c in run.chars[:_RECORD_CHARS_LIMIT]
+        ],
+    }
+
+
+async def _fill_record_avatars(context: dict) -> None:
+    """常用干员 + 各战绩阵容头像 b64 内嵌（并发受限，失败空串降级）。"""
+    from ArknightsUID.utils.player.context import char_avatar_b64
+
+    # (char dict) 打平成任务清单，统一回填 avatar 键
+    char_slots: list[dict] = list(context.get("fav_chars") or [])
+    for row in (context.get("records") or []) + (context.get("favour_records") or []):
+        char_slots.extend(row.get("chars") or [])
+    if not char_slots:
+        return
+    from ArknightsUID.utils.image import gather_b64
+
+    avatars = await gather_b64(
+        char_avatar_b64,
+        [str(c.get("char_id") or "") for c in char_slots],
+    )
+    for slot, avatar in zip(char_slots, avatars):
+        slot["avatar"] = avatar if isinstance(avatar, str) else ""
+
+
+async def _build_rogue_records_context(
+    stats: RogueTopicStats, theme_display: str, shown_uid: str
+) -> dict:
+    """战绩解析结果 → ark_rogue_record.html 渲染上下文。"""
+    theme_name = stats.topic_name or theme_display or "集成战略"
+    banner = ""
+    try:
+        from ArknightsUID.utils.prts.client import activity_banner_urls
+        from ArknightsUID.utils.render import get_image_b64_with_cache
+        from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
+
+        # 期 KV 与 ark肉鸽 进度卡同源（PRTS 主题页信息框标题图）
+        url = (await activity_banner_urls([theme_name])).get(theme_name, "")
+        if url:
+            banner = await get_image_b64_with_cache(
+                url, CACHE_PATH / "rogue_theme", quality=82
+            )
+    except Exception:
+        from gsuid_core.logger import logger
+
+        logger.debug("[ArknightsUID] 肉鸽战绩主题图获取失败", exc_info=True)
+
+    return {
+        "name": stats.player_name or "博士",
+        "level": stats.player_level,
+        "uid": shown_uid,
+        "theme_name": theme_name,
+        "topics": stats.topics,
+        "banner": banner,
+        "mode": stats.mode,
+        "mode_grade": stats.mode_grade,
+        "score": stats.score,
+        "bp_level": stats.bp_level,
+        "medal_current": stats.medal_current,
+        "medal_total": stats.medal_total,
+        "medal_pct": (
+            round(stats.medal_current / stats.medal_total * 100, 1)
+            if stats.medal_total > 0
+            else 0
+        ),
+        "games": stats.games,
+        "nodes": stats.nodes,
+        "relics": stats.relics,
+        "invest": stats.invest,
+        "endings_total": stats.endings_total,
+        "fav_chars": [
+            {"name": c.name, "char_id": c.char_id, "avatar": ""}
+            for c in stats.fav_chars[:_FAV_CHARS_LIMIT]
+        ],
+        "records": [
+            _run_row(r, i + 1) for i, r in enumerate(stats.records[:_RECORD_CARD_LIMIT])
+        ],
+        "favour_records": [
+            _run_row(r, i + 1)
+            for i, r in enumerate(stats.favour_records[:_RECORD_CARD_LIMIT])
+        ],
+        "record_total": len(stats.records),
+        "version": ArknightsUID_version,
+    }
+
+
+def _format_rogue_records(
+    stats: RogueTopicStats, theme_display: str, shown_uid: str
+) -> str:
+    """战绩纯文本回退（卡片渲染失败时）。"""
+    theme_name = stats.topic_name or theme_display or "集成战略"
+
+    def _line(r) -> str:
+        result = "通关" if r.success else "失败"
+        where = r.ending_text or (f"止步 {r.last_stage}" if r.last_stage else "")
+        difficulty = f"{r.mode}·N{r.mode_grade}" if r.mode else f"N{r.mode_grade}"
+        parts = [difficulty, f"得分 {r.score}"]
+        tail_parts = [p for p in (where,) if p]
+        if r.zones:
+            tail_parts.append(f"探索 {r.zones} 层")
+        battles = r.battle_normal + r.battle_elite + r.battle_boss
+        if battles:
+            tail_parts.append(
+                f"战斗 {r.battle_normal}/{r.battle_elite}/{r.battle_boss}"
+            )
+        if r.relic_count:
+            tail_parts.append(f"藏品 {r.relic_count}")
+        tail_parts.extend(
+            p
+            for p in (_run_duration(r.start_ts, r.end_ts), format_run_ts(r.end_ts))
+            if p
+        )
+        line = f"[{result}] {' | '.join(parts)}"
+        if r.band:
+            line += f" | {r.band}"
+        return line + (f"（{' | '.join(tail_parts)}）" if tail_parts else "")
+
+    lines = [f"「明日方舟」肉鸽战绩 · {theme_name}"]
+    name = stats.player_name or "博士"
+    uid_part = f"（UID {shown_uid}）" if shown_uid else ""
+    lines.append(f"{name}{uid_part} Lv.{stats.player_level}")
+    lines.append(
+        f"最高达成：{stats.mode} N{stats.mode_grade} | 声望 {stats.bp_level} | "
+        f"最高分 {stats.score} | 奖章 {stats.medal_current}/{stats.medal_total}"
+    )
+    career = [
+        f"探索 {stats.games} 次" if stats.games else "",
+        f"经过节点 {stats.nodes}" if stats.nodes else "",
+        f"获得藏品 {stats.relics}" if stats.relics else "",
+        f"结局达成 {stats.endings_total}" if stats.endings_total else "",
+    ]
+    if any(career):
+        lines.append("生涯：" + " | ".join(c for c in career if c))
+    if stats.fav_chars:
+        lines.append(
+            "常用干员：" + "、".join(c.name for c in stats.fav_chars[:10] if c.name)
+        )
+    if stats.records:
+        lines.append("—— 最近战绩 ——")
+        for r in stats.records[:10]:
+            lines.append(_line(r))
+    else:
+        lines.append("该期暂无战绩记录（还没开过这一期？）。")
+    if stats.favour_records:
+        lines.append("—— 收藏战绩 ——")
+        for r in stats.favour_records[:5]:
+            lines.append(_line(r))
+    other = [
+        str(t.get("short") or t.get("name"))
+        for t in stats.topics
+        if (t.get("short") or t.get("name")) and not t.get("selected")
+    ]
+    if other:
+        lines.append(f"切换主题：ark肉鸽战绩 {' / '.join(other)}")
+    else:
+        lines.append("（数据：森空岛战绩查询；其他期：ark肉鸽战绩 期名）")
+    return "\n".join(lines)
 
 
 def _parse_rogue_query(
@@ -224,9 +456,7 @@ def _parse_rogue_query(
         if theme_dir is None:
             hit = (extra_aliases or {}).get(token.lower())
             if hit is None:
-                hit = THEME_ALIASES.get(token) or THEME_ALIASES.get(
-                    token.strip("· ")
-                )
+                hit = THEME_ALIASES.get(token) or THEME_ALIASES.get(token.strip("· "))
             if hit:
                 theme_dir = hit
                 continue
@@ -242,9 +472,7 @@ def _format_rogue_enemy(context: dict) -> str:
     if context["resistances"]:
         lines.append("抗性：" + "、".join(context["resistances"]))
     for form in context["forms"]:
-        extra = (
-            f"（{'、'.join(form['extras'])}）" if form["extras"] else ""
-        )
+        extra = f"（{'、'.join(form['extras'])}）" if form["extras"] else ""
         lines.append(
             f"{form['title']}：HP {form['hp']} 攻 {form['atk']} "
             f"防 {form['def']} 抗 {form['res']} 重量 {form['weight']}"
@@ -254,13 +482,9 @@ def _format_rogue_enemy(context: dict) -> str:
             lines.append(f"  · {line}")
     for group in context.get("stage_groups") or []:
         more = (
-            f"…等 {group['total']} 关"
-            if group["total"] > len(group["stages"])
-            else ""
+            f"…等 {group['total']} 关" if group["total"] > len(group["stages"]) else ""
         )
-        lines.append(
-            f"出没·{group['theme_name']}：{'、'.join(group['stages'])}{more}"
-        )
+        lines.append(f"出没·{group['theme_name']}：{'、'.join(group['stages'])}{more}")
     # 口径区分：本面板是肉鸽解包数据，主线/活动出没与通用数值走 PRTS
     lines.append(
         f"（出没为集成战略口径；主线/活动出没与通用数值见 ark敌人 {context['name']}）"
@@ -280,14 +504,16 @@ def _format_rogue_enemy(context: dict) -> str:
     elif context["theme_name"]:
         lines.append(f"难度面板（{context['theme_name']}，累积生效）：")
         for row in context["panels"]:
-            stat = " ".join(
-                f"{STAT_LABELS[k]}{v}" for k, v in row["stats"].items()
-            )
+            stat = " ".join(f"{STAT_LABELS[k]}{v}" for k, v in row["stats"].items())
             note = f"｜{'、'.join(row['notes'])}" if row["notes"] else ""
             lines.append(f"  {row['label']}：{stat}{note}")
-        lines.append("  注：层数增益（每层按 floorBuff 复合）未计入，完整模拟见 tomimi.dev")
+        lines.append(
+            "  注：层数增益（每层按 floorBuff 复合）未计入，完整模拟见 tomimi.dev"
+        )
     else:
-        lines.append("难度面板：未识别所属期（仅基础面板；可用「ark肉鸽敌人 名字 期名 难度」指定）")
+        lines.append(
+            "难度面板：未识别所属期（仅基础面板；可用「ark肉鸽敌人 名字 期名 难度」指定）"
+        )
     return "\n".join(lines)
 
 
@@ -302,7 +528,7 @@ async def _build_rogue_enemy_context(
     隐含），「紧急」叠加该关紧急作战效果。敌人名与关卡名零重名，按
     token 前缀拆分：前段敌名 + 后段关名。
     """
-    from ..utils.gamedata.rogue_enemy import (
+    from ArknightsUID.utils.gamedata.rogue_enemy import (
         THEME_DIRS,
         build_diff_panels,
         build_panel_at,
@@ -323,9 +549,7 @@ async def _build_rogue_enemy_context(
         status_labels,
     )
 
-    name, theme_hint, difficulty, elite = _parse_rogue_query(
-        query, extra_aliases
-    )
+    name, theme_hint, difficulty, elite = _parse_rogue_query(query, extra_aliases)
     db = await load_enemy_db()
     if not db:
         return "敌人库不可用（tomimi 数据拉取失败），请稍后再试。"
@@ -424,7 +648,9 @@ async def _build_rogue_enemy_context(
     panels = (
         []
         if focus is not None
-        else build_diff_panels(entry, grades) if theme_dir else []
+        else build_diff_panels(entry, grades)
+        if theme_dir
+        else []
     )
     icon = await enemy_icon_b64(enemy_key)
     skill_dict = await load_skill_dict()
@@ -467,9 +693,7 @@ async def _build_rogue_enemy_context(
 
 
 def _format_rogue_stage(context: dict) -> str:
-    lines = [
-        f"「明日方舟」肉鸽关卡：{context['name']}（{context['code']}）"
-    ]
+    lines = [f"「明日方舟」肉鸽关卡：{context['name']}（{context['code']}）"]
     tags = [
         context["theme_name"],
         context["difficulty_label"],
@@ -482,7 +706,7 @@ def _format_rogue_stage(context: dict) -> str:
     if context.get("variant_note"):
         lines.append(context["variant_note"])
     for row in context["rows"]:
-        mark = "·形态%d" % (row["level"] + 1) if row["level"] else ""
+        mark = f"·形态{row['level'] + 1}" if row["level"] else ""
         elite_mark = f"·{row['elite_note']}" if row["elite_note"] else ""
         s = row["stats"]
         lines.append(
@@ -494,7 +718,11 @@ def _format_rogue_stage(context: dict) -> str:
     if context["rows"]:
         lines.append(
             f"查具体敌人：ark肉鸽敌人 <敌名> {context['name']}"
-            + (f" N{context['difficulty']}" if context["difficulty"] is not None else "")
+            + (
+                f" N{context['difficulty']}"
+                if context["difficulty"] is not None
+                else ""
+            )
             + (" 紧急" if context["elite"] else "")
         )
     return "\n".join(lines)
@@ -509,7 +737,7 @@ async def _build_rogue_stage_context(
     语法：`关名 [期名] [N难度] [紧急]`——四期关卡名零重复，关名即唯一定位；
     期名可省（关卡自带期归属）。
     """
-    from ..utils.gamedata.rogue_enemy import (
+    from ArknightsUID.utils.gamedata.rogue_enemy import (
         THEME_DIRS,
         _floor_buff_note,
         _mod_note,
@@ -523,9 +751,7 @@ async def _build_rogue_stage_context(
         stage_panel_rows,
     )
 
-    name, _theme_hint, difficulty, elite = _parse_rogue_query(
-        query, extra_aliases
-    )
+    name, _theme_hint, difficulty, elite = _parse_rogue_query(query, extra_aliases)
     if not name:
         return "用法：ark肉鸽关卡 关名 [N难度] [紧急]（如 ark肉鸽关卡 拆东补西 N15）"
 
@@ -559,17 +785,11 @@ async def _build_rogue_stage_context(
 
     rows = stage_panel_rows(stage_data, db, grades, difficulty, elite)
     # 头像（并发受限，失败降级空串）
-    semaphore = asyncio.Semaphore(4)
+    from ArknightsUID.utils.image import gather_b64
 
-    async def _icon(key: str) -> str:
-        async with semaphore:
-            return await enemy_icon_b64(key)
-
-    icons = await asyncio.gather(
-        *(_icon(row["key"]) for row in rows), return_exceptions=True
-    )
+    icons = await gather_b64(enemy_icon_b64, [row["key"] for row in rows])
     for row, icon in zip(rows, icons):
-        row["icon"] = icon if isinstance(icon, str) else ""
+        row["icon"] = icon
 
     elite_mods = stage_data.get("elite_mods") or []
     elite_chips: list[str] = []
@@ -581,9 +801,7 @@ async def _build_rogue_stage_context(
             if note not in elite_chips:
                 elite_chips.append(note)
 
-    floor_note = (
-        _floor_buff_note(grades, difficulty) if difficulty is not None else ""
-    )
+    floor_note = _floor_buff_note(grades, difficulty) if difficulty is not None else ""
     difficulty_label = (
         f"难度{difficulty}" if difficulty is not None else "未指定难度（基础面板）"
     )
@@ -594,9 +812,12 @@ async def _build_rogue_stage_context(
     # level_id 系统性生成，覆盖所有层关；PRTS 肉鸽关卡页地图即此来源）
     maps: list[str] = []
     try:
-        from ..utils.prts.client import rogue_map_file_urls, rogue_map_preview_urls
-        from ..utils.render import get_image_b64_with_cache
-        from ..utils.resource.RESOURCE_PATH import CACHE_PATH
+        from ArknightsUID.utils.prts.client import (
+            rogue_map_file_urls,
+            rogue_map_preview_urls,
+        )
+        from ArknightsUID.utils.render import get_image_b64_with_cache
+        from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
 
         map_urls = await rogue_map_file_urls(stage["code"], stage["name"])
         if not map_urls:
@@ -621,13 +842,12 @@ async def _build_rogue_stage_context(
         "difficulty_label": difficulty_label,
         "variant_note": (
             f"同名关卡有 {stage.get('variants') or 1} 个分支变体，当前显示第一个"
-            if (stage.get("variants") or 1) > 1 else ""
+            if (stage.get("variants") or 1) > 1
+            else ""
         ),
         "elite": elite,
         "floors": _floors_display(stage_data.get("floors")),
-        "elite_descs": [
-            str(d) for d in (stage_data.get("eliteDesc_zh") or []) if d
-        ],
+        "elite_descs": [str(d) for d in (stage_data.get("eliteDesc_zh") or []) if d],
         "elite_chips": elite_chips,
         "rows": rows,
         "row_count": len(rows),
@@ -659,7 +879,7 @@ async def _build_rogue_ending_context(
     展示对应结局。关键藏品图标走 tomimi（失败降级无图），期 KV 图与
     ark肉鸽 进度卡同源。
     """
-    from ..utils.gamedata.rogue_ending import (
+    from ArknightsUID.utils.gamedata.rogue_ending import (
         GUIDE_SOURCE_NOTE,
         GUIDE_UPDATED,
         load_theme_endings,
@@ -691,18 +911,12 @@ async def _build_rogue_ending_context(
         endings.append({"seq": f"{i + 1:02d}", **row})
 
     # 关键藏品图标（并发受限，失败降级空串）
-    from ..utils.gamedata.rogue_relic import relic_icon_b64
+    from ArknightsUID.utils.gamedata.rogue_relic import relic_icon_b64
 
-    semaphore = asyncio.Semaphore(4)
+    from ArknightsUID.utils.image import gather_b64
 
-    async def _icon(item_id: str) -> str:
-        async with semaphore:
-            return await relic_icon_b64(item_id)
-
-    icon_jobs = []
-    for e in endings:
-        icon_jobs.extend(_icon(c["item_id"]) for c in e["key_relics"])
-    icons = await asyncio.gather(*icon_jobs, return_exceptions=True)
+    icon_keys = [c["item_id"] for e in endings for c in e["key_relics"]]
+    icons = await gather_b64(relic_icon_b64, icon_keys)
     it = iter(icons)
     for e in endings:
         for chip in e["key_relics"]:
@@ -712,9 +926,9 @@ async def _build_rogue_ending_context(
     # 期主题 KV 图（与 _fill_rogue_theme_images 同源，失败降级无图）
     banner = ""
     try:
-        from ..utils.prts.client import activity_banner_urls
-        from ..utils.render import get_image_b64_with_cache
-        from ..utils.resource.RESOURCE_PATH import CACHE_PATH
+        from ArknightsUID.utils.prts.client import activity_banner_urls
+        from ArknightsUID.utils.render import get_image_b64_with_cache
+        from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
 
         url = (await activity_banner_urls([data["theme_name"]])).get(
             str(data["theme_name"]), ""
@@ -745,8 +959,7 @@ async def _build_rogue_ending_context(
 
 def _format_rogue_ending(context: dict) -> str:
     lines = [
-        f"「明日方舟」肉鸽结局：{context['theme_name']}"
-        f"（共 {context['count']} 个）"
+        f"「明日方舟」肉鸽结局：{context['theme_name']}（共 {context['count']} 个）"
     ]
     if context.get("focus_note"):
         lines.append(context["focus_note"])
@@ -768,9 +981,7 @@ def _format_rogue_ending(context: dict) -> str:
             lines.append(f"  最终：{e['final']}")
     for note in context.get("notes") or []:
         lines.append(f"※ {note}")
-    lines.append(
-        f"（{context['source_note']}，攻略核对 {context['guide_updated']}）"
-    )
+    lines.append(f"（{context['source_note']}，攻略核对 {context['guide_updated']}）")
     return "\n".join(lines)
 
 
@@ -778,7 +989,11 @@ def _format_rogue_ending(context: dict) -> str:
 async def send_rogue_stage(bot: Bot, ev: Event) -> None:
     query = ev.text.strip().strip("：:").strip()
     if not query:
-        return await _send_text(bot, ev, "用法：ark肉鸽关卡 关名 [N难度] [紧急]（如 ark肉鸽关卡 拆东补西 N15）")
+        return await _send_text(
+            bot,
+            ev,
+            "用法：ark肉鸽关卡 关名 [N难度] [紧急]（如 ark肉鸽关卡 拆东补西 N15）",
+        )
     aliases = await _load_user_theme_aliases(ev.bot_id, ev.user_id)
     result = await _build_rogue_stage_context(query, aliases)
     if isinstance(result, str):
@@ -786,7 +1001,10 @@ async def send_rogue_stage(bot: Bot, ev: Event) -> None:
 
     img = None
     try:
-        from ..utils.render import ark_templates, render_html
+        from ArknightsUID.utils.render import (
+            ark_templates,
+            render_html,
+        )
 
         img = await render_html(ark_templates, "ark_rogue_stage.html", result)
     except Exception:
@@ -804,17 +1022,20 @@ async def _render_enemy_skill_card(name: str) -> str | None:
     无机制数据 → None（只发第一张）。
     """
     try:
-        from ..utils.prts.client import query_enemy
+        from ArknightsUID.utils.prts.client import query_enemy
 
         enemy = await query_enemy(name)
         if enemy is None:
             return None
         if (enemy.name or enemy.title) != name:
             return None  # 搜索命中近似页，避免张冠李戴
-        from ..arknightsuid_wiki import _build_enemy_context
-        from ..utils.render import ark_templates, render_html
+        from ArknightsUID.arknightsuid_wiki import build_enemy_context
+        from ArknightsUID.utils.render import (
+            ark_templates,
+            render_html,
+        )
 
-        context = await _build_enemy_context(enemy)
+        context = await build_enemy_context(enemy)
         if not context.get("abilities"):
             return None
         return await render_html(ark_templates, "ark_wiki_enemy.html", context)
@@ -826,7 +1047,11 @@ async def _render_enemy_skill_card(name: str) -> str | None:
 async def send_rogue_enemy(bot: Bot, ev: Event) -> None:
     query = ev.text.strip().strip("：:").strip()
     if not query:
-        return await _send_text(bot, ev, "用法：ark肉鸽敌人 名字 [期名] [N难度] [关名] [紧急]（如 ark肉鸽敌人 歌利亚 萨卡兹 N12）")
+        return await _send_text(
+            bot,
+            ev,
+            "用法：ark肉鸽敌人 名字 [期名] [N难度] [关名] [紧急]（如 ark肉鸽敌人 歌利亚 萨卡兹 N12）",
+        )
     aliases = await _load_user_theme_aliases(ev.bot_id, ev.user_id)
     result = await _build_rogue_enemy_context(query, aliases)
     if isinstance(result, str):
@@ -835,7 +1060,10 @@ async def send_rogue_enemy(bot: Bot, ev: Event) -> None:
     template = result.get("template", "ark_rogue_enemy.html")
     img = None
     try:
-        from ..utils.render import ark_templates, render_html
+        from ArknightsUID.utils.render import (
+            ark_templates,
+            render_html,
+        )
 
         img = await render_html(ark_templates, template, result)
     except Exception:
@@ -857,7 +1085,7 @@ async def send_rogue_enemy(bot: Bot, ev: Event) -> None:
 # 与 肉鸽关卡/肉鸽敌人 同理）
 @rogue_sv.on_command(("肉鸽结局", "is结局"), block=True)
 async def send_rogue_ending(bot: Bot, ev: Event) -> None:
-    from ..utils.gamedata.rogue_ending import theme_usage
+    from ArknightsUID.utils.gamedata.rogue_ending import theme_usage
 
     query = ev.text.strip().strip("：:").strip()
     if not query:
@@ -869,7 +1097,10 @@ async def send_rogue_ending(bot: Bot, ev: Event) -> None:
 
     img = None
     try:
-        from ..utils.render import ark_templates, render_html
+        from ArknightsUID.utils.render import (
+            ark_templates,
+            render_html,
+        )
 
         img = await render_html(ark_templates, "ark_rogue_ending.html", result)
     except Exception:
@@ -879,13 +1110,345 @@ async def send_rogue_ending(bot: Bot, ev: Event) -> None:
     await _send_text(bot, ev, _format_rogue_ending(result))
 
 
+# ---------------------------------------------------------------------------
+# 肉鸽单局详情（ark肉鸽详情）：战绩页接口的单局战况（阵容/藏品/结局回顾）。
+# 期名缺省=服务端默认期；序号缺省=最近第 1 局；「收藏」前缀查收藏战绩。
+# ---------------------------------------------------------------------------
+
+_DETAIL_CHARS_LIMIT = 12
+_DETAIL_RELICS_LIMIT = 24
+
+
+def _parse_detail_args(
+    text: str, extra_aliases: dict[str, str]
+) -> tuple[str, str, int, bool] | str:
+    """ark肉鸽详情 的参数解析 → (topic_id, 期显示名, 局号, 是否收藏)。
+
+    期名解析与战绩命令同源；序号缺省 1（最近一局）；「收藏」前缀查收藏战绩。
+    """
+    tokens = (text or "").split()
+    favour = False
+    run_no = 0
+    theme_tokens: list[str] = []
+    for tok in tokens:
+        if tok in ("收藏", "fav"):
+            favour = True
+        elif tok.isdigit() and run_no == 0:
+            run_no = int(tok)
+        else:
+            theme_tokens.append(tok)
+    if run_no <= 0:
+        run_no = 1
+    theme_text = " ".join(theme_tokens)
+    resolved = _resolve_record_theme(theme_text, extra_aliases)
+    if isinstance(resolved, str):
+        return resolved
+    topic_id, theme_display = resolved
+    return topic_id, theme_display, run_no, favour
+
+
+async def _build_run_detail_context(
+    stats: RogueTopicStats,
+    theme_display: str,
+    shown_uid: str,
+    run_index: int,
+    favour: bool,
+) -> dict | str:
+    """战绩详情卡上下文。run_index 为 1-based（最近/收藏列表内序号）。"""
+    pool = stats.favour_records if favour else stats.records
+    if not pool:
+        kind = "收藏战绩" if favour else "最近战绩"
+        return f"该期暂无{kind}记录。"
+    if run_index < 1 or run_index > len(pool):
+        kind = "收藏" if favour else "最近"
+        return f"第 {run_index} 局超出范围（{kind}战绩共 {len(pool)} 条）。"
+    run = pool[run_index - 1]
+
+    # 主题 KV（与战绩卡同源）
+    theme_name = stats.topic_name or theme_display or "集成战略"
+    banner = ""
+    try:
+        from ArknightsUID.utils.prts.client import activity_banner_urls
+        from ArknightsUID.utils.render import get_image_b64_with_cache
+        from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
+
+        url = (await activity_banner_urls([theme_name])).get(theme_name, "")
+        if url:
+            banner = await get_image_b64_with_cache(
+                url, CACHE_PATH / "rogue_theme", quality=82
+            )
+    except Exception:
+        from gsuid_core.logger import logger
+
+        logger.debug("[ArknightsUID] 肉鸽详情主题图获取失败", exc_info=True)
+
+    # 阵容头像（初始 + 结算，并发受限）
+    from ArknightsUID.utils.player.context import char_avatar_b64
+
+    from ArknightsUID.utils.image import gather_b64
+
+    async def _fill(char_rows: list) -> None:
+        avatars = await gather_b64(
+            char_avatar_b64,
+            [str(c.get("char_id") or "") for c in char_rows],
+        )
+        for c, av in zip(char_rows, avatars):
+            c["avatar"] = av
+
+    init_rows = [
+        {"name": c.name, "char_id": c.char_id, "avatar": ""}
+        for c in run.init_chars[:_DETAIL_CHARS_LIMIT]
+    ]
+    final_rows = [
+        {"name": c.name, "char_id": c.char_id, "avatar": ""}
+        for c in run.chars[:_DETAIL_CHARS_LIMIT]
+    ]
+    await _fill(init_rows)
+    await _fill(final_rows)
+
+    # 藏品（id → 名称 + 图标）
+    relic_rows = [
+        {"id": rid, "name": stats.item_names.get(rid, rid), "icon": ""}
+        for rid in run.relic_ids[:_DETAIL_RELICS_LIMIT]
+    ]
+    from ArknightsUID.utils.gamedata.rogue_relic import relic_icon_b64
+
+    relic_icons = await gather_b64(relic_icon_b64, [r["id"] for r in relic_rows])
+    for r, ic in zip(relic_rows, relic_icons):
+        r["icon"] = ic
+
+    return {
+        "name": stats.player_name or "博士",
+        "uid": shown_uid,
+        "theme_name": theme_name,
+        "banner": banner,
+        "run_index": run_index,
+        "run_total": len(pool),
+        "favour": favour,
+        "success": run.success,
+        "mode": run.mode,
+        "mode_grade": run.mode_grade,
+        "score": run.score,
+        "band": run.band,
+        "ending": run.ending_text,
+        "ending_segments": run.ending_segments,
+        "last_stage": run.last_stage,
+        "time": format_run_ts(run.end_ts),
+        "duration": _run_duration(run.start_ts, run.end_ts),
+        "zones": run.zones,
+        "nodes": run.arrived_nodes,
+        "battle_normal": run.battle_normal,
+        "battle_elite": run.battle_elite,
+        "battle_boss": run.battle_boss,
+        "relic_count": run.relic_count,
+        "recruit_count": run.recruit_count,
+        "seed": run.seed,
+        "tags": run.tags,
+        "init_chars": init_rows,
+        "final_chars": final_rows,
+        "relics": relic_rows,
+        "version": ArknightsUID_version,
+    }
+
+
+def _format_run_detail(
+    stats: RogueTopicStats,
+    theme_display: str,
+    shown_uid: str,
+    run_index: int,
+    favour: bool,
+) -> str:
+    """战绩详情纯文本回退（卡片渲染失败时）。"""
+    pool = stats.favour_records if favour else stats.records
+    run = pool[run_index - 1]
+    theme_name = stats.topic_name or theme_display or "集成战略"
+    kind = "收藏" if favour else "最近"
+    result_text = run.ending_text or (
+        f"止步 {run.last_stage}" if run.last_stage else ""
+    )
+    lines = [
+        f"「明日方舟」肉鸽战绩 · {theme_name}",
+        f"{stats.player_name or '博士'}（UID {shown_uid}）{kind}第 {run_index}/{len(pool)} 局",
+        f"{'通关' if run.success else '失败'} · {run.mode}·N{run.mode_grade} · 得分 {run.score}",
+    ]
+    if run.band:
+        lines.append(f"分队：{run.band}")
+    if result_text:
+        lines.append(f"结局：{result_text}")
+    meta_parts = []
+    if run.zones:
+        meta_parts.append(f"探索 {run.zones} 层")
+    if run.arrived_nodes:
+        meta_parts.append(f"节点 {run.arrived_nodes}")
+    battles = run.battle_normal + run.battle_elite + run.battle_boss
+    if battles:
+        meta_parts.append(
+            f"战斗 {run.battle_normal}/{run.battle_elite}/{run.battle_boss}"
+        )
+    if run.relic_count:
+        meta_parts.append(f"藏品 {run.relic_count}")
+    if run.recruit_count:
+        meta_parts.append(f"招募 {run.recruit_count}")
+    duration = _run_duration(run.start_ts, run.end_ts)
+    if duration:
+        meta_parts.append(duration)
+    time_text = format_run_ts(run.end_ts)
+    if time_text:
+        meta_parts.append(time_text)
+    if meta_parts:
+        lines.append(" · ".join(meta_parts))
+    if run.tags:
+        lines.append("标签：" + "、".join(run.tags))
+    if run.seed:
+        lines.append(f"种子：{run.seed}")
+    if run.init_chars:
+        lines.append("开局：" + "、".join(c.name for c in run.init_chars[:8] if c.name))
+    if run.chars:
+        lines.append("结算：" + "、".join(c.name for c in run.chars[:8] if c.name))
+    if run.relic_ids:
+        names = [stats.item_names.get(rid, rid) for rid in run.relic_ids[:20]]
+        lines.append("藏品：" + "、".join(names))
+    return "\n".join(lines)
+
+
+# 注册顺序约束：肉鸽详情 与 肉鸽战绩 互不前缀冲突，但都须先于 肉鸽
+# （长关键字优先分发已保证，此处仅维持文件内约定）
+@rogue_sv.on_command(("肉鸽详情", "is详情"), block=True)
+async def send_rogue_detail(bot: Bot, ev: Event) -> None:
+    """ark肉鸽详情 [期名] [序号] [收藏]：单局战况（阵容/藏品/结局回顾）。
+
+    序号是局号（战绩卡上的 #N），不是账号序号；多账号用 UID 指定。
+    """
+    raw = ev.text.strip()
+    uid = extract_uid(raw)
+    # 期名 = 剔除 UID 后的剩余词（局号/收藏在 _parse_detail_args 内消化）
+    text_no_uid = raw.replace(uid, " ", 1) if uid else raw
+    aliases = await _load_user_theme_aliases(ev.bot_id, ev.user_id)
+    parsed = _parse_detail_args(text_no_uid, aliases)
+    if isinstance(parsed, str):
+        return await _send_text(bot, ev, parsed)
+    topic_id, theme_display, run_no, favour = parsed
+
+    credential = await resolve_or_reply(bot, ev, uid=uid)
+    if credential is None:
+        return
+    response = await fetch_rogue_records(credential, topic_id)
+    if isinstance(response, str):
+        return await _send_text(bot, ev, response)
+    code = response.get("code")
+    if code != 0:
+        message = safe_external_message(
+            response.get("message") or response.get("msg") or ""
+        )[:120]
+        return await _send_text(
+            bot, ev, f"肉鸽战绩查询失败：code={code}，{message or '无详情'}"
+        )
+    stats = parse_rogue_records(response.get("data"))
+    if stats is None:
+        return await _send_text(
+            bot, ev, "战绩数据为空或结构未识别（该期可能未开放战绩页）。"
+        )
+
+    shown_uid = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
+    context = await _build_run_detail_context(
+        stats, theme_display, shown_uid, run_no, favour
+    )
+    if isinstance(context, str):
+        return await _send_text(bot, ev, context)
+
+    img = None
+    try:
+        from ArknightsUID.utils.render import (
+            ark_templates,
+            render_html,
+        )
+
+        img = await render_html(ark_templates, "ark_rogue_run.html", context)
+    except Exception:
+        img = None
+    if img:
+        return await bot.send(img, at_sender=bool(ev.group_id))
+    await _send_text(
+        bot,
+        ev,
+        _format_run_detail(stats, theme_display, shown_uid, run_no, favour),
+    )
+
+
+# 注册顺序约束：肉鸽战绩 必须先于 肉鸽（长关键字优先分发已保证，此处仅
+# 维持与 肉鸽关卡/肉鸽敌人/肉鸽结局 一致的文件内约定）
+@rogue_sv.on_command(("肉鸽战绩", "is战绩"), block=True)
+async def send_rogue_records(bot: Bot, ev: Event) -> None:
+    """ark肉鸽战绩 [期名] [序号]：单期战绩明细（难度/得分/阵容/结局）。
+
+    与 ark肉鸽（player_info 进度卡）不同源：走森空岛 App 战绩查询端点，
+    期名缺省时由服务端返回默认期（响应 topics[].isSelected 标记）。
+    """
+    raw = ev.text.strip()
+    uid = extract_uid(raw)
+    index = extract_index(raw)
+    # 期名 = 原文剔除 UID/序号后的剩余词（序号只在词尾，与 extract_index 同口径）
+    theme_text = raw
+    if uid:
+        theme_text = theme_text.replace(uid, " ", 1)
+    if index:
+        theme_text = re.sub(r"第|号", "", theme_text)
+        theme_text = re.sub(r"(?:^|\s|#)\d{1,2}\s*$", "", theme_text)
+
+    aliases = await _load_user_theme_aliases(ev.bot_id, ev.user_id)
+    resolved = _resolve_record_theme(theme_text, aliases)
+    if isinstance(resolved, str):
+        return await _send_text(bot, ev, resolved)
+    topic_id, theme_display = resolved
+
+    credential = await resolve_or_reply(bot, ev, uid=uid, index=index)
+    if credential is None:
+        return
+    response = await fetch_rogue_records(credential, topic_id)
+    if isinstance(response, str):
+        return await _send_text(bot, ev, response)
+    code = response.get("code")
+    if code != 0:
+        # 上游 message 可能回显请求参数，脱敏后再进回复
+        message = safe_external_message(
+            response.get("message") or response.get("msg") or ""
+        )[:120]
+        return await _send_text(
+            bot, ev, f"肉鸽战绩查询失败：code={code}，{message or '无详情'}"
+        )
+    stats = parse_rogue_records(response.get("data"))
+    if stats is None:
+        return await _send_text(
+            bot, ev, "战绩数据为空或结构未识别（该期可能未开放战绩页）。"
+        )
+
+    shown_uid = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
+    context = await _build_rogue_records_context(stats, theme_display, shown_uid)
+    await _fill_record_avatars(context)
+    text = _format_rogue_records(stats, theme_display, shown_uid)
+
+    img = None
+    try:
+        from ArknightsUID.utils.render import (
+            ark_templates,
+            render_html,
+        )
+
+        img = await render_html(ark_templates, "ark_rogue_record.html", context)
+    except Exception:
+        img = None
+    if img:
+        return await bot.send(img, at_sender=bool(ev.group_id))
+    await _send_text(bot, ev, text)
+
+
 @rogue_sv.on_command(("肉鸽", "集成战略", "rg"), block=True)
 async def send_rogue_info(bot: Bot, ev: Event) -> None:
     uid = extract_uid(ev.text)
     index = extract_index(ev.text)
-    credential = await resolve_credential(ev.user_id, ev.bot_id, uid=uid, index=index)
-    if isinstance(credential, str):
-        return await _send_text(bot, ev, credential)
+    credential = await resolve_or_reply(bot, ev, uid=uid, index=index)
+    if credential is None:
+        return
     response = await fetch_player_info(credential)
 
     # 前端卡片路径：模板缺失/渲染失败时回退纯文本（与 wiki 模块同模式）。
@@ -898,7 +1461,10 @@ async def send_rogue_info(bot: Bot, ev: Event) -> None:
         await _fill_rogue_theme_images(context)
         img = None
         try:
-            from ..utils.render import ark_templates, render_html
+            from ArknightsUID.utils.render import (
+                ark_templates,
+                render_html,
+            )
 
             img = await render_html(ark_templates, "ark_rogue.html", context)
         except Exception:
@@ -921,11 +1487,11 @@ _ROGUE_ALIAS_PREFIX = "rogue:"
 async def _load_user_theme_aliases(bot_id: str, user_id: str) -> dict[str, str]:
     """该用户的自定义期别名（{alias: theme_dir}；DB 异常静默为空，不阻断查询）。"""
     try:
-        from ..utils.database.models import ArkAlias
+        from ArknightsUID.utils.database.models import ArkAlias
 
         rows = await ArkAlias.list_aliases(bot_id=bot_id, user_id=user_id)
         return {
-            row.alias: row.target[len(_ROGUE_ALIAS_PREFIX):]
+            row.alias: row.target[len(_ROGUE_ALIAS_PREFIX) :]
             for row in rows or []
             if str(row.target or "").startswith(_ROGUE_ALIAS_PREFIX)
         }
@@ -955,10 +1521,11 @@ async def list_rogue_theme_alias(bot: Bot, ev: Event) -> None:
     aliases = await _load_user_theme_aliases(ev.bot_id, ev.user_id)
     if not aliases:
         return await _send_text(
-            bot, ev,
+            bot,
+            ev,
             "你还没有设置肉鸽期名。用法：ark肉鸽别名 树海=沉沦者的黑流树海",
         )
-    from ..utils.gamedata.rogue_enemy import THEME_DIRS
+    from ArknightsUID.utils.gamedata.rogue_enemy import THEME_DIRS
 
     lines = ["「明日方舟」你的肉鸽期名："]
     lines.extend(
@@ -975,18 +1542,14 @@ async def delete_rogue_theme_alias(bot: Bot, ev: Event) -> None:
     alias = (ev.text or "").strip().lower()
     if not alias:
         return await _send_text(bot, ev, "用法：ark肉鸽别名删除 树海")
-    from ..utils.database.models import ArkAlias
+    from ArknightsUID.utils.database.models import ArkAlias
 
     target = await ArkAlias.resolve_alias(
         bot_id=ev.bot_id, user_id=ev.user_id, alias=alias
     )
     if target and not str(target).startswith(_ROGUE_ALIAS_PREFIX):
-        return await _send_text(
-            bot, ev, f"「{alias}」是干员别名，请用 ark别名删除。"
-        )
-    if await ArkAlias.delete_alias(
-        bot_id=ev.bot_id, user_id=ev.user_id, alias=alias
-    ):
+        return await _send_text(bot, ev, f"「{alias}」是干员别名，请用 ark别名删除。")
+    if await ArkAlias.delete_alias(bot_id=ev.bot_id, user_id=ev.user_id, alias=alias):
         await _send_text(bot, ev, f"已删除肉鸽期名：{alias}")
     else:
         await _send_text(bot, ev, f"没有这个肉鸽期名：{alias}")
@@ -997,31 +1560,31 @@ async def set_rogue_theme_alias(bot: Bot, ev: Event) -> None:
     parsed = _parse_alias_pair(ev.text)
     if not parsed:
         return await _send_text(
-            bot, ev,
+            bot,
+            ev,
             "用法：ark肉鸽别名 <别名>=<期名>（如 ark肉鸽别名 树海=沉沦者的黑流树海）；"
             "ark肉鸽别名列表 查看；ark肉鸽别名删除 <别名> 删除。",
         )
     alias, target_text = parsed
 
-    from ..utils.gamedata.rogue_enemy import (
+    from ArknightsUID.utils.gamedata.rogue_enemy import (
         THEME_ALIASES,
         THEME_DIRS,
         resolve_theme_dir,
     )
 
     if alias in THEME_ALIASES:
-        return await _send_text(
-            bot, ev, f"「{alias}」已是内建期名，无需设置。"
-        )
+        return await _send_text(bot, ev, f"「{alias}」已是内建期名，无需设置。")
     theme_dir = resolve_theme_dir(target_text)
     if not theme_dir:
         names = "、".join(THEME_DIRS.values())
         return await _send_text(
-            bot, ev,
+            bot,
+            ev,
             f"无法识别的期名「{target_text}」。可用：{names}（或 black/sui 等目录名）。",
         )
 
-    from ..utils.database.models import ArkAlias
+    from ArknightsUID.utils.database.models import ArkAlias
 
     await ArkAlias.set_alias(
         bot_id=ev.bot_id,
@@ -1030,7 +1593,8 @@ async def set_rogue_theme_alias(bot: Bot, ev: Event) -> None:
         target=f"{_ROGUE_ALIAS_PREFIX}{theme_dir}",
     )
     await _send_text(
-        bot, ev,
+        bot,
+        ev,
         f"已设置肉鸽期名：{alias} → {THEME_DIRS.get(theme_dir, theme_dir)}"
         "（ark肉鸽敌人 / ark肉鸽关卡 / ark肉鸽结局 的期名参数生效）",
     )

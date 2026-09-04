@@ -12,6 +12,7 @@ ORGANIZATION / PUBLIC_KEY / AES_IV / CONFUSION 中的 DES key 均为逆向出的
 （DES-ECB、静态 IV）是上游协议本身的要求——本模块不保护任何本地秘密，
 本地凭据的静态加密见 utils/crypto.py。
 """
+
 import base64
 import hashlib
 import json
@@ -20,7 +21,6 @@ import time
 import uuid
 import zlib
 from datetime import datetime
-from typing import Optional
 
 from cryptography.hazmat.decrepit.ciphers.algorithms import TripleDES
 from cryptography.hazmat.primitives.asymmetric import padding as _rsa_pad
@@ -103,7 +103,11 @@ def _tn(raw: dict) -> str:
     def rec(v):
         if isinstance(v, dict):
             return "".join(
-                rec(str(10000 * v[k]) if isinstance(v[k], (int, float)) and not isinstance(v[k], bool) else str(v[k]))
+                rec(
+                    str(10000 * v[k])
+                    if isinstance(v[k], (int, float)) and not isinstance(v[k], bool)
+                    else str(v[k])
+                )
                 for k in sorted(v)
             )
         return str(v) if v else ""
@@ -152,7 +156,7 @@ def _screen(ua: str):
     return 1920, 1080, 1920, 1040, 1
 
 
-def _build_raw(user_agent: str, referer: str, platform: Optional[str]) -> dict:
+def _build_raw(user_agent: str, referer: str, platform: str | None) -> dict:
     w, h, iw, ih, dpr = _screen(user_agent)
     now_ms = int(time.time() * 1000)
     return {
@@ -185,10 +189,10 @@ def _build_raw(user_agent: str, referer: str, platform: Optional[str]) -> dict:
 
 
 def get_device_id(
-    user_agent: Optional[str] = None,
-    accept_language: Optional[str] = None,
-    referer: Optional[str] = None,
-    platform: Optional[str] = None,
+    user_agent: str | None = None,
+    accept_language: str | None = None,
+    referer: str | None = None,
+    platform: str | None = None,
 ) -> str:
     user_agent = user_agent or (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -213,4 +217,9 @@ def get_device_id(
         "encode": 5,
         "compress": 2,
     }
-    return "D" + base64.b64encode(json.dumps(envelope, separators=(",", ":")).encode()).decode()
+    return (
+        "D"
+        + base64.b64encode(
+            json.dumps(envelope, separators=(",", ":")).encode()
+        ).decode()
+    )

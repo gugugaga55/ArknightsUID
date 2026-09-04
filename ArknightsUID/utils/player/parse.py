@@ -15,6 +15,7 @@
 - 阿米娅三形态同名校验：charId 后缀区分职业，展示名追加职业后缀
 - 当前理智 = ap.max - ceil((completeRecoveryTime - now) / 360)（每 6 分钟回 1 点）
 """
+
 from __future__ import annotations
 
 import math
@@ -160,9 +161,7 @@ class RecruitSlot:
 
 def recruit_done_count(slots: list[RecruitSlot], now: float | None = None) -> int:
     """已到点可领取的公招槽数。"""
-    return sum(
-        1 for slot in slots if slot.recruiting and slot.remaining_secs(now) == 0
-    )
+    return sum(1 for slot in slots if slot.recruiting and slot.remaining_secs(now) == 0)
 
 
 def recruit_next_remaining(
@@ -213,7 +212,9 @@ class PlayerData:
         return max(1, int((now - self.register_ts) / 86400) + 1)
 
 
-def compute_ap_current(ap_max: int, complete_recovery_time: int, now: float | None = None) -> int:
+def compute_ap_current(
+    ap_max: int, complete_recovery_time: int, now: float | None = None
+) -> int:
     """按恢复公式推算当前理智：每 360 秒回 1 点，回满时间戳倒推。"""
     if complete_recovery_time <= 0:
         return ap_max
@@ -282,7 +283,9 @@ def _data_of(response: Any) -> dict[str, Any] | None:
     if isinstance(data, dict) and data:
         return data
     # 裸 data（无信封）直接就是玩家数据
-    if isinstance(response.get("chars"), list) or isinstance(response.get("status"), dict):
+    if isinstance(response.get("chars"), list) or isinstance(
+        response.get("status"), dict
+    ):
         return response
     return None
 
@@ -313,7 +316,9 @@ def parse_player_info(response: Any) -> PlayerData | None:
     chars: list[CharEntry] = []
     for raw_char in data.get("chars") or []:
         if isinstance(raw_char, dict) and raw_char.get("charId"):
-            chars.append(_parse_char(raw_char, info_map.get(str(raw_char.get("charId")))))
+            chars.append(
+                _parse_char(raw_char, info_map.get(str(raw_char.get("charId"))))
+            )
 
     records = campaign.get("records")
     if not isinstance(records, dict):

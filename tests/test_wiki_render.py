@@ -100,6 +100,76 @@ class SkillLevelSelectionTest(unittest.TestCase):
         )
 
 
+class SkillFxSharedTest(unittest.TestCase):
+    """utils.skillfx：ark干员与 ark练度卡共用的等级上下文（初动/消耗/持续）。"""
+
+    def test_meta_includes_sp_init_cost_duration(self) -> None:
+        from ArknightsUID.utils.skillfx import skill_meta
+
+        lv = SkillLevelDetail(
+            level="专3", description="描述", sp_init="15", sp_cost="24", duration="30"
+        )
+        self.assertEqual(skill_meta(lv), "初动15·消耗24·持续30秒")
+        # 空字段跳过；被动技能（无 SP）为空串
+        self.assertEqual(
+            skill_meta(SkillLevelDetail(level="1", description="被动")), ""
+        )
+        self.assertEqual(skill_meta(None), "")
+
+    def test_current_final_dedupes_maxed_skill(self) -> None:
+        from ArknightsUID.utils.skillfx import skill_current_final
+
+        skill = OperatorSkill(
+            name="技能一",
+            levels=[
+                SkillLevelDetail(
+                    level=f"专{n}",
+                    description=f"效果+{n}",
+                    sp_init="10",
+                    sp_cost="20",
+                )
+                for n in (1, 2, 3)
+            ],
+        )
+        # 已专3：current 命中，final 与 current 同级不再重复给
+        current, final = skill_current_final(skill, 3, 7)
+        self.assertEqual(current["level"], "专3")
+        self.assertEqual(current["meta"], "初动10·消耗20")
+        self.assertIsNone(final)
+        # 未满专精：current=专1，final=专3，两者都带 SP 数值
+        current, final = skill_current_final(skill, 1, 7)
+        self.assertEqual(current["level"], "专1")
+        self.assertEqual(final["level"], "专3")
+        self.assertEqual(final["sp_init"], "10")
+        # 无玩家专精档（specialize=None）：只有满级
+        current, final = skill_current_final(skill, None, 7)
+        self.assertIsNone(current)
+        self.assertEqual(final["level"], "专3")
+
+    def test_owner_skill_effects_filters_unowned(self) -> None:
+        from ArknightsUID.utils.prts.client import OperatorInfo
+        from ArknightsUID.utils.skillfx import owner_skill_effects
+
+        op = OperatorInfo(
+            title="测试",
+            name="测试",
+            skills=[
+                OperatorSkill(
+                    name="技能一",
+                    levels=_full_levels(),
+                ),
+                OperatorSkill(
+                    name="技能二",
+                    levels=_full_levels(),
+                ),
+            ],
+        )
+        effects = owner_skill_effects(op, {"技能二": 2}, 7)
+        self.assertEqual(list(effects), ["技能二"])
+        self.assertEqual(effects["技能二"]["current"]["level"], "专2")
+        self.assertEqual(effects["技能二"]["final"]["level"], "专3")
+
+
 class TalentDisplayTest(unittest.IsolatedAsyncioTestCase):
     async def test_context_includes_stages_and_potential(self) -> None:
         op = OperatorInfo(
@@ -306,7 +376,7 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("近卫", text)
         self.assertIn("技能一", text)
         self.assertIn("自动回复", text)
-        self.assertIn("10耗/30持", text)
+        self.assertIn("消耗10·持续30秒", text)
         self.assertIn("专1材料：龙门币 ×5", text)
         self.assertIn("天赋一", text)
         self.assertIn("来源：https://prts.wiki/w/测试", text)
@@ -349,12 +419,12 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         # 有 owner：当前级（专1）与满级（专3）详情并列
         text = _format_operator(op, owner)
         self.assertIn("我的练度（UID 12****89）：技能等级 7/7，专精训练剩约2小时15分", text)
-        self.assertIn("当前 专1：攻击力+30%（10耗·36持）", text)
-        self.assertIn("专3：攻击力+40%（10耗·40持）", text)
+        self.assertIn("当前 专1：攻击力+30%（消耗10·持续36秒）", text)
+        self.assertIn("专3：攻击力+40%（消耗10·持续40秒）", text)
 
         # 无 owner（未绑定/未持有）：仍展示满级描述（修复描述丢失）
         plain = _format_operator(op)
-        self.assertIn("专3：攻击力+40%（10耗·40持）", plain)
+        self.assertIn("专3：攻击力+40%（消耗10·持续40秒）", plain)
         self.assertNotIn("我的练度", plain)
         self.assertNotIn("当前 专1", plain)
 
@@ -386,7 +456,7 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context["owner"], owner)
         skill = context["skills"][0]
         self.assertEqual(skill["current"]["level"], "专2")
-        self.assertEqual(skill["current"]["meta"], "10耗")
+        self.assertEqual(skill["current"]["meta"], "消耗10")
         self.assertEqual(skill["final"]["level"], "专3")
 
     async def test_build_operator_context_without_owner_has_final_only(self) -> None:
@@ -915,6 +985,65 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
             context = await _build_stage_context(stage)
 
         self.assertEqual(context["map_image"], "API_MAP")
+
+    async def test_build_stage_map_falls_back_to_torappu_preview(self) -> None:
+        """活动关地图：wiki 无上传文件 + imageinfo 无结果 → torappu level_id 预览。
+
+        实测来源：torappu.prts.wiki/assets/map_preview/{stage_id}.png，当期活动
+        （act54side_01=月行水上 SR-1）开服首日即有，是活动关卡地图的主来源。
+        """
+        from ArknightsUID.utils.prts.client import stage_map_preview_url
+
+        stage = StageInfo(
+            title="SR-1",
+            code="SR-1",
+            name="月出",
+            stage_id="act54side_01",
+            map_url="https://map.ark-nights.com/?map=act54side_01",
+        )
+        torappu_url = stage_map_preview_url("act54side_01")
+        self.assertEqual(
+            torappu_url,
+            "https://torappu.prts.wiki/assets/map_preview/act54side_01.png",
+        )
+
+        import tempfile
+        from io import BytesIO
+        from pathlib import Path as _P
+
+        import ArknightsUID.utils.http as http_mod
+        import ArknightsUID.utils.render as render_mod
+        import ArknightsUID.utils.resource.RESOURCE_PATH as rp_mod
+        from PIL import Image
+
+        buf = BytesIO()
+        Image.new("RGB", (4, 4)).save(buf, "PNG")
+        png_bytes = buf.getvalue()
+
+        async def fake_status(url, **kwargs):
+            if url == torappu_url:
+                return 200, png_bytes
+            return 404, None  # wiki md5 直链（标准+辅助）均无活动地图文件
+
+        async def fake_fetch(url, cache_path, *args, **kwargs):
+            return "TORAPPu_MAP" if url == torappu_url else ""
+
+        async def fake_resolve(code: str, name: str) -> str:
+            return ""
+
+        with (
+            mock.patch(
+                "ArknightsUID.arknightsuid_wiki.resolve_map_file_url",
+                new=fake_resolve,
+            ),
+            mock.patch.object(http_mod, "download_bytes_status", fake_status),
+            mock.patch.object(render_mod, "get_image_b64_with_cache", fake_fetch),
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.object(rp_mod, "CACHE_PATH", _P(tmp)),
+        ):
+            context = await _build_stage_context(stage)
+
+        self.assertEqual(context["map_image"], "TORAPPu_MAP")
 
     async def test_stage_context_enriches_enemy_basic_stats(self) -> None:
         """敌方情报基础数值：敌人页一级 HP/攻/防/抗上卡；查不到降级仅名字。"""

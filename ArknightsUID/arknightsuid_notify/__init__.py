@@ -12,6 +12,7 @@
 training_push_state.json，键为 f"{bot_id}|{user_id}|{uid}"。订阅本身存
 gs_subscribe（single 模式，uid = 游戏 UID，同用户可多账号分别订阅）。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -29,43 +30,23 @@ from gsuid_core.models import Event
 from gsuid_core.subscribe import gs_subscribe
 from gsuid_core.sv import SV
 
-try:
-    from ArknightsUID.ArknightsUID.utils.config import ArkConfig
-    from ArknightsUID.ArknightsUID.utils.enduid.adapter import (
-        hide_uid,
-        resolve_credential,
-    )
-    from ArknightsUID.ArknightsUID.utils.player import (
-        TRADING_STRATEGY_NAMES,
-        effective_ap,
-        fetch_cached_player_info,
-        format_training_remaining,
-        parse_building,
-        parse_player_info,
-        training_remaining_secs,
-    )
-    from ArknightsUID.ArknightsUID.utils.skland.client import ark_attendance
-except ModuleNotFoundError:
-    from ArknightsUID.utils.config import ArkConfig
-    from ArknightsUID.utils.enduid.adapter import (
-        hide_uid,
-        resolve_credential,
-    )
-    from ArknightsUID.utils.player import (
-        TRADING_STRATEGY_NAMES,
-        effective_ap,
-        fetch_cached_player_info,
-        format_training_remaining,
-        parse_building,
-        parse_player_info,
-        training_remaining_secs,
-    )
-    from ArknightsUID.utils.skland.client import ark_attendance
-
-try:
-    from ArknightsUID.ArknightsUID.utils.path import MAIN_PATH
-except ModuleNotFoundError:
-    from ArknightsUID.utils.path import MAIN_PATH
+from ArknightsUID.utils.config import ArkConfig
+from ArknightsUID.utils.enduid.adapter import (
+    hide_uid,
+    resolve_credential,
+)
+from ArknightsUID.utils.player import (
+    TRADING_STRATEGY_NAMES,
+    drop_cached_player_info,
+    effective_ap,
+    fetch_cached_player_info,
+    format_training_remaining,
+    parse_building,
+    parse_player_info,
+    training_remaining_secs,
+)
+from ArknightsUID.utils.skland.client import ark_attendance
+from ArknightsUID.utils.path import MAIN_PATH
 
 notify_sv = SV("ArknightsUID理智推送", priority=5)
 
@@ -84,13 +65,19 @@ TRAIN_LEAD_MIN_SECS = 60
 TRAIN_LEAD_MAX_SECS = 7 * 86400
 # 提前量时间词：「5小时」「5.5小时」「300分」「2小时30分」「1天2小时」；
 # 所有匹配片段求和并从原文移除，剩余文本继续走账号定位（序号|UID）解析
-_LEAD_SPEC_RE = re.compile(
-    r"(\d+(?:\.\d+)?)\s*(天|小时|時|时|h|H|分钟|分鐘|分|m|M)"
-)
+_LEAD_SPEC_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(天|小时|時|时|h|H|分钟|分鐘|分|m|M)")
 _LEAD_UNIT_SECS = {
     "天": 86400,
-    "小时": 3600, "時": 3600, "时": 3600, "h": 3600, "H": 3600,
-    "分钟": 60, "分鐘": 60, "分": 60, "m": 60, "M": 60,
+    "小时": 3600,
+    "時": 3600,
+    "时": 3600,
+    "h": 3600,
+    "H": 3600,
+    "分钟": 60,
+    "分鐘": 60,
+    "分": 60,
+    "m": 60,
+    "M": 60,
 }
 # 专精完成推送 + 剩余时间预警共用轮询：10 分钟粒度让「剩约X分钟」有读数
 # 意义（player_info 磁盘缓存 5 分钟，与其他任务错峰命中）
@@ -107,9 +94,7 @@ def parse_training_lead(text: str) -> tuple[int | None, str]:
     matched = _LEAD_SPEC_RE.findall(query)
     if not matched:
         return None, query
-    total = sum(
-        float(value) * _LEAD_UNIT_SECS[unit] for value, unit in matched
-    )
+    total = sum(float(value) * _LEAD_UNIT_SECS[unit] for value, unit in matched)
     total = int(round(total))
     if not TRAIN_LEAD_MIN_SECS <= total <= TRAIN_LEAD_MAX_SECS:
         return None, query
@@ -168,9 +153,7 @@ def evaluate_sanity(ap: int, ap_max: int, notified: bool) -> tuple[bool, bool]:
 SANITY_WARN_RATIO = 0.85
 
 
-def evaluate_sanity_warn(
-    ap: int, ap_max: int, warned: bool
-) -> tuple[bool, bool]:
+def evaluate_sanity_warn(ap: int, ap_max: int, warned: bool) -> tuple[bool, bool]:
     """预警状态机（与回满推送互补）：返回 (should_warn, new_warned)。
 
     - 进入 [85%, 100%) 区间且本轮未预警过 → should_warn
@@ -184,9 +167,7 @@ def evaluate_sanity_warn(
     return in_band and not warned, in_band
 
 
-def format_sanity_warn_message(
-    name: str, ap: int, ap_max: int, uid_masked: str
-) -> str:
+def format_sanity_warn_message(name: str, ap: int, ap_max: int, uid_masked: str) -> str:
     remaining = max(0, ap_max - ap)
     return (
         "「明日方舟」理智即将回满（85% 预警）\n"
@@ -261,9 +242,7 @@ async def maybe_warn_credential(subscribe, uid: str, error: str) -> None:
             f"uid={hide_uid(uid)}"
         )
     except Exception as exc:
-        logger.warning(
-            f"[ArknightsUID·凭据预警] 提醒失败: {exc.__class__.__name__}"
-        )
+        logger.warning(f"[ArknightsUID·凭据预警] 提醒失败: {exc.__class__.__name__}")
         return
     state = _load_cred_warn_state()
     state[key] = {"ts": time.time()}
@@ -278,7 +257,10 @@ def _write_state_atomic(path: Path, state: dict, merge_from=None) -> None:
     （退订复活/丢键）；写一半崩溃也不至于把状态文件写坏（坏文件会被
     当空态，导致全部订阅重复推送一次）。
     """
-    from ..utils.file_lock import file_locked, unique_tmp
+    from ArknightsUID.utils.file_lock import (
+        file_locked,
+        unique_tmp,
+    )
 
     with file_locked(path):
         if merge_from is not None:
@@ -340,8 +322,11 @@ def _extract_target(text: str) -> tuple[str, int]:
     return "", 0
 
 
-async def _send_text(bot: Bot, ev: Event, msg: str) -> None:
-    await bot.send((" " if ev.group_id else "") + msg, at_sender=bool(ev.group_id))
+# 文本回复公共实现在 utils.card.send_text；保留模块级别名供调用点/测试 patch
+from ArknightsUID.utils.card import send_text as _send_text  # noqa: E402
+
+# 凭据解析 + 失败即回复的统一入口（原各处四行样板）
+from ArknightsUID.utils.card import resolve_or_reply  # noqa: E402
 
 
 @notify_sv.on_command(
@@ -353,9 +338,9 @@ async def _send_text(bot: Bot, ev: Event, msg: str) -> None:
 )
 async def subscribe_sanity_push(bot: Bot, ev: Event) -> None:
     uid, index = _extract_target(ev.text)
-    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-    if isinstance(credential, str):
-        return await _send_text(bot, ev, credential)
+    credential = await resolve_or_reply(bot, ev, uid, index)
+    if credential is None:
+        return
 
     # single 模式：同 user 一条/uid；重复订阅同 uid 只会刷新行
     await gs_subscribe.add_subscribe(
@@ -368,7 +353,8 @@ async def subscribe_sanity_push(bot: Bot, ev: Event) -> None:
 
     shown = credential.nickname or hide_uid(credential.uid)
     await _send_text(
-        bot, ev,
+        bot,
+        ev,
         f"已订阅理智回满推送：{shown}\n"
         f"理智回满时会在这里提醒你一次，用理智后自动恢复提醒。\n"
         f"取消：ark取消订阅理智",
@@ -386,9 +372,9 @@ async def subscribe_sanity_push(bot: Bot, ev: Event) -> None:
 async def unsubscribe_sanity_push(bot: Bot, ev: Event) -> None:
     uid, index = _extract_target(ev.text)
     if uid or index:
-        credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-        if isinstance(credential, str):
-            return await _send_text(bot, ev, credential)
+        credential = await resolve_or_reply(bot, ev, uid, index)
+        if credential is None:
+            return
         target_uid = credential.uid
         await gs_subscribe.delete_subscribe(
             "single", task_name=TASK_NAME, event=ev, uid=target_uid
@@ -398,9 +384,7 @@ async def unsubscribe_sanity_push(bot: Bot, ev: Event) -> None:
         save_push_state(state)
         return await _send_text(bot, ev, "已取消该账号的理智回满推送。")
 
-    await gs_subscribe.delete_subscribe(
-        "single", task_name=TASK_NAME, event=ev
-    )
+    await gs_subscribe.delete_subscribe("single", task_name=TASK_NAME, event=ev)
     prefix = f"{ev.bot_id}|{ev.user_id}|"
     state = load_push_state()
     for key in [k for k in state if k.startswith(prefix)]:
@@ -626,9 +610,9 @@ def _save_train_state(state: dict[str, dict]) -> None:
 async def subscribe_training_push(bot: Bot, ev: Event) -> None:
     lead_secs, target_text = parse_training_lead(ev.text)
     uid, index = _extract_target(target_text)
-    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-    if isinstance(credential, str):
-        return await _send_text(bot, ev, credential)
+    credential = await resolve_or_reply(bot, ev, uid, index)
+    if credential is None:
+        return
 
     await gs_subscribe.add_subscribe(
         "single", task_name=TRAIN_TASK_NAME, event=ev, uid=credential.uid
@@ -647,7 +631,9 @@ async def subscribe_training_push(bot: Bot, ev: Event) -> None:
     # 不再让预警重复一遍——剩余已进窗口时直接把 warned 置位
     status_line = "训练室状态未知（稍后轮询会自动补上）。"
     state_value: dict = {
-        "notified": False, "trainee": "", "warn_window": window,
+        "notified": False,
+        "trainee": "",
+        "warn_window": window,
     }
     try:
         response = await fetch_cached_player_info(credential)
@@ -671,16 +657,14 @@ async def subscribe_training_push(bot: Bot, ev: Event) -> None:
                     state_value["warned"] = remaining <= window
                 elif building.training_trainee_id and remaining == 0:
                     status_line = (
-                        f"当前在训：{building.training_trainee}，"
-                        "专精已完成，可上号领取"
+                        f"当前在训：{building.training_trainee}，专精已完成，可上号领取"
                     )
                     state_value["trainee"] = building.training_trainee_id
                 else:
                     status_line = "训练室当前空闲，开训后自动开始提醒。"
     except Exception as exc:
         logger.warning(
-            f"[ArknightsUID·训练推送] 订阅时查询训练室失败: "
-            f"{exc.__class__.__name__}"
+            f"[ArknightsUID·训练推送] 订阅时查询训练室失败: {exc.__class__.__name__}"
         )
 
     state = _load_train_state()
@@ -689,7 +673,8 @@ async def subscribe_training_push(bot: Bot, ev: Event) -> None:
 
     shown = credential.nickname or hide_uid(credential.uid)
     await _send_text(
-        bot, ev,
+        bot,
+        ev,
         f"已订阅专精训练推送：{shown}\n"
         f"{status_line}\n"
         f"剩余不足{format_lead_secs(window)}时提醒一次，完成时再提醒一次"
@@ -710,9 +695,9 @@ async def subscribe_training_push(bot: Bot, ev: Event) -> None:
 async def unsubscribe_training_push(bot: Bot, ev: Event) -> None:
     uid, index = _extract_target(ev.text)
     if uid or index:
-        credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-        if isinstance(credential, str):
-            return await _send_text(bot, ev, credential)
+        credential = await resolve_or_reply(bot, ev, uid, index)
+        if credential is None:
+            return
         target_uid = credential.uid
         await gs_subscribe.delete_subscribe(
             "single", task_name=TRAIN_TASK_NAME, event=ev, uid=target_uid
@@ -722,9 +707,7 @@ async def unsubscribe_training_push(bot: Bot, ev: Event) -> None:
         _save_train_state(state)
         return await _send_text(bot, ev, "已取消该账号的专精训练推送。")
 
-    await gs_subscribe.delete_subscribe(
-        "single", task_name=TRAIN_TASK_NAME, event=ev
-    )
+    await gs_subscribe.delete_subscribe("single", task_name=TRAIN_TASK_NAME, event=ev)
     prefix = f"{ev.bot_id}|{ev.user_id}|"
     state = _load_train_state()
     for key in [k for k in state if k.startswith(prefix)]:
@@ -733,9 +716,7 @@ async def unsubscribe_training_push(bot: Bot, ev: Event) -> None:
     await _send_text(bot, ev, "已取消全部专精训练推送。")
 
 
-def format_training_push_message(
-    name: str, trainee_name: str, uid_masked: str
-) -> str:
+def format_training_push_message(name: str, trainee_name: str, uid_masked: str) -> str:
     return (
         "「明日方舟」专精训练完成\n"
         f"{name or '博士'}（UID {uid_masked}）训练室的 "
@@ -744,9 +725,7 @@ def format_training_push_message(
     )
 
 
-@scheduler.scheduled_job(
-    "interval", minutes=TRAIN_POLL_MINUTES, id="ark_training_push"
-)
+@scheduler.scheduled_job("interval", minutes=TRAIN_POLL_MINUTES, id="ark_training_push")
 async def check_training_push() -> None:
     _t0 = time.monotonic()
     """定时检查各订阅账号训练室，完成推送一次（换训干员后重新武装）。"""
@@ -823,8 +802,10 @@ async def check_training_push() -> None:
                 )
                 # 发送失败不落 notified，下轮重试
                 new_state = {
-                    "notified": False, "trainee": prev_trainee,
-                    "warned": False, "warn_window": warn_window,
+                    "notified": False,
+                    "trainee": prev_trainee,
+                    "warned": False,
+                    "warn_window": warn_window,
                 }
         elif should_warn:
             message = format_training_warn_message(
@@ -889,16 +870,17 @@ def _iso_week_key(now_ts: float | None = None) -> str:
 @notify_sv.on_command(("订阅剿灭",), block=True)
 async def subscribe_campaign_push(bot: Bot, ev: Event) -> None:
     uid, index = _extract_target(ev.text)
-    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-    if isinstance(credential, str):
-        return await _send_text(bot, ev, credential)
+    credential = await resolve_or_reply(bot, ev, uid, index)
+    if credential is None:
+        return
 
     await gs_subscribe.add_subscribe(
         "single", task_name=CAMPAIGN_TASK_NAME, event=ev, uid=credential.uid
     )
     shown = credential.nickname or hide_uid(credential.uid)
     await _send_text(
-        bot, ev,
+        bot,
+        ev,
         f"已订阅剿灭周提醒：{shown}\n"
         f"每周五 20:00 检查本周合成玉，没拿满会提醒你。\n"
         f"取消：ark取消订阅剿灭",
@@ -909,9 +891,9 @@ async def subscribe_campaign_push(bot: Bot, ev: Event) -> None:
 async def unsubscribe_campaign_push(bot: Bot, ev: Event) -> None:
     uid, index = _extract_target(ev.text)
     if uid or index:
-        credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-        if isinstance(credential, str):
-            return await _send_text(bot, ev, credential)
+        credential = await resolve_or_reply(bot, ev, uid, index)
+        if credential is None:
+            return
         await gs_subscribe.delete_subscribe(
             "single", task_name=CAMPAIGN_TASK_NAME, event=ev, uid=credential.uid
         )
@@ -923,9 +905,7 @@ async def unsubscribe_campaign_push(bot: Bot, ev: Event) -> None:
     await _send_text(bot, ev, "已取消全部剿灭周提醒。")
 
 
-def evaluate_campaign(
-    campaign_current: int, campaign_total: int
-) -> tuple[bool, int]:
+def evaluate_campaign(campaign_current: int, campaign_total: int) -> tuple[bool, int]:
     """剿灭提醒判定：未拿满 → (需提醒, 剩余合成玉)。"""
     if campaign_total <= 0:
         return False, 0
@@ -983,6 +963,7 @@ async def check_campaign_push() -> None:
                     f"[ArknightsUID·剿灭提醒] 推送失败: {exc.__class__.__name__}"
                 )
                 continue  # 发送失败不落周标记：重启后的下次触发还能补发
+
         # 无论是否需要提醒，本周已检查过就落标记（未拿满也只提醒一次）。
         # 键级合并写：整文件覆盖会把轮询窗口内其他任务/进程刚写入的键
         # （如理智推送的 notified）回滚（审计 #39）
@@ -1056,9 +1037,7 @@ def evaluate_tired(tired_count: int, notified: bool) -> tuple[bool, bool]:
     return is_tired, is_tired and not notified
 
 
-def evaluate_recruit(
-    done_slots: list[int], seen: list[int]
-) -> tuple[list[int], bool]:
+def evaluate_recruit(done_slots: list[int], seen: list[int]) -> tuple[list[int], bool]:
     """公招完成：已到点槽位的 finishTs 去重（seen 内不重复提醒）。
 
     返回 (本轮新完成的 finishTs 列表, should_push)。
@@ -1122,16 +1101,17 @@ def format_recruit_push_message(name: str, done_count: int, uid_masked: str) -> 
 )
 async def subscribe_building_push(bot: Bot, ev: Event) -> None:
     uid, index = _extract_target(ev.text)
-    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-    if isinstance(credential, str):
-        return await _send_text(bot, ev, credential)
+    credential = await resolve_or_reply(bot, ev, uid, index)
+    if credential is None:
+        return
 
     await gs_subscribe.add_subscribe(
         "single", task_name=BUILDING_TASK_NAME, event=ev, uid=credential.uid
     )
     shown = credential.nickname or hide_uid(credential.uid)
     await _send_text(
-        bot, ev,
+        bot,
+        ev,
         f"已订阅基建推送：{shown}\n"
         f"无人机回满 / 贸易订单满 / 干员心情过低 / 公招完成时各提醒一次，\n"
         f"处理后自动恢复提醒（专精训练另有 ark订阅训练，含剩余时间预警）。\n"
@@ -1150,9 +1130,9 @@ async def subscribe_building_push(bot: Bot, ev: Event) -> None:
 async def unsubscribe_building_push(bot: Bot, ev: Event) -> None:
     uid, index = _extract_target(ev.text)
     if uid or index:
-        credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-        if isinstance(credential, str):
-            return await _send_text(bot, ev, credential)
+        credential = await resolve_or_reply(bot, ev, uid, index)
+        if credential is None:
+            return
         await gs_subscribe.delete_subscribe(
             "single", task_name=BUILDING_TASK_NAME, event=ev, uid=credential.uid
         )
@@ -1218,15 +1198,20 @@ async def check_building_push() -> None:
         building = parse_building(data)
         if building is not None:
             labor_full, labor_push = evaluate_full(
-                building.labor_value, building.labor_max,
+                building.labor_value,
+                building.labor_max,
                 bool(prev.get("labor")),
             )
             if labor_push:
                 try:
-                    await _CheckedSubscribe(subscribe).send(format_labor_push_message(
-                        nickname, building.labor_value, building.labor_max,
-                        hide_uid(uid),
-                    ))
+                    await _CheckedSubscribe(subscribe).send(
+                        format_labor_push_message(
+                            nickname,
+                            building.labor_value,
+                            building.labor_max,
+                            hide_uid(uid),
+                        )
+                    )
                     logger.info(
                         f"[ArknightsUID·基建推送] 无人机满 user={subscribe.user_id} "
                         f"uid={hide_uid(uid)}"
@@ -1256,9 +1241,13 @@ async def check_building_push() -> None:
                     if room.stock_limit > 0 and room.stock_count >= room.stock_limit
                 ]
                 try:
-                    await _CheckedSubscribe(subscribe).send(format_trading_push_message(
-                        nickname, full_rows, hide_uid(uid),
-                    ))
+                    await _CheckedSubscribe(subscribe).send(
+                        format_trading_push_message(
+                            nickname,
+                            full_rows,
+                            hide_uid(uid),
+                        )
+                    )
                     logger.info(
                         f"[ArknightsUID·基建推送] 贸易满 user={subscribe.user_id} "
                         f"uid={hide_uid(uid)}"
@@ -1275,11 +1264,13 @@ async def check_building_push() -> None:
             )
             if tired_push:
                 try:
-                    await _CheckedSubscribe(subscribe).send(format_tired_push_message(
-                        nickname,
-                        [(c.name, c.room, c.morale) for c in building.tired_chars],
-                        hide_uid(uid),
-                    ))
+                    await _CheckedSubscribe(subscribe).send(
+                        format_tired_push_message(
+                            nickname,
+                            [(c.name, c.room, c.morale) for c in building.tired_chars],
+                            hide_uid(uid),
+                        )
+                    )
                     logger.info(
                         f"[ArknightsUID·基建推送] 低心情 user={subscribe.user_id} "
                         f"uid={hide_uid(uid)} n={len(building.tired_chars)}"
@@ -1302,9 +1293,13 @@ async def check_building_push() -> None:
         )
         if recruit_push:
             try:
-                await _CheckedSubscribe(subscribe).send(format_recruit_push_message(
-                    nickname, len(fresh_done), hide_uid(uid),
-                ))
+                await _CheckedSubscribe(subscribe).send(
+                    format_recruit_push_message(
+                        nickname,
+                        len(fresh_done),
+                        hide_uid(uid),
+                    )
+                )
                 logger.info(
                     f"[ArknightsUID·基建推送] 公招完成 user={subscribe.user_id} "
                     f"uid={hide_uid(uid)} n={len(fresh_done)}"
@@ -1411,16 +1406,17 @@ def format_sign_push_message(
 )
 async def subscribe_sign_push(bot: Bot, ev: Event) -> None:
     uid, index = _extract_target(ev.text)
-    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-    if isinstance(credential, str):
-        return await _send_text(bot, ev, credential)
+    credential = await resolve_or_reply(bot, ev, uid, index)
+    if credential is None:
+        return
 
     await gs_subscribe.add_subscribe(
         "single", task_name=SIGN_TASK_NAME, event=ev, uid=credential.uid
     )
     shown = credential.nickname or hide_uid(credential.uid)
     await _send_text(
-        bot, ev,
+        bot,
+        ev,
         f"已订阅每日自动签到：{shown}\n"
         f"每天 08:05 自动完成森空岛签到并回报结果（今日已签则静默）。\n"
         f"取消：ark取消订阅签到",
@@ -1438,9 +1434,9 @@ async def subscribe_sign_push(bot: Bot, ev: Event) -> None:
 async def unsubscribe_sign_push(bot: Bot, ev: Event) -> None:
     uid, index = _extract_target(ev.text)
     if uid or index:
-        credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
-        if isinstance(credential, str):
-            return await _send_text(bot, ev, credential)
+        credential = await resolve_or_reply(bot, ev, uid, index)
+        if credential is None:
+            return
         await gs_subscribe.delete_subscribe(
             "single", task_name=SIGN_TASK_NAME, event=ev, uid=credential.uid
         )
@@ -1449,9 +1445,7 @@ async def unsubscribe_sign_push(bot: Bot, ev: Event) -> None:
         _save_sign_state(state)
         return await _send_text(bot, ev, "已取消该账号的自动签到。")
 
-    await gs_subscribe.delete_subscribe(
-        "single", task_name=SIGN_TASK_NAME, event=ev
-    )
+    await gs_subscribe.delete_subscribe("single", task_name=SIGN_TASK_NAME, event=ev)
     prefix = f"{ev.bot_id}|{ev.user_id}|"
     state = _load_sign_state()
     for key in [k for k in state if k.startswith(prefix)]:
@@ -1488,7 +1482,7 @@ async def check_sign_push() -> None:
     from datetime import date
 
     today = date.today().isoformat()
-    from ..utils.reply_safety import safe_external_message
+    from ArknightsUID.utils.reply_safety import safe_external_message
 
     for subscribe in datas:
         uid = str(subscribe.uid or "")
@@ -1506,6 +1500,10 @@ async def check_sign_push() -> None:
             continue
 
         response = await ark_attendance(credential)
+        # 签到改变账号状态：清 player_info 本地缓存，避免 TTL 窗口内查旧数据
+        # （"already" 也清——签到可能发生在缓存写入之后）
+        if isinstance(response, dict):
+            await drop_cached_player_info(uid)
         outcome = evaluate_sign_result(response)
         message = ""
         if isinstance(response, dict):
@@ -1549,7 +1547,7 @@ _SIGN_ALL_LIMIT = 50
 
 @sign_all_sv.on_fullmatch(("全部签到", "签到全部"), block=True)
 async def sign_all_accounts(bot: Bot, ev: Event) -> None:
-    from ..utils.database.models import ArkUser
+    from ArknightsUID.utils.database.models import ArkUser
 
     try:
         rows = await ArkUser.select_rows(cookie_status="")
@@ -1572,7 +1570,9 @@ async def sign_all_accounts(bot: Bot, ev: Event) -> None:
     if not targets:
         return await _send_text(bot, ev, "没有可用登录（需先 ark绑定）。")
 
-    await _send_text(bot, ev, f"开始为 {min(len(targets), _SIGN_ALL_LIMIT)} 个账号签到…")
+    await _send_text(
+        bot, ev, f"开始为 {min(len(targets), _SIGN_ALL_LIMIT)} 个账号签到…"
+    )
     ok = failed = skipped = 0
     for user_id, bot_id, uid in targets[:_SIGN_ALL_LIMIT]:
         credential = await resolve_credential(user_id, bot_id, uid=uid)
@@ -1586,6 +1586,8 @@ async def sign_all_accounts(bot: Bot, ev: Event) -> None:
         if isinstance(response, str):
             failed += 1
             continue
+        # 签到改变账号状态：清 player_info 本地缓存（同上方自动签到）
+        await drop_cached_player_info(uid)
         # 10001 既可能是"今日已签"也可能是 cred 失效（request_util 注释
         # 自证歧义，审计 #31）：按 message 区分，失效账号计入失败而不是
         # 被全绿统计掩盖

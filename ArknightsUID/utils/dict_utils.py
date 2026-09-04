@@ -3,6 +3,7 @@
 从 arknightsuid_account 提炼（account 保留私有副本 _value/_path/_first_path，
 迁移留待后续；本模块是新模块的单一事实源，避免重复实现与 regex 分叉）。
 """
+
 from __future__ import annotations
 
 from typing import Any

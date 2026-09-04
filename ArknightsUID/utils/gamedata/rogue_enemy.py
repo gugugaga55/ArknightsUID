@@ -15,6 +15,7 @@
 仅服务肉鸽场景：enemy_database 是 IS 出怪池的并集，与主线 ark敌人（PRTS）
 互补；交互式全 buff 模拟（藏品/分队/密文叠加）请用 tomimi.dev。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -35,12 +36,9 @@ IS_ENEMY_CACHE_DIR = GAMEDATA_CACHE_DIR / "is_enemy"
 _DATA_TTL = 30 * 86400.0
 
 # 数据直链（jsdelivr CDN：content-type 正确、快；raw 直链核心下载器会 5s 超时）
-_TOMIMI_BASE = (
-    "https://cdn.jsdelivr.net/gh/tanch-p/tomimi-dev@main/src/lib/data"
-)
+_TOMIMI_BASE = "https://cdn.jsdelivr.net/gh/tanch-p/tomimi-dev@main/src/lib/data"
 _ICON_BASE = (
-    "https://cdn.jsdelivr.net/gh/tanch-p/tomimi-dev@main"
-    "/static/images/enemy_icons"
+    "https://cdn.jsdelivr.net/gh/tanch-p/tomimi-dev@main/static/images/enemy_icons"
 )
 _ICON_MISS_TTL = 3600.0
 
@@ -57,18 +55,34 @@ THEME_DIRS = {
 # 查询用的期别名（用户输入 → 期目录；含显示名、常用简称与「X肉鸽」叫法，
 # 多数用户记不住主题全称，短名/肉鸽后缀都叫得出来）
 THEME_ALIASES: dict[str, str] = {
-    "傀影": "phantom", "猩红": "phantom", "傀影与猩红孤钻": "phantom",
-    "傀影肉鸽": "phantom", "猩红肉鸽": "phantom",
-    "水月": "mizuki", "深蓝": "mizuki", "水月与深蓝之树": "mizuki",
+    "傀影": "phantom",
+    "猩红": "phantom",
+    "傀影与猩红孤钻": "phantom",
+    "傀影肉鸽": "phantom",
+    "猩红肉鸽": "phantom",
+    "水月": "mizuki",
+    "深蓝": "mizuki",
+    "水月与深蓝之树": "mizuki",
     "水月肉鸽": "mizuki",
-    "萨米": "sami", "银凇": "sami", "萨米的腐朽安眠": "sami",
+    "萨米": "sami",
+    "银凇": "sami",
+    "萨米的腐朽安眠": "sami",
     "萨米肉鸽": "sami",
-    "萨卡兹": "sarkaz", "无终奇语": "sarkaz", "萨卡兹的无终奇语": "sarkaz",
+    "萨卡兹": "sarkaz",
+    "无终奇语": "sarkaz",
+    "萨卡兹的无终奇语": "sarkaz",
     "萨卡兹肉鸽": "sarkaz",
-    "岁": "sui", "界园": "sui", "岁的界园志异": "sui", "界园肉鸽": "sui",
-    "黑流": "black", "树海": "black", "沉沦者": "black",
-    "沉沦者的黑流树海": "black", "黑流树海": "black",
-    "树海肉鸽": "black", "黑流肉鸽": "black",
+    "岁": "sui",
+    "界园": "sui",
+    "岁的界园志异": "sui",
+    "界园肉鸽": "sui",
+    "黑流": "black",
+    "树海": "black",
+    "沉沦者": "black",
+    "沉沦者的黑流树海": "black",
+    "黑流树海": "black",
+    "树海肉鸽": "black",
+    "黑流肉鸽": "black",
 }
 
 # enemy.type 标签 → 期目录（归属启发式；权威判定是难度效果里的显式 targets）
@@ -97,21 +111,34 @@ def resolve_theme_dir(name: str) -> str | None:
             return theme_dir
     return None
 
+
 # 面板数值字段（参与难度折算表）；aspd/ms/range 等次级属性走形态行 extras
 PANEL_STATS = ("hp", "atk", "def", "res")
 STAT_LABELS = {"hp": "HP", "atk": "攻", "def": "防", "res": "抗"}
 
 # status_immune 键 → 中文（tomimi 用游戏异常状态键；顺序即展示顺序）
 _STATUS_LABELS = {
-    "stun": "眩晕", "silence": "沉默", "sleep": "沉睡", "freeze": "冻结",
-    "levitate": "浮空", "tremble": "战栗", "fear": "恐惧", "palsy": "麻痹",
-    "attract": "诱导", "sluggish": "迟缓",
+    "stun": "眩晕",
+    "silence": "沉默",
+    "sleep": "沉睡",
+    "freeze": "冻结",
+    "levitate": "浮空",
+    "tremble": "战栗",
+    "fear": "恐惧",
+    "palsy": "麻痹",
+    "attract": "诱导",
+    "sluggish": "迟缓",
 }
 
 # 非面板难度效果键 → 中文标签（hp/atk/def/res 折算进数值列，不进 note）
 _MOD_LABELS = {
-    "hp": "生命", "atk": "攻击", "def": "防御", "res": "法抗",
-    "ms": "移速", "aspd": "攻速", "dmg_res": "受到伤害",
+    "hp": "生命",
+    "atk": "攻击",
+    "def": "防御",
+    "res": "法抗",
+    "ms": "移速",
+    "aspd": "攻速",
+    "dmg_res": "受到伤害",
 }
 
 
@@ -139,7 +166,11 @@ def _mod_note(mod: dict) -> str:
         return f"{label}×{_fmt_num(value)}"
     if mode == "add":
         value_text = _fmt_num(value)
-        return f"{label}+{value_text}" if float(value or 0) >= 0 else f"{label}{value_text}"
+        return (
+            f"{label}+{value_text}"
+            if float(value or 0) >= 0
+            else f"{label}{value_text}"
+        )
     return f"{label} {_fmt_num(value)}"
 
 
@@ -325,11 +356,14 @@ def form_mechanisms(entry: dict, skill_dict: dict[str, list[str]]) -> list[list[
 # 实测 2026-08 更新：ro1-6 均有出怪数据；ro5/6（岁/黑流）文件多一层
 # {"name","data":[...]} 包装（_load_stage_file 已归一化）。
 _THEME_ROGUE_NUM = {
-    "phantom": 1, "mizuki": 2, "sami": 3, "sarkaz": 4, "sui": 5, "black": 6,
+    "phantom": 1,
+    "mizuki": 2,
+    "sami": 3,
+    "sarkaz": 4,
+    "sui": 5,
+    "black": 6,
 }
-_STAGES_BASE = (
-    "https://cdn.jsdelivr.net/gh/tanch-p/tomimi-dev@main/src/lib/data/stages"
-)
+_STAGES_BASE = "https://cdn.jsdelivr.net/gh/tanch-p/tomimi-dev@main/src/lib/data/stages"
 _STAGE_CACHE_DIR = Path(IS_ENEMY_CACHE_DIR) / "stages"
 # 全量关卡文件并发上限（约 250 个文件 × ~40KB，首次构建拉满也要留余地）
 _STAGE_FETCH_CONCURRENCY = 8
@@ -430,9 +464,7 @@ async def _do_build_stage_index() -> dict[str, list[dict]]:
                 }
             )
 
-    metas = await asyncio.gather(
-        *(_load_stage_meta(t) for t in _THEME_ROGUE_NUM)
-    )
+    metas = await asyncio.gather(*(_load_stage_meta(t) for t in _THEME_ROGUE_NUM))
     tasks = [
         _one(theme_dir, level_id, meta)
         for theme_dir, meta in zip(_THEME_ROGUE_NUM, metas)
@@ -521,15 +553,9 @@ async def find_stage(name: str) -> dict | None:
     同名变体总数（调用方可提示用户）。找不到返回 None（再走
     search_stages 模糊候选）。
     """
-    metas = await asyncio.gather(
-        *(_load_stage_meta(t) for t in _THEME_ROGUE_NUM)
-    )
+    metas = await asyncio.gather(*(_load_stage_meta(t) for t in _THEME_ROGUE_NUM))
     for theme_dir, meta in zip(_THEME_ROGUE_NUM, metas):
-        hits = [
-            (level_id, m)
-            for level_id, m in meta.items()
-            if m.get("name") == name
-        ]
+        hits = [(level_id, m) for level_id, m in meta.items() if m.get("name") == name]
         if hits:
             level_id, m = sorted(hits)[0]
             return {
@@ -565,9 +591,7 @@ async def search_stages(query: str, limit: int = 8) -> list[dict]:
                     )
         return hits
 
-    all_metas = await asyncio.gather(
-        *(_load_stage_meta(t) for t in _THEME_ROGUE_NUM)
-    )
+    all_metas = await asyncio.gather(*(_load_stage_meta(t) for t in _THEME_ROGUE_NUM))
     for pred in (lambda n: n == q, lambda n: n.startswith(q), lambda n: q in n):
         candidates = _collect(pred)
         if len(candidates) == 1:
@@ -616,9 +640,7 @@ def stage_panel_rows(
                 difficulty if difficulty is not None else 99,
             )
         else:
-            stats = {
-                stat: round(float(block.get(stat) or 0)) for stat in PANEL_STATS
-            }
+            stats = {stat: round(float(block.get(stat) or 0)) for stat in PANEL_STATS}
         lo, hi = int(item.get("min_count") or 0), int(item.get("max_count") or 0)
         if lo == hi and hi > 0:
             count = str(hi)
@@ -643,12 +665,19 @@ def stage_panel_rows(
         )
     return rows
 
+
 _ATK_TYPE_NAMES = {
-    "melee": "近战", "ranged": "远程",
-    "phys": "物理", "arts": "法术", "real": "真实",
+    "melee": "近战",
+    "ranged": "远程",
+    "phys": "物理",
+    "arts": "法术",
+    "real": "真实",
     # 线上数据实际值域（真实伤害有 true/raw 两种键、无 real）：
     # true×5 / raw×29 / no_attack×248 / heal×2，缺映射会裸显英文
-    "true": "真实", "raw": "真实", "no_attack": "不攻击", "heal": "治疗",
+    "true": "真实",
+    "raw": "真实",
+    "no_attack": "不攻击",
+    "heal": "治疗",
 }
 _CLASS_NAMES = {"BOSS": "领袖", "ELITE": "精英", "NORMAL": "普通"}
 
@@ -663,9 +692,7 @@ async def _fetch_json_cached(filename: str) -> Any:
     30 天内多下载一次，自然淘汰）。文件 I/O 走 to_thread 不阻塞事件循环。
     """
     path = Path(IS_ENEMY_CACHE_DIR) / filename
-    return await _fetch_url_json_cached(
-        f"{_TOMIMI_BASE}/enemy/{filename}", path
-    )
+    return await _fetch_url_json_cached(f"{_TOMIMI_BASE}/enemy/{filename}", path)
 
 
 # 负标记 TTL：404（上游未收录，短期不会恢复）7 天；
@@ -765,17 +792,13 @@ async def load_difficulty_mods() -> dict[str, list]:
 
     # 六期难度表互不依赖，并发拉取（此前串行 6 × 20s）
     result: dict[str, list] = {}
-    for theme_dir, data in await asyncio.gather(
-        *(fetch_one(t) for t in THEME_DIRS)
-    ):
+    for theme_dir, data in await asyncio.gather(*(fetch_one(t) for t in THEME_DIRS)):
         if data is not None:
             result[theme_dir] = data
     return result
 
 
-def match_rogue_enemies(
-    query: str, db: dict[str, dict], limit: int = 8
-) -> list[str]:
+def match_rogue_enemies(query: str, db: dict[str, dict], limit: int = 8) -> list[str]:
     """按中文名匹配敌人键：精确 → 唯一前缀 → 唯一子串；多命中返回候选。"""
     q = (query or "").strip()
     if not q:
@@ -873,9 +896,7 @@ def _grade_mods_for_enemy(
     for grade in grades:
         if int(grade.get("difficulty", 0)) > upto:
             continue
-        mods.extend(
-            _effects_mods_for(grade.get("effects"), enemy_key, enemy_types)
-        )
+        mods.extend(_effects_mods_for(grade.get("effects"), enemy_key, enemy_types))
     return mods
 
 
@@ -925,7 +946,7 @@ def build_diff_panels(
     if len(row_grades) > max_rows:
         # 超限时保留新手档 + 最近的高档（靠近满难度最有参考价值）
         head = [g for g in row_grades if g <= 2]
-        tail = [g for g in row_grades if g > 2][-(max_rows - len(head)):]
+        tail = [g for g in row_grades if g > 2][-(max_rows - len(head)) :]
         row_grades = sorted(head + tail)
 
     rows: list[dict] = []
@@ -1012,9 +1033,7 @@ def form_context(entry: dict) -> list[dict]:
     for i, block in enumerate(stats_blocks):
         form = forms[i] if i < len(forms) else {}
         attack = form.get("normal_attack") or {}
-        atk_tags = [
-            _ATK_TYPE_NAMES.get(t, t) for t in (attack.get("atk_type") or [])
-        ]
+        atk_tags = [_ATK_TYPE_NAMES.get(t, t) for t in (attack.get("atk_type") or [])]
         attack_text = "/".join(t for t in atk_tags if t) or "-"
         hits = int(attack.get("hits") or 1)
         if hits > 1:

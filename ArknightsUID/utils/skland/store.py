@@ -3,6 +3,7 @@
 不依赖 ArkCredential（避免与 adapter 循环 import）——list_local_accounts 直接
 返回 ArkUser ORM 对象，由 adapter.resolve_accounts 映射成 ArkCredential。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -10,20 +11,9 @@ from typing import Any
 
 from gsuid_core.logger import logger
 
-try:
-    from ArknightsUID.ArknightsUID.utils.crypto import (
-        EncryptionUnavailableError,
-        encrypt_secret,
-    )
-    from ArknightsUID.ArknightsUID.utils.database.models import ArkBind, ArkUser
-    from ArknightsUID.ArknightsUID.utils.skland.auth import list_ark_roles_by_cred
-except ModuleNotFoundError:
-    from ArknightsUID.utils.crypto import (
-        EncryptionUnavailableError,
-        encrypt_secret,
-    )
-    from ArknightsUID.utils.database.models import ArkBind, ArkUser
-    from ArknightsUID.utils.skland.auth import list_ark_roles_by_cred
+from ..crypto import EncryptionUnavailableError, encrypt_secret
+from ..database.models import ArkBind, ArkUser
+from .auth import list_ark_roles_by_cred
 
 
 async def list_local_accounts(user_id: str, bot_id: str) -> list[ArkUser]:
@@ -140,8 +130,7 @@ async def remove_ark_login(user_id: str, bot_id: str, uid: str = "") -> int:
         deleted = await ArkUser.delete_by_user(user_id, bot_id, uid=uid)
         if deleted is None:
             logger.error(
-                f"[ArknightsUID·绑定] 删除登录时数据库不可用 uid={uid}: "
-                "已按未找到处理"
+                f"[ArknightsUID·绑定] 删除登录时数据库不可用 uid={uid}: 已按未找到处理"
             )
             deleted = 0
         if deleted:
@@ -161,8 +150,7 @@ async def remove_ark_login(user_id: str, bot_id: str, uid: str = "") -> int:
     # 误导性成功文案（审计 #39）
     if count is None:
         logger.error(
-            f"[ArknightsUID·绑定] 删除登录时数据库不可用 user={user_id}: "
-            "删除未确认完成"
+            f"[ArknightsUID·绑定] 删除登录时数据库不可用 user={user_id}: 删除未确认完成"
         )
         count = 0
     return count

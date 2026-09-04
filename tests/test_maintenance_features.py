@@ -107,6 +107,7 @@ class PlaywrightArgsTest(unittest.TestCase):
 class DeleteGachaRecordsTest(unittest.IsolatedAsyncioTestCase):
     async def test_delete_clears_local_logs(self) -> None:
         import ArknightsUID.arknightsuid_gacha as gacha_mod
+        import ArknightsUID.utils.card as ark_card
         from ArknightsUID.utils.enduid.adapter import ArkCredential
 
         calls: dict[str, object] = {}
@@ -136,7 +137,7 @@ class DeleteGachaRecordsTest(unittest.IsolatedAsyncioTestCase):
         ev = SimpleNamespace(
             user_id="u", bot_id="b", group_id="", text="",
         )
-        with mock.patch.object(gacha_mod, "resolve_credential", fake_resolve), \
+        with mock.patch.object(ark_card, "resolve_credential", fake_resolve), \
              mock.patch.object(gacha_mod, "load_local_logs", fake_load), \
              mock.patch.object(gacha_mod, "save_local_logs", fake_save), \
              mock.patch.object(gacha_mod, "hide_uid_for", mock.AsyncMock(return_value="123***789")):
@@ -150,6 +151,7 @@ class DeleteGachaRecordsTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_delete_with_no_records(self) -> None:
         import ArknightsUID.arknightsuid_gacha as gacha_mod
+        import ArknightsUID.utils.card as ark_card
         from ArknightsUID.utils.enduid.adapter import ArkCredential
 
         cred = ArkCredential(
@@ -171,7 +173,7 @@ class DeleteGachaRecordsTest(unittest.IsolatedAsyncioTestCase):
                 sent.append(str(msg))
 
         ev = SimpleNamespace(user_id="u", bot_id="b", group_id="", text="")
-        with mock.patch.object(gacha_mod, "resolve_credential", fake_resolve), \
+        with mock.patch.object(ark_card, "resolve_credential", fake_resolve), \
              mock.patch.object(gacha_mod, "load_local_logs", fake_load), \
              mock.patch.object(gacha_mod, "save_local_logs", mock.AsyncMock()) as m_save, \
              mock.patch.object(gacha_mod, "hide_uid_for", mock.AsyncMock(return_value="123***789")):

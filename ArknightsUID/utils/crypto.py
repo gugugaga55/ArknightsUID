@@ -25,9 +25,9 @@ token / hg_token 以密文落库，拿到数据库文件不再等于拿到全部
 错配）。
 """
 
-
 from __future__ import annotations
 
+import asyncio
 import os
 import threading
 import time
@@ -46,6 +46,7 @@ class EncryptionUnavailableError(RuntimeError):
 
     调用方应中止本次凭据落库并提示用户检查密钥，而不是明文存储。
     """
+
 
 _lock = threading.Lock()
 _fernet = None
@@ -73,7 +74,9 @@ def _load_or_create_key_file() -> bytes | None:
     except FileNotFoundError:
         pass
     except OSError as exc:
-        logger.warning(f"[ArknightsUID·加密] 读取密钥文件失败: {exc.__class__.__name__}")
+        logger.warning(
+            f"[ArknightsUID·加密] 读取密钥文件失败: {exc.__class__.__name__}"
+        )
         return None
 
     if path.exists():
@@ -207,6 +210,16 @@ def _reset_cache() -> None:
         _fernet_failed = False
 
 
+async def warmup() -> bool:
+    """启动期在线程内预初始化 Fernet，返回是否可用。
+
+    密钥首建/并发等待/损坏自愈路径里有同步 time.sleep（最坏 150ms）——
+    提前在线程里初始化后，用户命令在事件循环线程上触达 crypto 时只
+    命中进程级缓存，不再阻塞循环。
+    """
+    return await asyncio.to_thread(lambda: _get_fernet() is not None)
+
+
 def encrypt_secret(value: str) -> str:
     """加密敏感字段；空串与已加密值原样返回。
 
@@ -225,9 +238,7 @@ def encrypt_secret(value: str) -> str:
     try:
         return ENC_PREFIX + fernet.encrypt(text.encode("utf-8")).decode("ascii")
     except Exception as exc:
-        raise EncryptionUnavailableError(
-            f"加密失败: {exc.__class__.__name__}"
-        ) from exc
+        raise EncryptionUnavailableError(f"加密失败: {exc.__class__.__name__}") from exc
 
 
 def decrypt_secret(value: str | None) -> str:
@@ -241,7 +252,7 @@ def decrypt_secret(value: str | None) -> str:
     from cryptography.fernet import InvalidToken
 
     try:
-        return fernet.decrypt(text[len(ENC_PREFIX):].encode("ascii")).decode("utf-8")
+        return fernet.decrypt(text[len(ENC_PREFIX) :].encode("ascii")).decode("utf-8")
     except InvalidToken:
         # 只打前缀片段定位问题，绝不打出完整密文/明文
         logger.warning(

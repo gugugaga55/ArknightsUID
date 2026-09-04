@@ -7,6 +7,7 @@ get_oauth_header / get_cred_header（已是本地复刻，非 import EndUID）�
 - as.hypergryph.com 系列（OAuth grant / scan / token_by_scan）：status == 0
 - zonai.skland.com 系列（cred / binding）：code == 0
 """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -31,8 +32,8 @@ TOKEN_BY_SCAN_CODE_API = "https://as.hypergryph.com/user/auth/v1/token_by_scan_c
 
 # get_cred_by_token 的错误码（结构化，替代此前的字面量 "405" 三态返回）
 CRED_ERR_OK = ""
-CRED_ERR_UNAVAILABLE = "unavailable"   # 服务暂不可用（HTTP 405：IP 受限/风控）
-CRED_ERR_FAILED = "failed"             # 网络/业务失败
+CRED_ERR_UNAVAILABLE = "unavailable"  # 服务暂不可用（HTTP 405：IP 受限/风控）
+CRED_ERR_FAILED = "failed"  # 网络/业务失败
 
 
 async def _request(

@@ -3,38 +3,27 @@ from __future__ import annotations
 import asyncio
 
 from gsuid_core.bot import Bot
+from gsuid_core.logger import logger
 from gsuid_core.models import Event
 from gsuid_core.sv import SV
-from gsuid_core.utils.cookie_manager.qrlogin import get_qrcode_base64
 
+# gsuid_core 内部工具（挪动/改名时降级为可读错误，不拖垮模块加载）
 try:
-    from ArknightsUID.ArknightsUID.utils.account_switch import (
-        clear_default_uid,
-        get_default_uid,
-    )
-    from ArknightsUID.ArknightsUID.utils.arg_utils import extract_uid
-    from ArknightsUID.ArknightsUID.utils.config import ArkConfig
-    from ArknightsUID.ArknightsUID.utils.enduid.adapter import hide_uid
-    from ArknightsUID.ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
-    from ArknightsUID.ArknightsUID.utils.skland import auth as ark_auth
-    from ArknightsUID.ArknightsUID.utils.skland import store as ark_store
-except ModuleNotFoundError:
-    from ArknightsUID.utils.account_switch import (
-        clear_default_uid,
-        get_default_uid,
-    )
-    from ArknightsUID.utils.arg_utils import extract_uid
-    from ArknightsUID.utils.config import ArkConfig
-    from ArknightsUID.utils.enduid.adapter import hide_uid
-    from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
-    from ArknightsUID.utils.skland import auth as ark_auth
-    from ArknightsUID.utils.skland import store as ark_store
+    from gsuid_core.utils.cookie_manager.qrlogin import get_qrcode_base64
+except ImportError:  # pragma: no cover
+    get_qrcode_base64 = None
 
-# area="DIRECT" 静默屏蔽群聊派发；handler 内 if ev.group_id 是额外保险
-# （防止插件 area 被配成 ALL 绕过 SV 级限制）
-bind_sv = SV("ArknightsUID绑定", area="DIRECT", priority=5)
+from ArknightsUID.utils.account_switch import (
+    clear_default_uid,
+    get_default_uid,
+)
+from ArknightsUID.utils.arg_utils import extract_uid
+from ArknightsUID.utils.config import ArkConfig
+from ArknightsUID.utils.enduid.adapter import hide_uid
+from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
+from ArknightsUID.utils.skland import auth as ark_auth
+from ArknightsUID.utils.skland import store as ark_store
 
-# 扫码登录独立 SV（无 area 限制）：群聊是否放行由 AllowGroupScanLogin
 # 开关在 handler 内实时判定——area="DIRECT" 是框架级静默拦截，开关
 # 开了也进不来，所以扫码不能挂在 bind_sv 下
 scan_sv = SV("ArknightsUID扫码登录", priority=5)
@@ -51,8 +40,10 @@ _GROUP_SCAN_NOTICE = (
 )
 
 
-async def _send_text(bot: Bot, ev: Event, msg: str) -> None:
-    await bot.send((" " if ev.group_id else "") + msg, at_sender=bool(ev.group_id))
+bind_sv = SV("ArknightsUID绑定", area="DIRECT", priority=5)
+
+# 文本回复公共实现在 utils.card.send_text；保留模块级别名供调用点/测试 patch
+from ArknightsUID.utils.card import send_text as _send_text  # noqa: E402
 
 
 def _format_bind_success(roles: list[dict]) -> str:
@@ -65,12 +56,8 @@ def _format_bind_success(roles: list[dict]) -> str:
 
 async def _send_login_success(bot: Bot, ev: Event, roles: list[dict]) -> None:
     """登录成功回执：ark_login.html 卡片图；渲染失败回退纯文本清单。"""
-    try:
-        from ArknightsUID.ArknightsUID.utils.card import send_card_or_text
-        from ArknightsUID.ArknightsUID.version import ArknightsUID_version
-    except ModuleNotFoundError:
-        from ArknightsUID.utils.card import send_card_or_text
-        from ArknightsUID.version import ArknightsUID_version
+    from ArknightsUID.utils.card import send_card_or_text
+    from ArknightsUID.version import ArknightsUID_version
 
     default_uid = get_default_uid(ev.bot_id, ev.user_id)
     context = {
@@ -110,7 +97,9 @@ async def bind_credential(bot: Bot, ev: Event) -> None:
                 bot, ev, "当前服务暂时无法使用 token 登录，请改用 cred 或 ark扫码登录。"
             )
         if not cred_info or not cred_info.get("cred"):
-            return await _send_text(bot, ev, "token 兑换 cred 失败，请检查 token 是否正确。")
+            return await _send_text(
+                bot, ev, "token 兑换 cred 失败，请检查 token 是否正确。"
+            )
         cred = cred_info["cred"]
         skland_user_id = cred_info.get("skland_user_id", "")
         hg_token = value  # token 即 hg_token，抽卡链要用
@@ -118,8 +107,12 @@ async def bind_credential(bot: Bot, ev: Event) -> None:
         cred = value
 
     roles, err = await ark_store.persist_ark_login(
-        ev.user_id, ev.bot_id, ev.group_id, cred,
-        hg_token=hg_token, skland_user_id=skland_user_id,
+        ev.user_id,
+        ev.bot_id,
+        ev.group_id,
+        cred,
+        hg_token=hg_token,
+        skland_user_id=skland_user_id,
     )
     if err:
         return await _send_text(bot, ev, err)
@@ -128,9 +121,7 @@ async def bind_credential(bot: Bot, ev: Event) -> None:
 
 @scan_sv.on_fullmatch(("扫码登录", "扫码登陆"), block=True)
 async def scan_login(bot: Bot, ev: Event) -> None:
-    if ev.group_id and not bool(
-        ArkConfig.get_config("AllowGroupScanLogin").data
-    ):
+    if ev.group_id and not bool(ArkConfig.get_config("AllowGroupScanLogin").data):
         return await _send_text(bot, ev, _GROUP_SCAN_OFF_HINT)
 
     scan_id = await ark_auth.get_scan_id()
@@ -140,6 +131,11 @@ async def scan_login(bot: Bot, ev: Event) -> None:
     scan_url = f"hypergryph://scan_login?scanId={scan_id}"
     qr_path = CACHE_PATH / "qr" / f"ark_scan_{ev.user_id}.png"
     qr_path.parent.mkdir(parents=True, exist_ok=True)
+    if get_qrcode_base64 is None:
+        logger.warning("[ArknightsUID·绑定] 二维码工具不可用（core 版本兼容性问题）")
+        return await _send_text(
+            bot, ev, "二维码生成不可用（core 版本兼容性问题），请稍后重试或联系维护者。"
+        )
     try:
         qr_img = await get_qrcode_base64(scan_url, qr_path, ev.bot_id)
     except Exception:
@@ -147,7 +143,8 @@ async def scan_login(bot: Bot, ev: Event) -> None:
     await bot.send(qr_img)
     notice = f"{_GROUP_SCAN_NOTICE}\n" if ev.group_id else ""
     await _send_text(
-        bot, ev,
+        bot,
+        ev,
         notice + "请使用森空岛 APP 扫码确认登录（100 秒内有效）……",
     )
 
@@ -181,7 +178,10 @@ async def scan_login(bot: Bot, ev: Event) -> None:
         return await _send_text(bot, ev, "换取 cred 失败，请重试。")
 
     roles, err = await ark_store.persist_ark_login(
-        ev.user_id, ev.bot_id, ev.group_id, cred_info["cred"],
+        ev.user_id,
+        ev.bot_id,
+        ev.group_id,
+        cred_info["cred"],
         hg_token=token_info["token"],
         skland_user_id=cred_info.get("skland_user_id", ""),
     )
@@ -200,13 +200,15 @@ async def remove_login(bot: Bot, ev: Event) -> None:
         removed = await ark_store.remove_ark_login(ev.user_id, ev.bot_id, uid=uid)
         if not removed:
             return await _send_text(
-                bot, ev,
+                bot,
+                ev,
                 f"未找到 UID {hide_uid(uid)} 的登录记录（可用账号见 ark绑定列表）。",
             )
         # 默认账号恰好指向被删 UID 时一并清除，防止 resolve 落到不存在的默认
         if clear_default_uid(ev.bot_id, ev.user_id, uid=uid):
             await _send_text(
-                bot, ev,
+                bot,
+                ev,
                 f"已删除 UID {hide_uid(uid)} 的明日方舟登录（该账号原为默认账号，默认已重置）。",
             )
         else:
@@ -259,16 +261,11 @@ def _parse_alias_text(text: str) -> tuple[str, str] | None:
 
 @alias_sv.on_fullmatch(("别名列表", "我的别名"), block=True)
 async def list_user_alias(bot: Bot, ev: Event) -> None:
-    try:
-        from ArknightsUID.utils.database.models import ArkAlias
-    except ModuleNotFoundError:
-        from ArknightsUID.ArknightsUID.utils.database.models import ArkAlias
+    from ArknightsUID.utils.database.models import ArkAlias
 
     rows = await ArkAlias.list_aliases(bot_id=ev.bot_id, user_id=ev.user_id)
     if not rows:
-        return await _send_text(
-            bot, ev, "你还没有设置别名。用法：ark别名 银羽毛=银灰"
-        )
+        return await _send_text(bot, ev, "你还没有设置别名。用法：ark别名 银羽毛=银灰")
     lines = ["「明日方舟」你的干员别名："]
     lines.extend(f"- {row.alias} → {row.target}" for row in rows)
     await _send_text(bot, ev, "\n".join(lines))
@@ -282,14 +279,9 @@ async def delete_user_alias(bot: Bot, ev: Event) -> None:
     alias = (ev.text or "").strip().lower()
     if not alias:
         return await _send_text(bot, ev, "用法：ark别名删除 银羽毛")
-    try:
-        from ArknightsUID.utils.database.models import ArkAlias
-    except ModuleNotFoundError:
-        from ArknightsUID.ArknightsUID.utils.database.models import ArkAlias
+    from ArknightsUID.utils.database.models import ArkAlias
 
-    if await ArkAlias.delete_alias(
-        bot_id=ev.bot_id, user_id=ev.user_id, alias=alias
-    ):
+    if await ArkAlias.delete_alias(bot_id=ev.bot_id, user_id=ev.user_id, alias=alias):
         await _send_text(bot, ev, f"已删除别名：{alias}")
     else:
         await _send_text(bot, ev, f"没有这个别名：{alias}")
@@ -300,27 +292,19 @@ async def set_user_alias(bot: Bot, ev: Event) -> None:
     parsed = _parse_alias_text(ev.text)
     if not parsed:
         return await _send_text(
-            bot, ev,
+            bot,
+            ev,
             "用法：ark别名 银羽毛=银灰（或「ark别名 银羽毛 银灰」）；"
             "ark别名列表 查看；ark别名删除 银羽毛 删除。",
         )
     alias, target = parsed
 
-    try:
-        from ArknightsUID.utils.database.models import ArkAlias
-    except ModuleNotFoundError:
-        from ArknightsUID.ArknightsUID.utils.database.models import ArkAlias
+    from ArknightsUID.utils.database.models import ArkAlias
 
-    try:
-        from ArknightsUID.utils.gamedata.charinfo import (
-            load_char_index,
-            match_entries,
-        )
-    except ModuleNotFoundError:
-        from ArknightsUID.ArknightsUID.utils.gamedata.charinfo import (
-            load_char_index,
-            match_entries,
-        )
+    from ArknightsUID.utils.gamedata.charinfo import (
+        load_char_index,
+        match_entries,
+    )
 
     index = await load_char_index()
     if not index:
@@ -354,4 +338,8 @@ async def set_user_alias(bot: Bot, ev: Event) -> None:
         alias=lowered,
         target=canonical,
     )
-    await _send_text(bot, ev, f"已设置别名：{alias} → {canonical}（ark干员/面板/养成/练度卡/模组 均生效）")
+    await _send_text(
+        bot,
+        ev,
+        f"已设置别名：{alias} → {canonical}（ark干员/面板/养成/练度卡/模组 均生效）",
+    )

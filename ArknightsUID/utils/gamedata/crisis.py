@@ -2,8 +2,10 @@
 
 旧版（#0-12 行动，crisis_table.seasonInfo）与新版（涤墨作战起，
 crisis_v2_table.seasonInfoDataMap）合并为统一时间线；词条效果文本
-走 PRTS SMW（prts.client.query_crisis_runes）。
+无稳定数据源（PRTS SMW 词条页结构不定，未实现抓取），消费侧
+arknightsuid_wiki.send_crisis_info 仅渲染赛季时间线并提示跳转。
 """
+
 from __future__ import annotations
 
 from datetime import datetime

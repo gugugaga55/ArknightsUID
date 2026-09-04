@@ -6,6 +6,7 @@ game/player/info 返回 1w+ 行 JSON，直接打森空岛接口既慢又有风�
 缓存文件存完整响应信封 {code, message, data}，mtime 作为 TTL 时钟
 （不污染 JSON 结构，与 EndUID player_store 的用法一致）。
 """
+
 from __future__ import annotations
 
 import time
@@ -58,7 +59,9 @@ def _cache_age_seconds(uid: str) -> float | None:
         return None
 
 
-async def read_cached_player_info(uid: str, max_age: float = DEFAULT_TTL) -> dict[str, Any] | None:
+async def read_cached_player_info(
+    uid: str, max_age: float = DEFAULT_TTL
+) -> dict[str, Any] | None:
     """读 TTL 内的缓存信封；不新鲜、不存在或 uid 非法返回 None。"""
     age = _cache_age_seconds(uid)
     if age is None or age > max_age:
@@ -73,7 +76,7 @@ async def read_cached_player_info(uid: str, max_age: float = DEFAULT_TTL) -> dic
 
 
 async def fetch_cached_player_info(
-    credential: "ArkCredential", ttl: float = DEFAULT_TTL, force: bool = False
+    credential: ArkCredential, ttl: float = DEFAULT_TTL, force: bool = False
 ) -> dict[str, Any] | str:
     """带磁盘缓存的 player_info 获取。
 

@@ -18,6 +18,7 @@
 404（源站确无此档）写与惰性路径同名的 .miss 负缓存标记，渲染期间跳过
 不再重试；网络类失败不写标记，下次重跑自然补齐。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -26,30 +27,19 @@ import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 from gsuid_core.logger import logger
 
-try:
-    from ArknightsUID.ArknightsUID.utils.http import download_bytes_status
-    from ArknightsUID.ArknightsUID.utils.path import (
-        AVATAR_CACHE_PATH,
-        BAKE_PATH,
-        CACHE_BASE,
-        CHAR_CACHE_PATH,
-        EQUIP_CACHE_PATH,
-        SKILL_CACHE_PATH,
-    )
-except ModuleNotFoundError:
-    from ArknightsUID.utils.http import download_bytes_status
-    from ArknightsUID.utils.path import (
-        AVATAR_CACHE_PATH,
-        BAKE_PATH,
-        CACHE_BASE,
-        CHAR_CACHE_PATH,
-        EQUIP_CACHE_PATH,
-        SKILL_CACHE_PATH,
-    )
+from ..http import download_bytes_status
+from ..path import (
+    AVATAR_CACHE_PATH,
+    BAKE_PATH,
+    CACHE_BASE,
+    CHAR_CACHE_PATH,
+    EQUIP_CACHE_PATH,
+    SKILL_CACHE_PATH,
+)
 
 # 主线/教学类关卡代号（PRTS `{代号}_{名}_地图.png` 命名规律的覆盖范围；
 # 活动代号 CW- 等无此命名文件，不枚举）
@@ -165,9 +155,7 @@ def parse_category_args(text: str) -> DownloadPlan | str:
     for token in tokens:
         key = CATEGORY_ALIASES.get(token) or CATEGORY_ALIASES.get(token.lower())
         if not key:
-            valid = "、".join(
-                f"{v}({k})" for k, v in CATEGORY_LABELS.items()
-            )
+            valid = "、".join(f"{v}({k})" for k, v in CATEGORY_LABELS.items())
             return (
                 f"未知资源分类「{token}」，可用：{valid}；"
                 "不带参数则全部下载；附加「校验」可对存量逐档验完整性。"
@@ -226,10 +214,7 @@ def _save_image_sync(cache_dir: Path, url_last: str, content: bytes) -> None:
     from io import BytesIO
 
     raw_path = cache_dir / url_last
-    tmp_suffix = (
-        f".{os.getpid()}.{threading.get_ident()}"
-        f"{raw_path.suffix}.bulk.tmp"
-    )
+    tmp_suffix = f".{os.getpid()}.{threading.get_ident()}{raw_path.suffix}.bulk.tmp"
     tmp_path = raw_path.with_suffix(tmp_suffix)
     try:
         if raw_path.suffix.lower() == ".webp":
@@ -315,9 +300,7 @@ async def download_target(target: ResourceTarget, verify: bool = False) -> str:
         _clear_miss(target)  # 文件在：清掉可能残留的旧 .miss
         return "skip"
 
-    miss_path = (
-        target.cache_dir / target.miss_marker if target.miss_marker else None
-    )
+    miss_path = target.cache_dir / target.miss_marker if target.miss_marker else None
     if miss_path is not None and miss_path.exists():
         try:
             fresh = _time.time() - miss_path.stat().st_mtime < _MISS_TTL
@@ -426,9 +409,7 @@ async def build_portrait_targets() -> list[ResourceTarget]:
         if url:
             url_last = safe_url_basename(url)
             targets.append(
-                ResourceTarget(
-                    url, CHAR_CACHE_PATH, _portrait_miss_marker(url_last)
-                )
+                ResourceTarget(url, CHAR_CACHE_PATH, _portrait_miss_marker(url_last))
             )
     if not targets:
         raise RuntimeError("skin_table 无皮肤条目")
@@ -482,8 +463,7 @@ async def build_item_targets() -> list[ResourceTarget]:
     targets = [
         ResourceTarget(url, ITEM_ICON_CACHE_DIR, url_last + ".miss")
         for title in titles
-        if (url := map_file_url(title))
-        and (url_last := safe_url_basename(url))
+        if (url := map_file_url(title)) and (url_last := safe_url_basename(url))
     ]
     if not targets:
         raise RuntimeError("PRTS 道具图标枚举失败")
@@ -500,8 +480,7 @@ async def build_enemy_targets() -> list[ResourceTarget]:
     targets = [
         ResourceTarget(url, ITEM_ICON_CACHE_DIR, url_last + ".miss")
         for title in titles
-        if (url := map_file_url(title))
-        and (url_last := safe_url_basename(url))
+        if (url := map_file_url(title)) and (url_last := safe_url_basename(url))
     ]
     if not targets:
         raise RuntimeError("PRTS 敌人头像枚举失败")
@@ -608,6 +587,7 @@ async def _run_category(
         return result
 
     result.total = len(targets)
+
     # 分批入队 + 信号量限并发；单文件失败只计数，不中断整类
     async def _one(target: ResourceTarget) -> None:
         async with semaphore:
@@ -686,7 +666,9 @@ def format_summary(summary: BulkSummary) -> str:
     if errors:
         names = "、".join(r.label for r in errors)
         lines.append(f"{names}清单枚举失败，可稍后单独重试该分类。")
-    lines.append("资源绝大多数不会变动，之后重跑只补新增；建议每月跑一次防止缓存清理误删。")
+    lines.append(
+        "资源绝大多数不会变动，之后重跑只补新增；建议每月跑一次防止缓存清理误删。"
+    )
     return "\n".join(lines)
 
 

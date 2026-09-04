@@ -6,4 +6,5 @@ P0 阶段建两张最小表：
 
 后续随功能迭代再扩充（签到记录、抽卡记录、别名等）。
 """
+
 from .models import ArkBind, ArkUser  # noqa: F401

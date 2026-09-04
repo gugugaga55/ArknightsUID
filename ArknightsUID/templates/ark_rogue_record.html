@@ -1,0 +1,264 @@
+<!--
+  ark_rogue_record.html —— 肉鸽战绩卡（#36）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  数据源：森空岛 App「战绩查询」端点（arknights/rogue），与 ark_rogue.html
+  （player_info 进度卡）不同源——本卡有难度/得分/结算阵容/结局/生涯明细。
+  上下文（由 arknightsuid_rogue._build_rogue_records_context 组装）：
+    name: str, level: int, uid: str（已脱敏）
+    theme_name: str        期显示名（接口 topics 权威，兜底命令解析）
+    topics: [{id, name, selected}]        全部主题（切换提示条）
+    banner: str            期主题 KV 图 b64（可空，降级为无图）
+    mode/mode_grade:       历史最高达成（难度模式名 + 等级）
+    score/bp_level: int    历史最高得分 / 声望等级
+    medal_current/medal_total/medal_pct   奖章进度
+    games/nodes/relics/invest/endings_total: int   生涯累计
+    fav_chars: [{name, avatar}]           常用干员（≤6）
+    records/favour_records: [{
+        success: bool, mode: str, mode_grade: int, score: int,
+        band: str, ending: str, last_stage: str,
+        time: str, duration: str,
+        zones: int, battles: str, relic_count: int, tags: [str],
+        chars: [{name, avatar}]           结算阵容（≤8）
+    }]                                   最近战绩 / 收藏战绩（各 ≤8）
+    record_total: int      接口返回的最近战绩总数（截断提示用）
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}
+<style>
+    /* 战绩块：一条一局，左侧 3px 色条做胜败扫读（通关=信号黄，失败=发丝灰）*/
+    .run {
+        padding: 9px 2px 9px 12px;
+        border-bottom: 1px solid var(--hairline);
+        border-left: 3px solid var(--line);
+    }
+    .run--win {
+        border-left-color: var(--yellow);
+        background: var(--yellow-dim);
+    }
+    .run:last-child { border-bottom: 0; }
+    .run-head {
+        display: flex;
+        align-items: baseline;
+        gap: var(--space-3);
+    }
+    .run-mode {
+        font-family: var(--mono);
+        font-size: 14px;
+        font-weight: 700;
+        color: var(--tx-0);
+        letter-spacing: var(--tracking-micro);
+    }
+    .run-score {
+        font-family: var(--mono);
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--tx-2);
+    }
+    .run-time {
+        margin-left: auto;
+        font-family: var(--mono);
+        font-size: 10px;
+        color: var(--tx-3);
+        white-space: nowrap;
+    }
+    .run-sub {
+        margin-top: 2px;
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--tx-1);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+    }
+    .run-meta {
+        margin-top: 3px;
+        font-family: var(--mono);
+        font-size: 10px;
+        color: var(--tx-3);
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+    }
+    .run .sep { color: var(--tx-3); font-weight: 400; }
+    .run-chars {
+        margin-top: 6px;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        flex-wrap: wrap;
+    }
+    /* 生涯条：mono 微字单行，数字 tabular */
+    .career {
+        margin-top: var(--space-3);
+        font-family: var(--mono);
+        font-size: 10px;
+        letter-spacing: var(--tracking-micro);
+        color: var(--tx-2);
+        display: flex;
+        gap: 10px;
+        flex-wrap: wrap;
+    }
+    .career b { color: var(--tx-0); font-weight: 700; }
+    /* 期 KV（与 ark_rogue.html .rogue-kv 同款定高裁切） */
+    .rogue-kv {
+        display: block;
+        width: 100%;
+        height: 108px;
+        object-fit: cover;
+        object-position: center 30%;
+        border: 1px solid var(--hairline);
+        margin-top: var(--space-4);
+    }
+</style>
+</head>
+<body>
+    <div class="container" data-ghost="IS-LOG">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 肉鸽战绩 I.S. RECORDS</em></span>
+            <span class="mast-meta">{% if uid %}<span class="idx">36</span>UID {{ uid }}{% endif %}</span>
+        </div>
+
+        <div class="titleblock" style="align-items: center;">
+            <div>
+                <div class="eyebrow">{{ name }}{% if level %} · Lv.{{ level }}{% endif %} · 集成战略战绩</div>
+                <h1 class="title title--s">{{ theme_name }}</h1>
+                <div class="title-rule"><span class="en">IS. BATTLE RECORDS</span></div>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_rogue.b64" %}" alt="">
+        </div>
+
+        {% if topics %}
+        <div class="chip-flow" style="margin-top: var(--space-4);">
+            {% for t in topics %}
+            <span class="chip {% if t.selected %}chip--ink{% else %}chip--ghost{% endif %}">{{ t.short or t.name }}</span>
+            {% endfor %}
+        </div>
+        {% endif %}
+
+        {% if banner %}
+        <img class="rogue-kv" src="{{ banner }}" alt="">
+        {% endif %}
+
+        <div class="grid grid-4" style="margin-top: var(--space-4);">
+            <div class="cell">
+                <div class="cell-label">最高达成 BEST</div>
+                <div class="cell-value" style="font-size: 18px;">{% if mode %}{{ mode }}·{% endif %}N{{ mode_grade }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">声望 BP LEVEL</div>
+                <div class="cell-value">{{ bp_level }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">最高得分 SCORE</div>
+                <div class="cell-value">{{ score }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">结局达成 ENDINGS</div>
+                <div class="cell-value">{{ endings_total }}</div>
+            </div>
+        </div>
+
+        {% if medal_total %}
+        <div style="margin-top: var(--space-3);">
+            <div class="bar-row" style="margin-bottom: var(--space-2);">
+                <span class="bar-txt" style="position: static; transform: none;">奖章蚀刻 MEDALS</span>
+                <span class="bar-num">{{ medal_current }} / {{ medal_total }}</span>
+            </div>
+            <div class="bar"><i style="width: {{ medal_pct }}%;"></i></div>
+        </div>
+        {% endif %}
+
+        {% if games or nodes or relics %}
+        <div class="career">
+            <span>生涯 CAREER</span>
+            {% if games %}<span>探索 <b>{{ games }}</b> 次</span>{% endif %}
+            {% if nodes %}<span>经过节点 <b>{{ nodes }}</b></span>{% endif %}
+            {% if relics %}<span>获得藏品 <b>{{ relics }}</b></span>{% endif %}
+            {% if invest %}<span>投资 <b>{{ invest }}</b></span>{% endif %}
+        </div>
+        {% endif %}
+
+        {% if fav_chars %}
+        <div class="wall">
+            {% for c in fav_chars %}
+            <span class="aicon aicon--md" title="{{ c.name }}">{% if c.avatar %}<img src="{{ c.avatar }}" alt="{{ c.name }}">{% endif %}</span>
+            {% endfor %}
+            <span class="wall-hint">常用干员 // MOST USED</span>
+        </div>
+        {% endif %}
+
+        {% macro run_block(r) %}
+        <div class="run{% if r.success %} run--win{% endif %}">
+            <div class="run-head">
+                {% if r.success %}<span class="chip chip--yellow" style="height: 18px;">通关</span>{% else %}<span class="chip chip--ghost" style="height: 18px;">失败</span>{% endif %}
+                <span class="run-mode">{% if r.mode %}{{ r.mode }}·{% endif %}N{{ r.mode_grade }}</span>
+                <span class="run-score">得分 {{ r.score }}</span>
+                {% for tag in r.tags %}<span class="chip chip--blue" style="height: 16px; font-size: 9px;">{{ tag }}</span>{% endfor %}
+                <span class="run-time">#{{ r.index }} · {{ r.time }}</span>
+            </div>
+            <div class="run-sub">
+                {% if r.band %}<span>{{ r.band }}</span>{% endif %}
+                {% if r.ending %}<span class="sep">·</span><span>{{ r.ending }}</span>
+                {% elif r.last_stage %}<span class="sep">·</span><span>止步 {{ r.last_stage }}</span>{% endif %}
+            </div>
+            <div class="run-meta">
+                {% if r.zones %}<span>探索 {{ r.zones }} 层</span>{% endif %}
+                {% if r.battles %}<span class="sep">·</span><span>{{ r.battles }}</span>{% endif %}
+                {% if r.relic_count %}<span class="sep">·</span><span>藏品 {{ r.relic_count }}</span>{% endif %}
+                {% if r.duration %}<span class="sep">·</span><span>{{ r.duration }}</span>{% endif %}
+            </div>
+            {% if r.chars %}
+            <div class="run-chars">
+                {% for c in r.chars %}
+                <span class="aicon" title="{{ c.name }}">{% if c.avatar %}<img src="{{ c.avatar }}" alt="{{ c.name }}">{% endif %}</span>
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+        {% endmacro %}
+
+        {% if records %}
+        <div class="sect" style="margin-top: var(--space-4);">
+            <span class="sect-label bk">最近战绩</span>
+            <span class="sect-en">RECENT{% if record_total > records | length %} // 前 {{ records | length }} / {{ record_total }}{% endif %}</span>
+        </div>
+        <div class="rows" style="margin-top: 0; border-top: 0;">
+            {% for r in records %}{{ run_block(r) }}{% endfor %}
+        </div>
+        <div class="chip-flow" style="margin-top: var(--space-2);">
+            <span class="chip chip--ghost">单局战况：ark肉鸽详情 {{ theme_name }} &lt;#N&gt;</span>
+        </div>
+        {% else %}
+        <div class="rows" style="margin-top: var(--space-4);">
+            <div class="row">
+                <span class="row-label">该期暂无战绩记录（还没开过这一期？）</span>
+                <span class="bar-num">EMPTY</span>
+            </div>
+        </div>
+        {% endif %}
+
+        {% if favour_records %}
+        <div class="sect" style="margin-top: var(--space-4);">
+            <span class="sect-label bk">收藏战绩</span>
+            <span class="sect-en">FAVOURED</span>
+        </div>
+        <div class="rows" style="margin-top: 0; border-top: 0;">
+            {% for r in favour_records %}{{ run_block(r) }}{% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 肉鸽战绩</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// IS. BATTLE RECORDS</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

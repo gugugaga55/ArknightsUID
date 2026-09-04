@@ -10,22 +10,16 @@
 技能逐级文本不走本模块——skill_table 的描述是未填充的模板变量
 （{def:0%} + 黑板键），PRTS 干员页已给完整文本，由 wiki 层复用。
 """
+
 from __future__ import annotations
 
 import re
 
-try:
-    from ArknightsUID.ArknightsUID.utils.gamedata._table_cache import (
-        ensure_battle_equip_table,
-        ensure_char_table,
-        ensure_uniequip_table,
-    )
-except ModuleNotFoundError:
-    from ArknightsUID.utils.gamedata._table_cache import (
-        ensure_battle_equip_table,
-        ensure_char_table,
-        ensure_uniequip_table,
-    )
+from ._table_cache import (
+    ensure_battle_equip_table,
+    ensure_char_table,
+    ensure_uniequip_table,
+)
 
 # 面板属性（表内字段 → 展示键）；间隔单位秒保留一位
 PANEL_ATTRS: tuple[tuple[str, str], ...] = (
@@ -41,13 +35,21 @@ PANEL_ATTRS: tuple[tuple[str, str], ...] = (
 
 # 潜能/模组的 attributeType / blackboard 键 → 表内字段
 _POTENTIAL_ATTR_MAP = {
-    "ATK": "atk", "MAXHP": "maxHp", "DEF": "def", "COST": "cost",
-    "MAGIC_RESISTANCE": "magicResistance", "RESPAWN_TIME": "respawnTime",
+    "ATK": "atk",
+    "MAXHP": "maxHp",
+    "DEF": "def",
+    "COST": "cost",
+    "MAGIC_RESISTANCE": "magicResistance",
+    "RESPAWN_TIME": "respawnTime",
     "ATTACK_SPEED": "attackSpeed",
 }
 _MODULE_ATTR_MAP = {
-    "max_hp": "maxHp", "atk": "atk", "def": "def", "cost": "cost",
-    "attack_speed": "attackSpeed", "magic_resistance": "magicResistance",
+    "max_hp": "maxHp",
+    "atk": "atk",
+    "def": "def",
+    "cost": "cost",
+    "attack_speed": "attackSpeed",
+    "magic_resistance": "magicResistance",
     "respawn_time": "respawnTime",
 }
 
@@ -85,13 +87,9 @@ def interpolate(frames: list[dict], level: int) -> dict[str, float]:
             else:
                 anchor = frame
                 break
-        prev_lv, anchor_lv = int(prev.get("level") or 0), int(
-            anchor.get("level") or 0
-        )
+        prev_lv, anchor_lv = int(prev.get("level") or 0), int(anchor.get("level") or 0)
         ratio = (
-            (level - prev_lv) / (anchor_lv - prev_lv)
-            if anchor_lv > prev_lv
-            else 0.0
+            (level - prev_lv) / (anchor_lv - prev_lv) if anchor_lv > prev_lv else 0.0
         )
         lo = prev
     result: dict[str, float] = {}
@@ -130,12 +128,9 @@ def potential_modifiers(char_entry: dict, rank: int) -> dict[str, float]:
     """潜能 1..rank 的累加修正（游戏语义：各档效果叠加）。"""
     result: dict[str, float] = {}
     for potential in (char_entry.get("potentialRanks") or [])[: max(rank, 0)]:
-        modifiers = (
-            ((potential.get("buff") or {}).get("attributes") or {}).get(
-                "attributeModifiers"
-            )
-            or []
-        )
+        modifiers = ((potential.get("buff") or {}).get("attributes") or {}).get(
+            "attributeModifiers"
+        ) or []
         for modifier in modifiers:
             field = _POTENTIAL_ATTR_MAP.get(
                 str(modifier.get("attributeType") or "").upper()
@@ -159,9 +154,7 @@ def favor_modifiers(char_entry: dict, favor_percent: int) -> dict[str, float]:
     frames = char_entry.get("favorKeyFrames") or []
     data = interpolate(frames, favor_percent // 2) if frames else {}
     return {
-        key: value
-        for key, value in data.items()
-        if key in ("maxHp", "atk") and value
+        key: value for key, value in data.items() if key in ("maxHp", "atk") and value
     }
 
 
@@ -205,9 +198,7 @@ def _phase_level_ok(condition: dict, phase: int, level: int) -> bool:
     return True
 
 
-def talents_at(
-    char_entry: dict, phase: int, level: int, potential: int
-) -> list[dict]:
+def talents_at(char_entry: dict, phase: int, level: int, potential: int) -> list[dict]:
     """当前（阶段,等级,潜能）下每个天赋位的生效档（高潜能档覆盖低档）。"""
     result: list[dict] = []
     for talent in char_entry.get("talents") or []:
@@ -227,9 +218,7 @@ def talents_at(
             result.append(
                 {
                     "name": str(best.get("name") or ""),
-                    "description": _clean_talent_text(
-                        best.get("description") or ""
-                    ),
+                    "description": _clean_talent_text(best.get("description") or ""),
                 }
             )
     return result
@@ -305,9 +294,7 @@ async def _gather_tables() -> tuple[dict, dict]:
     )
 
 
-def module_choices(
-    char_id: str, uniequip: dict
-) -> list[dict]:
+def module_choices(char_id: str, uniequip: dict) -> list[dict]:
     """干员可用模组（除基础证章）：[{id, name, type: 'X'|'Y'|'A'|'B'|'D'}]。"""
     equip_dict = uniequip.get("equipDict") or {}
     char_equips = (uniequip.get("charEquip") or {}).get(char_id) or []
@@ -333,9 +320,7 @@ def module_choices(
     return result
 
 
-def find_module(
-    choices: list[dict], module_type: str | None
-) -> dict | None:
+def find_module(choices: list[dict], module_type: str | None) -> dict | None:
     """按 X/Y 选模组（无该类型回退第一个）。"""
     if not choices:
         return None

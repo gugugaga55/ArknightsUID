@@ -10,6 +10,7 @@
 推送状态（已见条目键）落 MAIN_PATH/push_state.json（活动合并订阅）与
 ann_push_state.json（公告专项订阅），条目上限防膨胀。
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -25,52 +26,28 @@ from gsuid_core.models import Event
 from gsuid_core.subscribe import gs_subscribe
 from gsuid_core.sv import SV
 
-try:
-    from ArknightsUID.ArknightsUID.utils.card import send_card_or_text
-    from ArknightsUID.ArknightsUID.utils.config import ArkConfig
-    from ArknightsUID.ArknightsUID.utils.gamedata.charinfo import load_item_index
-    from ArknightsUID.ArknightsUID.utils.gamedata.itemicon import item_icon_b64
-    from ArknightsUID.ArknightsUID.utils.path import MAIN_PATH
-    from ArknightsUID.ArknightsUID.utils.prts.client import (
-        query_activities,
-        query_gacha_pools,
-    )
-    from ArknightsUID.ArknightsUID.utils.skland.web import (
-        get_ann_detail,
-        get_ark_ann_list,
-    )
-    from ArknightsUID.ArknightsUID.utils.yituliu import (
-        fetch_drop_matrix,
-        fetch_stage_info,
-        format_stage_board,
-        item_drop_stats,
-        latest_matrix_by_item,
-        rank_stages,
-    )
-    from ArknightsUID.ArknightsUID.version import ArknightsUID_version
-except ModuleNotFoundError:
-    from ArknightsUID.utils.card import send_card_or_text
-    from ArknightsUID.utils.config import ArkConfig
-    from ArknightsUID.utils.gamedata.charinfo import load_item_index
-    from ArknightsUID.utils.gamedata.itemicon import item_icon_b64
-    from ArknightsUID.utils.path import MAIN_PATH
-    from ArknightsUID.utils.prts.client import (
-        query_activities,
-        query_gacha_pools,
-    )
-    from ArknightsUID.utils.skland.web import (
-        get_ann_detail,
-        get_ark_ann_list,
-    )
-    from ArknightsUID.utils.yituliu import (
-        fetch_drop_matrix,
-        fetch_stage_info,
-        format_stage_board,
-        item_drop_stats,
-        latest_matrix_by_item,
-        rank_stages,
-    )
-    from ArknightsUID.version import ArknightsUID_version
+from ArknightsUID.utils.card import send_card_or_text
+from ArknightsUID.utils.config import ArkConfig
+from ArknightsUID.utils.gamedata.charinfo import load_item_index
+from ArknightsUID.utils.gamedata.itemicon import item_icon_b64
+from ArknightsUID.utils.path import MAIN_PATH
+from ArknightsUID.utils.prts.client import (
+    query_activities,
+    query_gacha_pools,
+)
+from ArknightsUID.utils.skland.web import (
+    get_ann_detail,
+    get_ark_ann_list,
+)
+from ArknightsUID.utils.yituliu import (
+    fetch_drop_matrix,
+    fetch_stage_info,
+    format_stage_board,
+    item_drop_stats,
+    latest_matrix_by_item,
+    rank_stages,
+)
+from ArknightsUID.version import ArknightsUID_version
 
 import json
 from pathlib import Path
@@ -134,10 +111,7 @@ async def _deliver_per_session(
     any_sent = False
     for subscribe in datas:
         session = _session_key(subscribe)
-        pending = [
-            key for key in keys
-            if session not in (delivered.get(key) or [])
-        ]
+        pending = [key for key in keys if session not in (delivered.get(key) or [])]
         if not pending:
             continue
         try:
@@ -174,7 +148,9 @@ def _merge_seen_state(current_state: dict, incoming: dict) -> dict:
     """
     merged = dict(current_state) if isinstance(current_state, dict) else {}
     if isinstance(incoming, dict):
-        merged.update({k: v for k, v in incoming.items() if k not in ("seen", "delivered")})
+        merged.update(
+            {k: v for k, v in incoming.items() if k not in ("seen", "delivered")}
+        )
         # delivered（per-session 投递进度，审计 #9）：按条目并集合并
         incoming_delivered = incoming.get("delivered")
         if isinstance(incoming_delivered, dict):
@@ -210,9 +186,7 @@ def _merge_seen_state(current_state: dict, incoming: dict) -> dict:
                 if str(k) not in seen_keys and isinstance(v, list)
             }
             if len(merged_delivered) > _STATE_LIMIT:
-                merged_delivered = dict(
-                    list(merged_delivered.items())[-_STATE_LIMIT:]
-                )
+                merged_delivered = dict(list(merged_delivered.items())[-_STATE_LIMIT:])
             merged["delivered"] = merged_delivered
     return merged
 
@@ -220,12 +194,22 @@ def _merge_seen_state(current_state: dict, incoming: dict) -> dict:
 def load_push_state() -> dict:
     try:
         return json.loads(_STATE_PATH.read_text(encoding="utf-8"))
-    except Exception:
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:
+        # 损坏（半文件/手改出错）：按空态重建基线，代价是可能重推一轮——
+        # 留 warning 便于事后从日志定位为什么重推
+        logger.warning(
+            f"[ArknightsUID·推送] 状态文件损坏，按空态重建: {exc.__class__.__name__}"
+        )
         return {}
 
 
 def save_push_state(state: dict) -> None:
-    from ..utils.file_lock import file_locked, unique_tmp
+    from ArknightsUID.utils.file_lock import (
+        file_locked,
+        unique_tmp,
+    )
 
     try:
         # 读-合并-写三步全在跨进程文件锁内（审计 #10：多 worker 部署
@@ -239,14 +223,10 @@ def save_push_state(state: dict) -> None:
             # 唯一 tmp + os.replace 原子写：崩溃不留半文件（半文件会被当
             # 无基线，下轮重建 seen 基线漏推一轮）
             tmp = unique_tmp(_STATE_PATH)
-            tmp.write_text(
-                json.dumps(state, ensure_ascii=False), encoding="utf-8"
-            )
+            tmp.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
             os.replace(tmp, _STATE_PATH)
     except Exception as exc:
-        logger.warning(
-            f"[ArknightsUID·推送] 状态写入失败: {exc.__class__.__name__}"
-        )
+        logger.warning(f"[ArknightsUID·推送] 状态写入失败: {exc.__class__.__name__}")
 
 
 def _load_ann_state() -> dict:
@@ -258,7 +238,10 @@ def _load_ann_state() -> dict:
 
 
 def _save_ann_state(state: dict) -> None:
-    from ..utils.file_lock import file_locked, unique_tmp
+    from ArknightsUID.utils.file_lock import (
+        file_locked,
+        unique_tmp,
+    )
 
     try:
         # 读-合并-写三步全在跨进程文件锁内（审计 #10，语义同 save_push_state）
@@ -269,9 +252,7 @@ def _save_ann_state(state: dict) -> None:
                 state["seen"] = seen[-_STATE_LIMIT:]
             _ANN_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
             tmp = unique_tmp(_ANN_STATE_PATH)
-            tmp.write_text(
-                json.dumps(state, ensure_ascii=False), encoding="utf-8"
-            )
+            tmp.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
             os.replace(tmp, _ANN_STATE_PATH)
     except Exception as exc:
         logger.warning(
@@ -284,10 +265,7 @@ def diff_new_announcements(
 ) -> list[dict[str, str]]:
     """公告列表中未见过的（保持新→旧原序；无 id 的条目跳过）。"""
     seen_set = {str(key) for key in seen}
-    return [
-        ann for ann in anns
-        if ann.get("id") and str(ann["id"]) not in seen_set
-    ]
+    return [ann for ann in anns if ann.get("id") and str(ann["id"]) not in seen_set]
 
 
 def format_ann_push_message(fresh: list[dict[str, str]]) -> str:
@@ -357,9 +335,7 @@ async def _build_ann_push_segments(
         b64 = await _announce_image_b64(ann.get("cover", ""), quality=80)
         if b64.startswith("data:image/"):
             try:
-                segments[ann_id] = [
-                    MessageSegment.image(_data_uri_bytes(b64))
-                ]
+                segments[ann_id] = [MessageSegment.image(_data_uri_bytes(b64))]
                 continue
             except Exception as exc:
                 logger.debug(
@@ -387,13 +363,11 @@ async def build_ann_push_payload(
     ]
 
 
-async def _send_text(bot: Bot, ev: Event, msg: str) -> None:
-    await bot.send((" " if ev.group_id else "") + msg, at_sender=bool(ev.group_id))
+# 文本回复公共实现在 utils.card.send_text；保留模块级别名供调用点/测试 patch
+from ArknightsUID.utils.card import send_text as _send_text  # noqa: E402
 
 
-def _format_activities(
-    activities: list, pools: list
-) -> str:
+def _format_activities(activities: list, pools: list) -> str:
     lines = ["「明日方舟」进行中 / 即将开始"]
     if activities:
         lines.append("— 限时活动 —")
@@ -430,17 +404,21 @@ _DETAIL_PARA_CHARS = 200
 def _format_ann_detail(detail: dict) -> str:
     lines = ["「明日方舟」公告详情（森空岛）", detail.get("title", "")]
     meta = [
-        m for m in (
+        m
+        for m in (
             detail.get("userName", ""),
             detail.get("date", ""),
             detail.get("userIpLocation", ""),
-        ) if m
+        )
+        if m
     ]
     if meta:
         lines.append("  " + " · ".join(meta))
     paras = detail.get("paragraphs") or []
     for para in paras[:_DETAIL_MAX_PARAS]:
-        lines.append(para[:_DETAIL_PARA_CHARS] + ("…" if len(para) > _DETAIL_PARA_CHARS else ""))
+        lines.append(
+            para[:_DETAIL_PARA_CHARS] + ("…" if len(para) > _DETAIL_PARA_CHARS else "")
+        )
     if len(paras) > _DETAIL_MAX_PARAS:
         lines.append(f"……（共 {len(paras)} 段）")
     images = detail.get("images") or []
@@ -451,7 +429,9 @@ def _format_ann_detail(detail: dict) -> str:
     if videos:
         extra.append(f"{len(videos)} 视频")
     if extra:
-        lines.append("（含 " + "+".join(extra) + "，超长原图已单独发送，完整内容见链接）")
+        lines.append(
+            "（含 " + "+".join(extra) + "，超长原图已单独发送，完整内容见链接）"
+        )
     if detail.get("id"):
         lines.append(f"https://www.skland.com/article?id={detail['id']}")
     return "\n".join(lines)
@@ -514,7 +494,9 @@ def split_ann_images(detail: dict) -> tuple[list[dict], list[str]]:
 
 
 async def _announce_image_b64(
-    url: str, quality: int = 80, cover_size: tuple | None = None,
+    url: str,
+    quality: int = 80,
+    cover_size: tuple | None = None,
     anchor: str = "center",
 ) -> str:
     """公告配图直链 → base64（下载缓存 + webp 压缩；失败空串降级）。
@@ -525,12 +507,15 @@ async def _announce_image_b64(
     if not url:
         return ""
     try:
-        from ..utils.render import get_image_b64_with_cache
-        from ..utils.resource.RESOURCE_PATH import CACHE_PATH
+        from ArknightsUID.utils.render import get_image_b64_with_cache
+        from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
 
         return await get_image_b64_with_cache(
-            url, CACHE_PATH / "announce", quality=quality,
-            cover_size=cover_size, anchor=anchor,
+            url,
+            CACHE_PATH / "announce",
+            quality=quality,
+            cover_size=cover_size,
+            anchor=anchor,
         )
     except Exception as e:
         logger.debug(f"[ArknightsUID] 公告配图下载失败: {e}")
@@ -544,15 +529,13 @@ async def _announce_long_image_bytes(url: str) -> bytes:
     try:
         from gsuid_core.utils.image.convert import convert_img
 
-        from ..utils.image import pic_download_from_url
-        from ..utils.resource.RESOURCE_PATH import CACHE_PATH
+        from ArknightsUID.utils.image import pic_download_from_url
+        from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
 
         img = await pic_download_from_url(CACHE_PATH / "announce", url)
         return await convert_img(img)
     except Exception as e:
-        logger.warning(
-            f"[ArknightsUID] 公告超长图处理失败: {e.__class__.__name__}"
-        )
+        logger.warning(f"[ArknightsUID] 公告超长图处理失败: {e.__class__.__name__}")
         return b""
 
 
@@ -599,9 +582,7 @@ async def _build_ann_detail_context(
         "avatar": avatar_b64,
         "ip": detail.get("userIpLocation", ""),
         "url": f"https://www.skland.com/article?id={detail.get('id', '')}",
-        "paragraphs": [
-            p[:400] for p in (detail.get("paragraphs") or [])[:30]
-        ],
+        "paragraphs": [p[:400] for p in (detail.get("paragraphs") or [])[:30]],
         "images": [c for c in card_images_raw if c],
         "videos": [v for v in video_covers_raw if v],
         "longImageCount": len(long_images),
@@ -616,7 +597,10 @@ async def _render_ann_detail_card(
 ) -> tuple[bytes | None, list[bytes]]:
     """公告详情 → (详情卡图片, 超长图列表)；渲染失败 (None, []) 由调用方降级。"""
     try:
-        from ..utils.render import ark_templates, render_html
+        from ArknightsUID.utils.render import (
+            ark_templates,
+            render_html,
+        )
 
         context, long_images = await _build_ann_detail_context(detail, index)
         img = await render_html(ark_templates, "ark_announce_detail.html", context)
@@ -644,7 +628,8 @@ async def _show_ann_detail(bot: Bot, ev: Event, index: int) -> None:
         )
     context, long_images = await _build_ann_detail_context(detail, index)
     await send_card_or_text(
-        bot, ev,
+        bot,
+        ev,
         "ark_announce_detail.html",
         context,
         _format_ann_detail(detail),
@@ -657,12 +642,10 @@ async def _activity_banner_b64(url: str) -> str:
     if not url:
         return ""
     try:
-        from ..utils.render import get_image_b64_with_cache
-        from ..utils.resource.RESOURCE_PATH import CACHE_PATH
+        from ArknightsUID.utils.render import get_image_b64_with_cache
+        from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
 
-        return await get_image_b64_with_cache(
-            url, CACHE_PATH / "activity", quality=82
-        )
+        return await get_image_b64_with_cache(url, CACHE_PATH / "activity", quality=82)
     except Exception as e:
         logger.debug(f"[ArknightsUID] 活动标题图下载失败: {e}")
         return ""
@@ -682,7 +665,7 @@ async def show_ark_activities(bot: Bot, ev: Event) -> None:
     # 官方标题图（PRTS 活动页信息框，批量两次 API；失败按无图降级）
     banner_urls: dict[str, str] = {}
     try:
-        from ..utils.prts.client import activity_banner_urls
+        from ArknightsUID.utils.prts.client import activity_banner_urls
 
         banner_urls = await activity_banner_urls([a.title for a in activities])
     except Exception as e:
@@ -694,9 +677,7 @@ async def show_ark_activities(bot: Bot, ev: Event) -> None:
                 "title": act.title,
                 "start": act.start,
                 "end": act.end,
-                "image": await _activity_banner_b64(
-                    banner_urls.get(act.title, "")
-                ),
+                "image": await _activity_banner_b64(banner_urls.get(act.title, "")),
             }
         )
     context = {
@@ -714,7 +695,10 @@ async def show_ark_activities(bot: Bot, ev: Event) -> None:
         ],
     }
     await send_card_or_text(
-        bot, ev, "ark_activity.html", context,
+        bot,
+        ev,
+        "ark_activity.html",
+        context,
         _format_activities(activities, pools),
     )
 
@@ -748,12 +732,12 @@ async def show_ark_announcements(bot: Bot, ev: Event) -> None:
                 "url": ann.get("url", ""),
                 "author": ann.get("author", ""),
                 "cover": await _announce_image_b64(
-                    ann.get("cover", ""), quality=60, cover_size=(400, 224),
+                    ann.get("cover", ""),
+                    quality=60,
+                    cover_size=(400, 224),
                     anchor="top",
                 ),
-                "avatar": await _announce_image_b64(
-                    ann.get("avatar", ""), quality=70
-                ),
+                "avatar": await _announce_image_b64(ann.get("avatar", ""), quality=70),
             }
         )
     context = {
@@ -776,25 +760,25 @@ async def show_farm_plan(bot: Bot, ev: Event) -> None:
     targets = _parse_plan_targets(text)
     if not targets:
         return await _send_text(
-            bot, ev,
+            bot,
+            ev,
             "用法：ark计划 材料:数量 [材料:数量 …]（如 ark计划 聚酸酯块:10 龙门币:20000）",
         )
 
-    try:
-        from ArknightsUID.utils.gamedata.craft import craft_vs_farm, load_formulas
-    except ModuleNotFoundError:
-        from ArknightsUID.ArknightsUID.utils.gamedata.craft import (
-            craft_vs_farm,
-            load_formulas,
-        )
+    from ArknightsUID.utils.gamedata.craft import (
+        craft_vs_farm,
+        load_formulas,
+    )
 
     item_index = await load_item_index()
     matrix = await fetch_drop_matrix()
     stages = await fetch_stage_info()
     if not item_index or not matrix or not stages:
-        return await _send_text(bot, ev, "数据源不可用（gamedata/一图流拉取失败），请稍后再试。")
+        return await _send_text(
+            bot, ev, "数据源不可用（gamedata/一图流拉取失败），请稍后再试。"
+        )
 
-    from ..utils.yituliu import latest_matrix_by_item
+    from ArknightsUID.utils.yituliu import latest_matrix_by_item
 
     matrix_by_item = latest_matrix_by_item(matrix)
     stage_meta = {str(s.get("stageId", "")): s for s in stages}
@@ -832,8 +816,7 @@ async def show_farm_plan(bot: Bot, ev: Event) -> None:
         if result["craft"] is not None:
             if result["craft_sanity"] is not None:
                 leaves = " + ".join(
-                    f"{item_index[lid]['name']}×{ln}"
-                    if lid in item_index else lid
+                    f"{item_index[lid]['name']}×{ln}" if lid in item_index else lid
                     for lid, ln in result["craft_leaves"].items()
                 )
                 options.append(
@@ -867,14 +850,15 @@ async def show_farm_plan(bot: Bot, ev: Event) -> None:
     lines.append("数据：ArknightsGameData + ark.yituliu.cn（样本>300 关卡）")
     # 材料图标（失败空串降级）
     try:
-        from ..utils.gamedata.itemicon import item_icon_b64
+        from ArknightsUID.utils.gamedata.itemicon import item_icon_b64
 
         for row in card_rows:
             row["icon"] = await item_icon_b64(row["name"])
     except Exception as e:
         logger.debug(f"[ArknightsUID] 计划卡材料图标获取失败: {e}")
     await send_card_or_text(
-        bot, ev,
+        bot,
+        ev,
         "ark_farm_plan.html",
         {
             "rows": card_rows,
@@ -902,7 +886,9 @@ async def show_stage_recommend(bot: Bot, ev: Event) -> None:
         rows = rank_stages(records, query)
         if not rows:
             return await _send_text(
-                bot, ev, f"未找到分组「{query}」，可选：主线 / 别传 / 限时活动 / 资源收集"
+                bot,
+                ev,
+                f"未找到分组「{query}」，可选：主线 / 别传 / 限时活动 / 资源收集",
             )
         lines = [f"「明日方舟」{query} · 刷图效率榜（一图流 spm）"]
         for record in rows:
@@ -943,9 +929,7 @@ async def show_drop_rate(bot: Bot, ev: Event) -> None:
     item_id = ""
     if item_index:
         # 精确名 → 唯一前缀
-        exact = [
-            iid for iid, info in item_index.items() if info.get("name") == query
-        ]
+        exact = [iid for iid, info in item_index.items() if info.get("name") == query]
         if len(exact) == 1:
             item_id = exact[0]
         else:
@@ -965,7 +949,8 @@ async def show_drop_rate(bot: Bot, ev: Event) -> None:
                 )
     if not item_id:
         return await _send_text(
-            bot, ev,
+            bot,
+            ev,
             f"未找到材料「{query}」（物品数据首次使用需联网下载，可稍后重试）。",
         )
 
@@ -975,9 +960,7 @@ async def show_drop_rate(bot: Bot, ev: Event) -> None:
         return await _send_text(bot, ev, "掉落数据获取失败（一图流），请稍后重试。")
 
     stage_meta = {str(s.get("stageId", "")): s for s in stages}
-    stats = item_drop_stats(
-        item_id, latest_matrix_by_item(matrix), stage_meta, top=8
-    )
+    stats = item_drop_stats(item_id, latest_matrix_by_item(matrix), stage_meta, top=8)
     item_name = str((item_index.get(item_id) or {}).get("name", "") or query)
     if not stats:
         return await _send_text(
@@ -1013,9 +996,7 @@ async def show_drop_rate(bot: Bot, ev: Event) -> None:
             for r in stats
         ],
     }
-    await send_card_or_text(
-        bot, ev, "ark_drop_rate.html", context, "\n".join(lines)
-    )
+    await send_card_or_text(bot, ev, "ark_drop_rate.html", context, "\n".join(lines))
 
 
 @push_sub_sv.on_fullmatch(("订阅方舟活动", "订阅活动"))
@@ -1120,8 +1101,7 @@ async def unsubscribe_ark_announcements(bot: Bot, ev: Event) -> None:
         return await _send_text(bot, ev, "已取消官方公告推送。")
 
     mine = [
-        s for s in data
-        if not getattr(s, "group_id", None) and s.user_id == ev.user_id
+        s for s in data if not getattr(s, "group_id", None) and s.user_id == ev.user_id
     ]
     if not mine:
         return await _send_text(bot, ev, "未曾订阅官方公告。")
@@ -1140,16 +1120,22 @@ async def collect_current_entries() -> dict[str, list[dict[str, str]]]:
     try:
         for act in await query_activities(limit=20):
             entries.setdefault(_activity_key("活动", act.title), []).append(
-                {"kind": "活动", "title": act.title,
-                 "detail": f"{act.start} ~ {act.end}"}
+                {
+                    "kind": "活动",
+                    "title": act.title,
+                    "detail": f"{act.start} ~ {act.end}",
+                }
             )
     except Exception as exc:
         logger.warning(f"[ArknightsUID·推送] 活动拉取失败: {exc.__class__.__name__}")
     try:
         for pool in await query_gacha_pools(limit=10):
             entries.setdefault(_activity_key("卡池", pool.title), []).append(
-                {"kind": "卡池", "title": pool.title,
-                 "detail": f"{pool.start} ~ {pool.end}"}
+                {
+                    "kind": "卡池",
+                    "title": pool.title,
+                    "detail": f"{pool.start} ~ {pool.end}",
+                }
             )
     except Exception as exc:
         logger.warning(f"[ArknightsUID·推送] 卡池拉取失败: {exc.__class__.__name__}")
@@ -1172,7 +1158,8 @@ def diff_new_entries(
     seen_set = set(seen)
     return [
         {**items[0], "key": key}
-        for key, items in entries.items() if key not in seen_set
+        for key, items in entries.items()
+        if key not in seen_set
     ]
 
 
@@ -1230,29 +1217,21 @@ async def _push_new_announcements(datas) -> None:
             for k, v in (state.get("delivered") or {}).items()
             if isinstance(v, list)
         }
-        delivered_before = {
-            k: list(v) for k, v in delivered.items()
-        }
+        delivered_before = {k: list(v) for k, v in delivered.items()}
 
         # 公告本体直接出图（对齐 EndUID 订阅推送）：每条新公告渲染详情卡，
         # 与 ark公告 N 同版式；一轮只构建一次，各订阅会话复用同一批消息段
-        index_by_id = {
-            str(a["id"]): i + 1 for i, a in enumerate(anns) if a.get("id")
-        }
+        index_by_id = {str(a["id"]): i + 1 for i, a in enumerate(anns) if a.get("id")}
         segments_by_id = await _build_ann_push_segments(
             [a for a in fresh if str(a["id"]) in fresh_ids], index_by_id
         )
 
         async def _build_ann_message(ids: list[str]) -> list:
-            segs = [
-                seg for ann_id in ids for seg in segments_by_id.get(ann_id, [])
-            ]
+            segs = [seg for ann_id in ids for seg in segments_by_id.get(ann_id, [])]
             if segs:
                 return segs
             # 构建阶段整批失败（理论兜底）：退回纯文字清单
-            return format_ann_push_message(
-                [a for a in fresh if str(a["id"]) in ids]
-            )
+            return format_ann_push_message([a for a in fresh if str(a["id"]) in ids])
 
         delivered, _any = await _deliver_per_session(
             datas, fresh_ids, _build_ann_message, delivered, "公告推送"
@@ -1261,16 +1240,17 @@ async def _push_new_announcements(datas) -> None:
         # 部分完成 → seen 不动、delivered 落盘，下轮只补发未覆盖会话
         sessions = {_session_key(sub) for sub in datas}
         done = [
-            key for key in fresh_ids
+            key
+            for key in fresh_ids
             if sessions and sessions.issubset(set(delivered.get(key) or []))
         ]
         if done or delivered != delivered_before:
-            _save_ann_state({
-                "seen": seen + done,
-                "delivered": {
-                    k: v for k, v in delivered.items() if k not in done
-                },
-            })
+            _save_ann_state(
+                {
+                    "seen": seen + done,
+                    "delivered": {k: v for k, v in delivered.items() if k not in done},
+                }
+            )
         else:
             # 全部投递失败且无新进度：不落盘（seen/delivered 均未变），
             # 下轮整批重试
@@ -1342,25 +1322,24 @@ async def check_ark_activities() -> None:
             for k, v in (state.get("delivered") or {}).items()
             if isinstance(v, list)
         }
-        delivered_before = {
-            k: list(v) for k, v in delivered.items()
-        }
+        delivered_before = {k: list(v) for k, v in delivered.items()}
         delivered, _any = await _deliver_per_session(
             datas, pushed_keys, _build_entry_message, delivered, "推送"
         )
         # 条目对全部会话投递完成 → 推进全局 seen；部分完成 → 下轮补发
         sessions = {_session_key(sub) for sub in datas}
         done = [
-            key for key in pushed_keys
+            key
+            for key in pushed_keys
             if sessions and sessions.issubset(set(delivered.get(key) or []))
         ]
         if done or delivered != delivered_before:
-            save_push_state({
-                "seen": seen + done,
-                "delivered": {
-                    k: v for k, v in delivered.items() if k not in done
-                },
-            })
+            save_push_state(
+                {
+                    "seen": seen + done,
+                    "delivered": {k: v for k, v in delivered.items() if k not in done},
+                }
+            )
         logger.info("[ArknightsUID·推送] 推送完毕")
 
 
@@ -1375,7 +1354,8 @@ def _match_item_id(query: str, item_index: dict) -> str | None:
     if len(exact) == 1:
         return exact[0]
     prefix = [
-        iid for iid, info in item_index.items()
+        iid
+        for iid, info in item_index.items()
         if str(info.get("name", "")).startswith(query)
     ]
     return prefix[0] if len(prefix) == 1 else None
@@ -1405,25 +1385,22 @@ async def show_craft_tree(bot: Bot, ev: Event) -> None:
     if not query:
         return await _send_text(bot, ev, "用法：ark合成 材料名（如 ark合成 聚酸酯块）")
 
-    try:
-        from ArknightsUID.utils.gamedata.craft import (
-            craft_tree,
-            format_craft_tree,
-            load_formulas,
-        )
-    except ModuleNotFoundError:
-        from ArknightsUID.ArknightsUID.utils.gamedata.craft import (
-            craft_tree,
-            format_craft_tree,
-            load_formulas,
-        )
+    from ArknightsUID.utils.gamedata.craft import (
+        craft_tree,
+        format_craft_tree,
+        load_formulas,
+    )
 
     item_index = await load_item_index()
     if not item_index:
-        return await _send_text(bot, ev, "物品数据不可用（gamedata 拉取失败），请稍后再试。")
+        return await _send_text(
+            bot, ev, "物品数据不可用（gamedata 拉取失败），请稍后再试。"
+        )
     item_id = _match_item_id(query, item_index)
     if not item_id:
-        return await _send_text(bot, ev, f"未找到材料「{query}」（或匹配到多种，请写全名）。")
+        return await _send_text(
+            bot, ev, f"未找到材料「{query}」（或匹配到多种，请写全名）。"
+        )
 
     formulas = await load_formulas()
     if not formulas or item_id not in formulas:
@@ -1437,7 +1414,7 @@ async def show_craft_tree(bot: Bot, ev: Event) -> None:
     lines.append("数据：ArknightsGameData（workshopFormulas）；合成需加工站 Lv3")
 
     # 卡片行：树展平为带缩进层级的节点列表（图标仅首两层，避免逐叶下载）
-    from ..utils.gamedata.itemicon import item_icon_b64
+    from ArknightsUID.utils.gamedata.itemicon import item_icon_b64
 
     card_rows: list[dict] = []
 
@@ -1462,7 +1439,8 @@ async def show_craft_tree(bot: Bot, ev: Event) -> None:
 
     await _walk(tree, 0)
     await send_card_or_text(
-        bot, ev,
+        bot,
+        ev,
         "ark_craft.html",
         {
             "name": item_index[item_id]["name"],

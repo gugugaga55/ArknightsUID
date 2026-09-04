@@ -10,31 +10,26 @@ character_table.json（~15MB）的下载与 TTL 缓存逻辑原来只在 recruit
 下载走共享 HTTP 层（utils.http），缓存读写走统一磁盘缓存层
 （utils.disk_cache：异步 I/O + 原子写，15-18MB 的全量表不再阻塞事件循环）。
 """
+
 from __future__ import annotations
 
 import asyncio
 import json
+import time
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
 from gsuid_core.logger import logger
 
-try:
-    from ArknightsUID.ArknightsUID.utils.http import download_bytes
-    from ArknightsUID.ArknightsUID.utils.disk_cache import (
-        cache_read,
-        cache_write,
-        is_fresh,
-    )
-    from ArknightsUID.ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
-except ModuleNotFoundError:
-    from ArknightsUID.utils.http import download_bytes
-    from ArknightsUID.utils.disk_cache import (
-        cache_read,
-        cache_write,
-        is_fresh,
-    )
-    from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
+from ..http import download_bytes
+from ..disk_cache import (
+    cache_read,
+    cache_saved_ts,
+    cache_write,
+    is_fresh,
+)
+from ..resource.RESOURCE_PATH import CACHE_PATH
 
 GAMEDATA_BASE = (
     "https://raw.githubusercontent.com/Kengxxiao/ArknightsGameData"
@@ -86,6 +81,33 @@ def _lock_for(path: Path) -> asyncio.Lock:
     return lock
 
 
+# 进程内已解析全量表的 LRU memo：TTL 内重复命令不再为同一张 15-18MB
+# 表反复 json.loads（此前每条用到表的命令都要整表解析一次）。
+# 上限 8 张（单条命令最多触达 2-3 张表）；淘汰只是回到"下次再解析一次"，
+# 不改变任何对外行为。内存代价：常驻表的原生 dict 形态。
+_TABLE_MEMO_MAX = 8
+_table_memo: OrderedDict[Path, tuple[float, dict[str, Any]]] = OrderedDict()
+
+
+def _memo_get(path: Path, ttl: float) -> dict[str, Any] | None:
+    hit = _table_memo.get(path)
+    if hit is None:
+        return None
+    saved_ts, payload = hit
+    if is_fresh(saved_ts, ttl):
+        _table_memo.move_to_end(path)
+        return payload
+    _table_memo.pop(path, None)
+    return None
+
+
+def _memo_put(path: Path, saved_ts: float, payload: dict[str, Any]) -> None:
+    _table_memo[path] = (saved_ts, payload)
+    _table_memo.move_to_end(path)
+    while len(_table_memo) > _TABLE_MEMO_MAX:
+        _table_memo.popitem(last=False)
+
+
 # 下载镜像：raw 直链偶发 SSL 中断，jsdelivr CDN 兜底（同一仓库同一分支）
 _GAMEDATA_MIRROR_TEMPLATES = (
     None,  # 占位：先用原始 raw URL
@@ -123,9 +145,8 @@ async def _read_wrapped_cache(path: Path) -> dict[str, Any] | None:
 
 
 async def _cache_fresh(path: Path, ttl: float) -> bool:
-    """包装缓存的 TTL 判定（async 版，供 charinfo/recruit/rogue_relic 用）。"""
-    _payload, saved_ts = await cache_read(path)
-    return is_fresh(saved_ts, ttl)
+    """包装缓存的 TTL 判定（只读文件头时间戳，不再解析全量 payload）。"""
+    return is_fresh(await cache_saved_ts(path), ttl)
 
 
 def _read_sidecar(path: Path) -> Any | None:
@@ -146,34 +167,55 @@ def _write_sidecar(path: Path, payload: Any) -> None:
         )
 
 
+async def _read_fresh_from_disk(path: Path, ttl: float) -> dict[str, Any] | None:
+    """磁盘新鲜缓存直读：判鲜只读文件头，命中才整表解析并回填 memo。"""
+    saved_ts = await cache_saved_ts(path)
+    if not is_fresh(saved_ts, ttl):
+        return None
+    payload, actual_ts = await cache_read(path)
+    if isinstance(payload, dict):
+        _memo_put(path, actual_ts, payload)
+        return payload
+    return None
+
+
 async def _ensure_table(
     url: str, path: Path, ttl: float = CHAR_TABLE_TTL, force: bool = False
 ) -> dict[str, Any] | None:
-    """ensure_* 表的共用策略：新鲜缓存直读 → 下载回写 → 过期缓存兜底。
+    """ensure_* 表的共用策略：memo/新鲜缓存直读 → 下载回写 → 过期缓存兜底。
 
     下载段持 per-path 锁并复查新鲜度，避免 TTL 过期瞬间的并发调用
     重复拉取同一个 15-18MB 全量表。
     """
     if not force:
-        payload, saved_ts = await cache_read(path)
-        if isinstance(payload, dict) and is_fresh(saved_ts, ttl):
-            return payload
+        memo = _memo_get(path, ttl)
+        if memo is not None:
+            return memo
+        fresh = await _read_fresh_from_disk(path, ttl)
+        if fresh is not None:
+            return fresh
     async with _lock_for(path):
         if not force:
             # 等锁期间可能已有并发调用完成下载回写，复查一次
-            payload, saved_ts = await cache_read(path)
-            if isinstance(payload, dict) and is_fresh(saved_ts, ttl):
-                return payload
+            memo = _memo_get(path, ttl)
+            if memo is not None:
+                return memo
+            fresh = await _read_fresh_from_disk(path, ttl)
+            if fresh is not None:
+                return fresh
         fresh = await _download_json(url)
         if isinstance(fresh, dict):
             await cache_write(path, fresh)
+            _memo_put(path, time.time(), fresh)
             return fresh
         return await _read_wrapped_cache(path)
 
 
 async def ensure_rogue_topic_table(force: bool = False) -> dict[str, Any] | None:
     """确保 roguelike_topic_table 可用（同 ensure_char_table 策略；~18MB）。"""
-    return await _ensure_table(ROGUE_TOPIC_TABLE_URL, ROGUE_TOPIC_TABLE_PATH, force=force)
+    return await _ensure_table(
+        ROGUE_TOPIC_TABLE_URL, ROGUE_TOPIC_TABLE_PATH, force=force
+    )
 
 
 async def ensure_char_table(force: bool = False) -> dict[str, Any] | None:

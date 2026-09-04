@@ -4,17 +4,17 @@ import gzip
 import json
 import asyncio
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any
 
 from gsuid_core.logger import logger
 
 # 逐用户大文件 gzip 落盘,读兼容旧明文
 _GZIP_NAMES = {
-    "player_info.json",   # game/player/info 的完整 dump（1w+ 行）
-    "gacha_logs.json",    # 抽卡记录累积
+    "player_info.json",  # game/player/info 的完整 dump（1w+ 行）
+    "gacha_logs.json",  # 抽卡记录累积
 }
 
-PathLike = Union[str, Path]
+PathLike = str | Path
 
 
 def _is_gzip(name: str) -> bool:
@@ -29,7 +29,7 @@ def assert_uid_segment(uid: str) -> str:
     return text
 
 
-def resolve_player_path(path: PathLike) -> Optional[Path]:
+def resolve_player_path(path: PathLike) -> Path | None:
     """实际落盘路径：.gz 优先,回退明文;都不存在返回 None。move/unlink 用它。"""
     p = Path(path)
     if _is_gzip(p.name):
@@ -65,7 +65,9 @@ def _read_one(p: Path) -> Any:
 def _gzip_dump(path: Path, obj: Any) -> None:
     data = json.dumps(obj, ensure_ascii=False).encode("utf-8")
     with open(path, "wb") as raw:
-        with gzip.GzipFile(fileobj=raw, mode="wb", compresslevel=6, filename="", mtime=0) as f:
+        with gzip.GzipFile(
+            fileobj=raw, mode="wb", compresslevel=6, filename="", mtime=0
+        ) as f:
             f.write(data)
 
 

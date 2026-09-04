@@ -14,35 +14,20 @@ from urllib.parse import quote
 
 from gsuid_core.logger import logger
 
-try:
-    from ArknightsUID.ArknightsUID.utils.http import get_client
-    from ArknightsUID.ArknightsUID.utils.disk_cache import (
-        cache_read,
-        cache_write,
-        is_fresh,
-    )
-    from ArknightsUID.ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
-except ModuleNotFoundError:
-    from ArknightsUID.utils.http import get_client
-    from ArknightsUID.utils.disk_cache import (
-        cache_read,
-        cache_write,
-        is_fresh,
-    )
-    from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
+from ..http import get_client
+from ..disk_cache import cache_read, cache_write, is_fresh
+from ..resource.RESOURCE_PATH import CACHE_PATH
 
-
-PRTS_API_URL = "https://prts.wiki/api.php"
-PRTS_PAGE_URL = "https://prts.wiki/w/"
-# PRTS.Map 交互地图（ark-nights.com 家族，默认中文界面；mapen.* 为英文站）
-PRTS_MAP_URL = "https://map.ark-nights.com/?map="
-# PRTS 的 Tengine 反代实测（2026-08-14）：封杀浏览器特征 UA（Chrome 等一律 403），
-# 放行"可联系的自定义 UA"——这恰是 MediaWiki 官方对 bot 的建议。切勿改成浏览器 UA，
 # 否则 wiki 模块全部接口（query/parse/prop=text）会被打成 403。
 USER_AGENT = "ArknightsUID/0.1 (+GsCore; PRTS MediaWiki API)"
 
 PRTS_CACHE_PATH = CACHE_PATH / "prts"
 PRTS_CACHE_PATH.mkdir(parents=True, exist_ok=True)
+
+PRTS_API_URL = "https://prts.wiki/api.php"
+PRTS_PAGE_URL = "https://prts.wiki/w/"
+# PRTS.Map 交互地图（ark-nights.com 家族，默认中文界面；mapen.* 为英文站）
+PRTS_MAP_URL = "https://map.ark-nights.com/?map="
 
 # 单关敌方情报模板最多解析的敌人条目数；超过此值的极少数关卡按上限截断。
 _MAX_ENEMY_FIELDS = 80
@@ -56,7 +41,7 @@ _last_cleanup_at: float = 0.0
 # 容易整段 IP 被 403。缓存命中不经过 _api 网络路径，不受此间隔影响。
 _MIN_REQUEST_INTERVAL = 0.5
 _last_request_at: float = 0.0
-_request_gap_lock: "asyncio.Lock | None" = None
+_request_gap_lock: asyncio.Lock | None = None
 
 
 async def _throttle() -> None:
@@ -102,6 +87,7 @@ class HoloIndicator:
     score:   分数=N（仅附加指标提供评分）
     grouped: 在 {{测试指标/全息/分组}} 内（基础=每组必选1 / 附加=冲突组）
     """
+
     section: str = ""
     token: str = ""
     text: str = ""
@@ -160,31 +146,38 @@ class EnemyLevel:
     attack_interval: str = ""
     attack_radius: str = ""
     weight: str = ""
-    hp_regen: str = ""       # 生命恢复速度
-    sp_regen: str = ""       # sp恢复速度
-    ep_res: str = ""         # 元素抗性
+    hp_regen: str = ""  # 生命恢复速度
+    sp_regen: str = ""  # sp恢复速度
+    ep_res: str = ""  # 元素抗性
     ep_damage_res: str = ""  # 损伤抵抗
-    taunt: str = ""          # 基础嘲讽等级
+    taunt: str = ""  # 基础嘲讽等级
     stun_res: str = ""
     silence_res: str = ""
     sleep_res: str = ""
     freeze_res: str = ""
     levitate_res: str = ""
-    tremor_res: str = ""     # 战栗抗性
-    fear_res: str = ""       # 恐惧抗性
+    tremor_res: str = ""  # 战栗抗性
+    fear_res: str = ""  # 恐惧抗性
     paralysis_res: str = ""  # 麻痹抗性
-    lure_res: str = ""       # 诱导抗性
-    teleport_res: str = ""   # 传送抗性
-    bind_res: str = ""       # 缚地抗性
+    lure_res: str = ""  # 诱导抗性
+    teleport_res: str = ""  # 传送抗性
+    bind_res: str = ""  # 缚地抗性
     abilities: list[str] = field(default_factory=list)
 
 
 # 全部异常抗性（attr, 中文标签）：取值 "有"/"无"（个别敌人可能是部分抗性描述）
 RESISTANCE_FIELDS: tuple[tuple[str, str], ...] = (
-    ("stun_res", "眩晕"), ("silence_res", "沉默"), ("sleep_res", "沉睡"),
-    ("freeze_res", "冻结"), ("levitate_res", "浮空"), ("tremor_res", "战栗"),
-    ("fear_res", "恐惧"), ("paralysis_res", "麻痹"), ("lure_res", "诱导"),
-    ("teleport_res", "传送"), ("bind_res", "缚地"),
+    ("stun_res", "眩晕"),
+    ("silence_res", "沉默"),
+    ("sleep_res", "沉睡"),
+    ("freeze_res", "冻结"),
+    ("levitate_res", "浮空"),
+    ("tremor_res", "战栗"),
+    ("fear_res", "恐惧"),
+    ("paralysis_res", "麻痹"),
+    ("lure_res", "诱导"),
+    ("teleport_res", "传送"),
+    ("bind_res", "缚地"),
 )
 
 
@@ -226,6 +219,7 @@ class WikiPageSummary:
 @dataclass(slots=True)
 class SkillLevelDetail:
     """技能单级数值（1-7 级或专精 1-3，来自 {{技能2}} 模板）。"""
+
     level: str = ""
     description: str = ""
     sp_init: str = ""
@@ -236,6 +230,7 @@ class SkillLevelDetail:
 @dataclass(slots=True)
 class SkillMasteryCost:
     """技能专精材料（专1/专2/专3，来自 {{技能升级材料}} 的 一8/一9/一10 等键）。"""
+
     mastery: str = ""
     materials: list[str] = field(default_factory=list)
 
@@ -243,8 +238,8 @@ class SkillMasteryCost:
 @dataclass(slots=True)
 class OperatorSkill:
     name: str = ""
-    skill_type: str = ""        # 技能类型1 + 类型2，如 "自动回复 / 手动触发"
-    range_: str = ""            # 技能范围（range 为内置名，故用 range_）
+    skill_type: str = ""  # 技能类型1 + 类型2，如 "自动回复 / 手动触发"
+    range_: str = ""  # 技能范围（range 为内置名，故用 range_）
     levels: list[SkillLevelDetail] = field(default_factory=list)
     mastery_costs: list[SkillMasteryCost] = field(default_factory=list)
     remark: str = ""
@@ -253,14 +248,14 @@ class OperatorSkill:
 @dataclass(slots=True)
 class TalentStage:
     condition: str = ""  # 精英1 / 精英2 / 精英2 X模组3级 ...
-    effect: str = ""     # 含具体数值
+    effect: str = ""  # 含具体数值
 
 
 @dataclass(slots=True)
 class OperatorTalent:
-    slot: str = ""              # 第一天赋 / 第二天赋
+    slot: str = ""  # 第一天赋 / 第二天赋
     name: str = ""
-    unlock: str = ""            # 精英1 / 精英2 X模组2级 ...
+    unlock: str = ""  # 精英1 / 精英2 X模组2级 ...
     description: str = ""
     stages: list[TalentStage] = field(default_factory=list)
     potential: TalentStage | None = None  # 满潜强化效果（最高档）
@@ -269,15 +264,17 @@ class OperatorTalent:
 @dataclass(slots=True)
 class BaseSkill:
     """后勤技能。名字/阶段来自 {{后勤技能}}，效果经 Cargo 表 building_skill2 补全。"""
+
     name: str = ""
-    unlock: str = ""            # 精英0 / 精英2
-    room: str = ""              # 贸易站 / 制造站 / ...
-    description: str = ""       # 进驻效果（含数值）
+    unlock: str = ""  # 精英0 / 精英2
+    room: str = ""  # 贸易站 / 制造站 / ...
+    description: str = ""  # 进驻效果（含数值）
 
 
 @dataclass(slots=True)
 class OperatorPanel:
     """属性面板（{{属性}}：再部署/费用/阻挡/攻速 + 精英各级满级数值）。"""
+
     redeploy: str = ""
     deploy_cost: str = ""
     block: str = ""
@@ -287,16 +284,31 @@ class OperatorPanel:
 
 @dataclass(slots=True)
 class OperatorModule:
-    """模组（{{模组}}）。"""
+    """模组（{{模组}} 多块）。
+
+    基础证章只有 description；升级模组（X/Y）另有 trait（特性追加，
+    变量已填充）、talent_updates/potential_talents（Lv2/Lv3 天赋更新/
+    满潜变体文本）、upgrade_costs（解锁/Lv2/Lv3 三档材料）、missions
+    （解锁任务）。
+    """
+
     name: str = ""
     branch: str = ""
-    type_: str = ""             # 基础证章 / X模组 / Y模组
-    description: str = ""       # 基础信息
+    type_: str = ""  # 基础证章 / LOR-X / CCR-Y 等类型图标值
+    description: str = ""  # 基础信息（证章说明 / 模组故事）
+    trait: str = ""  # 特性追加文本
+    talent_updates: dict[str, str] = field(default_factory=dict)
+    potential_talents: dict[str, str] = field(default_factory=dict)
+    upgrade_costs: dict[str, list[str]] = field(default_factory=dict)
+    missions: list[str] = field(default_factory=list)
+    unlock_level: str = ""
+    unlock_favor: str = ""
 
 
 @dataclass(slots=True)
 class ParadoxSimulation:
     """悖论模拟（{{悖论模拟}}）。"""
+
     name: str = ""
     description: str = ""
     elite: str = ""
@@ -307,20 +319,21 @@ class ParadoxSimulation:
 @dataclass(slots=True)
 class ActivityInfo:
     """限时活动/卡池（SMW 属性查询）。时间为北京时间。"""
+
     title: str
-    start: str = ""       # 2026-08-01 04:00
+    start: str = ""  # 2026-08-01 04:00
     end: str = ""
     start_ts: float = 0.0
     end_ts: float = 0.0
     source_url: str = ""
-    image_url: str = ""   # 官方标题图直链（activity_banner_urls 填充，可空）
+    image_url: str = ""  # 官方标题图直链（activity_banner_urls 填充，可空）
 
 
 @dataclass(slots=True)
 class OperatorInfo:
     title: str
     name: str = ""
-    rarity: str = ""            # PRTS 存 0-5（对应 1-6 星），展示时 +1
+    rarity: str = ""  # PRTS 存 0-5（对应 1-6 星），展示时 +1
     profession: str = ""
     branch: str = ""
     position: str = ""
@@ -369,17 +382,14 @@ def map_file_url(title: str) -> str:
     if not title:
         return ""
     digest = hashlib.md5(title.encode("utf-8")).hexdigest()
-    return (
-        f"https://media.prts.wiki/{digest[0]}/{digest[:2]}/"
-        f"{quote(title)}"
-    )
+    return f"https://media.prts.wiki/{digest[0]}/{digest[:2]}/{quote(title)}"
 
 
 def map_candidate_titles(code: str, name: str) -> list[str]:
     """关卡地图候选文件名：标准命名 + 辅助命名（JT 插曲关只有后者）。"""
     if not code or not name:
         return []
-    return [f"{code}_{name}_地图.png", f"{code}_{name}_辅助地图.png"]
+    return [map_file_title(code, name), f"{code}_{name}_辅助地图.png"]
 
 
 async def resolve_map_file_url(code: str, name: str) -> str:
@@ -438,7 +448,7 @@ async def rogue_map_file_urls(code: str, name: str) -> list[str]:
         return []
     urls: list[str] = []
     for title in (
-        f"{code}_{name}_地图.png",
+        map_file_title(code, name),
         *(f"{code}_{name}_地图_{i}.png" for i in (1, 2, 3)),
     ):
         url = await _imageinfo_url(title)
@@ -448,7 +458,7 @@ async def rogue_map_file_urls(code: str, name: str) -> list[str]:
 
 
 def rogue_map_preview_urls(level_id: str) -> list[str]:
-    """tomimi level_id → torappu 地图预览直链（PRTS 肉鸽关卡页地图的实际来源）。
+    """tomomi level_id → torappu 地图预览直链（PRTS 肉鸽关卡页地图的实际来源）。
 
     规律（实测）：level_rogue4_2-2 → ro4_n_2_2.png（层关加 n 前缀=普通；
     紧急 e 版地图布局相同不重复嵌）；level_rogue4_b-8 → ro4_b_8.png（分歧关）；
@@ -462,6 +472,22 @@ def rogue_map_preview_urls(level_id: str) -> list[str]:
     if part[0].isdigit():
         part = f"n_{part}"
     return [f"https://torappu.prts.wiki/assets/map_preview/ro{k}_{part}.png"]
+
+
+TORAPPU_MAP_PREVIEW_URL = "https://torappu.prts.wiki/assets/map_preview"
+
+
+def stage_map_preview_url(stage_id: str) -> str:
+    """stage_id → torappu 地图预览直链（活动关卡地图的主来源）。
+
+    PRTS 只给主线/教学关上传 `{代号}_{名}_地图.png`，活动关（CW-/SR- 等）
+    从无此命名文件；而 torappu 预览按 level_id 原文命名，实测（2026-09）
+    当期活动 act54side_01（月行水上 SR-1，开服首日）即可拉，历史活动
+    （act24side/act49-53side）与主线（main_01-07 ~ main_15-01）全覆盖。
+    ST 剧情关无战斗地图，404 属语义正确（调用方按无图降级）。
+    """
+    sid = (stage_id or "").strip()
+    return f"{TORAPPU_MAP_PREVIEW_URL}/{quote(sid)}.png" if sid else ""
 
 
 async def all_image_titles(prefix: str, max_titles: int = 4000) -> list[str]:
@@ -587,8 +613,7 @@ async def _api(
             # （审计 #30）：绝不能写缓存（TTL 最长 30 天内持续命中错误），
             # 尝试用旧成功缓存兜底
             logger.warning(
-                "[ArknightsUID] PRTS API 错误信封: "
-                f"{str(payload.get('error'))[:60]}"
+                f"[ArknightsUID] PRTS API 错误信封: {str(payload.get('error'))[:60]}"
             )
             return await _load_stale_cache(cache_path)
         await cache_write(cache_path, payload)
@@ -598,8 +623,7 @@ async def _api(
         # PRTS 层无脱敏上下文（异常 message 可能携带 srsearch 参数等
         # 任意文本），按安全约定只打类名
         logger.warning(
-            "[ArknightsUID] PRTS API request failed: "
-            f"{exc.__class__.__name__}"
+            f"[ArknightsUID] PRTS API request failed: {exc.__class__.__name__}"
         )
         return await _load_stale_cache(cache_path)
 
@@ -913,7 +937,7 @@ def _parse_holo_indicator(
     head = "{{测试指标/全息|"
     if not (stripped.startswith(head) and stripped.endswith("}}")):
         return None
-    args = [a for a in _split_template_args(stripped[len("{{测试指标/全息"):-2]) if a]
+    args = [a for a in _split_template_args(stripped[len("{{测试指标/全息") : -2]) if a]
     indicator = HoloIndicator(section=section, grouped=grouped)
     positional: list[str] = []
     for arg in args:
@@ -990,14 +1014,12 @@ def _extract_env_conditions(description: str) -> tuple[str, list[str]]:
     if not match:
         return text, []
     head = text[: match.start()].rstrip()
-    tail = text[match.end():].strip()
+    tail = text[match.end() :].strip()
     conditions = [c.strip() for c in tail.split("\n") if c.strip()]
     return head, conditions
 
 
-def _build_assault_diffs(
-    normal: dict[str, str], assault: dict[str, str]
-) -> list[str]:
+def _build_assault_diffs(normal: dict[str, str], assault: dict[str, str]) -> list[str]:
     """生成突袭 vs 普通的人读差异点。
 
     数字字段→"{label}：{normal}→{assault}（±Δ）"；非数字/缺失字段→"突袭 {label}：{value}"。
@@ -1144,9 +1166,19 @@ async def query_stage(query: str) -> StageInfo | None:
 
 # 等级变体块可从上一级继承的数值字段（index/描述/能力不继承）
 _LEVEL_STAT_FIELDS = (
-    "max_hp", "atk", "defense", "res", "move_speed", "attack_interval",
-    "attack_radius", "weight", "hp_regen", "sp_regen", "ep_res",
-    "ep_damage_res", "taunt",
+    "max_hp",
+    "atk",
+    "defense",
+    "res",
+    "move_speed",
+    "attack_interval",
+    "attack_radius",
+    "weight",
+    "hp_regen",
+    "sp_regen",
+    "ep_res",
+    "ep_damage_res",
+    "taunt",
 ) + tuple(attr for attr, _ in RESISTANCE_FIELDS)
 
 
@@ -1155,9 +1187,7 @@ def _inherit_level_stats(levels: list[EnemyLevel]) -> None:
     for previous, current in zip(levels, levels[1:]):
         for field_name in _LEVEL_STAT_FIELDS:
             if not getattr(current, field_name):
-                setattr(
-                    current, field_name, getattr(previous, field_name)
-                )
+                setattr(current, field_name, getattr(previous, field_name))
 
 
 def _merge_level_abilities(
@@ -1184,7 +1214,9 @@ def _merge_level_abilities(
         parts = [
             f"{label}{sp[flag]}"
             for label, flag in (
-                ("初始", "初始"), ("消耗", "消耗"), ("持续", "持续"),
+                ("初始", "初始"),
+                ("消耗", "消耗"),
+                ("持续", "持续"),
             )
             if flag in sp
         ]
@@ -1470,24 +1502,56 @@ def parse_operator_wikitext(page: PageWikitext) -> OperatorInfo | None:
         )
 
     # === 模组（{{模组}} 多块）===
+    # 材料字段（材料消耗/2/3）必须从 raw 取——_fields_from_template 的
+    # 清洗会把 {{材料消耗|名|数}} 归约成 "数" 丢掉材料名
     module_blocks = _template_lines(page.wikitext, ("模组",))
     modules: list[OperatorModule] = []
+
+    def _clean_module_text(value: str) -> str:
+        """模组文本清理：通用清洗 + 去掉 变动数值lite 模板的方向装饰（↑↓）。"""
+        return re.sub(r"[↑↓]", "", _clean_wiki_value(value))
+
     for block in module_blocks:
         mf = _fields_from_template(block)
+        mf_raw = _fields_from_template_raw(block)
+        talent_updates: dict[str, str] = {}
+        potential_talents: dict[str, str] = {}
+        for lvl in ("2", "3"):
+            update = _clean_module_text(mf.get(f"天赋{lvl}", ""))
+            if update:
+                talent_updates[lvl] = update
+            potential = _clean_module_text(mf.get(f"潜能天赋{lvl}", ""))
+            if potential:
+                potential_talents[lvl] = potential
+        upgrade_costs: dict[str, list[str]] = {}
+        for key, lvl in (("材料消耗", "1"), ("材料消耗2", "2"), ("材料消耗3", "3")):
+            items = _material_to_text(mf_raw.get(key, ""))
+            if items:
+                upgrade_costs[lvl] = items
+        missions = [
+            _clean_module_text(mf.get(f"任务{i}", ""))
+            for i in (1, 2)
+            if mf.get(f"任务{i}")
+        ]
         modules.append(
             OperatorModule(
                 name=mf.get("名称", ""),
                 branch=mf.get("分支", ""),
-                type_="基础证章" if mf.get("基础证章") else "",
+                type_="基础证章" if mf.get("基础证章") else mf.get("类型", ""),
                 description=mf.get("基础信息", ""),
+                trait=_clean_module_text(mf.get("特性", "")),
+                talent_updates=talent_updates,
+                potential_talents=potential_talents,
+                upgrade_costs=upgrade_costs,
+                missions=missions,
+                unlock_level=mf.get("解锁等级", ""),
+                unlock_favor=mf.get("解锁信赖", ""),
             )
         )
 
     # === 潜能（{{潜能提升}}，潜能2-6）===
     potential_fields = _first_template_fields(page.wikitext, ("潜能提升",))
-    potentials: list[str] = [
-        potential_fields.get(f"潜能{i}", "") for i in range(2, 7)
-    ]
+    potentials: list[str] = [potential_fields.get(f"潜能{i}", "") for i in range(2, 7)]
     potentials = [p for p in potentials if p]
 
     # === 悖论模拟（{{悖论模拟}}）===
@@ -1581,7 +1645,9 @@ async def query_enemy(query: str) -> EnemyInfo | None:
 
 def _top_level_fields(wikitext: str) -> dict[str, str]:
     fields: dict[str, str] = {}
-    for block in _template_lines(wikitext, ("干员信息", "材料信息", "道具信息", "敌人信息/common2")):
+    for block in _template_lines(
+        wikitext, ("干员信息", "材料信息", "道具信息", "敌人信息/common2")
+    ):
         fields.update(_fields_from_template(block))
     if fields:
         return fields
@@ -1632,7 +1698,11 @@ def parse_generic_page(page: PageWikitext) -> WikiPageSummary:
         lines = []
         for line in text.splitlines():
             stripped = line.strip()
-            if not stripped or stripped.startswith("=") or stripped.startswith("#redirect"):
+            if (
+                not stripped
+                or stripped.startswith("=")
+                or stripped.startswith("#redirect")
+            ):
                 continue
             lines.append(stripped)
             if len("".join(lines)) > 260:
@@ -1812,7 +1882,9 @@ async def _smw_ask(query: str) -> dict[str, Any] | None:
     )
 
 
-async def query_activities(limit: int = 15, now_ts: float | None = None) -> list[ActivityInfo]:
+async def query_activities(
+    limit: int = 15, now_ts: float | None = None
+) -> list[ActivityInfo]:
     """进行中/未来的限时活动（按结束时间升序）。
 
     数据来自 PRTS 活动页的 SMW 属性（分类:有活动信息的页面），
@@ -1941,7 +2013,9 @@ async def activity_banner_urls(titles: list[str]) -> dict[str, str]:
         revisions = page.get("revisions")
         slots = (
             revisions[0].get("slots") or {}
-            if isinstance(revisions, list) and revisions and isinstance(revisions[0], dict)
+            if isinstance(revisions, list)
+            and revisions
+            and isinstance(revisions[0], dict)
             else {}
         )
         content = str((slots.get("main") or {}).get("*") or "")
@@ -1970,7 +2044,7 @@ async def activity_banner_urls(titles: list[str]) -> dict[str, str]:
         # PRTS 会把 File: 规范化为中文命名空间 文件:，两种前缀都剥
         for prefix in ("File:", "文件:"):
             if file_title.startswith(prefix):
-                url_by_file[file_title[len(prefix):]] = str(ii[0].get("url") or "")
+                url_by_file[file_title[len(prefix) :]] = str(ii[0].get("url") or "")
                 break
     return {
         title: url_by_file[name]
@@ -2042,12 +2116,14 @@ def parse_voice_lines(wikitext: str) -> list[dict[str, str]]:
     配平提取中文块，天然杜绝跨条错位；标题与台词按下标配对，缺失
     任一侧即丢弃该条。
     """
-    titles = {m.group(1): m.group(2).strip() for m in _VOICE_TITLE_RE.finditer(wikitext)}
+    titles = {
+        m.group(1): m.group(2).strip() for m in _VOICE_TITLE_RE.finditer(wikitext)
+    }
     lines = list(_VOICE_LINE_RE.finditer(wikitext))
     result: list[dict[str, str]] = []
     for i, m in enumerate(lines):
         seg_end = lines[i + 1].start() if i + 1 < len(lines) else len(wikitext)
-        text = _clean_wiki_value(_voice_cn_text(wikitext[m.end():seg_end]))
+        text = _clean_wiki_value(_voice_cn_text(wikitext[m.end() : seg_end]))
         title = titles.get(m.group(1), "")
         if title and text:
             result.append({"title": title, "text": text})
@@ -2063,4 +2139,3 @@ async def query_voice_lines(char_name: str) -> list[dict[str, str]] | None:
     wikitext = (parsed.wikitext if parsed else "") or ""
     lines = parse_voice_lines(wikitext)
     return lines or None
-

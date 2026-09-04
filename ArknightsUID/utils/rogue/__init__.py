@@ -2,6 +2,7 @@
 
 parse_rogue 精确解析 records（基于真实 dump）；flatten_rogue 保留作未知结构兜底。
 """
+
 from __future__ import annotations
 
 from typing import Any

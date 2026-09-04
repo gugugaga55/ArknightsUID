@@ -1,2 +1,1 @@
 """PRTS wiki helpers."""
-

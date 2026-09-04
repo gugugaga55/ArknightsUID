@@ -5,6 +5,7 @@
 
 单干员卡（char card）涉及头像/技能图标下载，单独放 async builder。
 """
+
 from __future__ import annotations
 
 import time
@@ -70,7 +71,6 @@ def format_remaining(ts: int, now: float | None = None) -> str:
     return f"{minutes}m"
 
 
-
 def _encode_skin_key(skin_id: str) -> str:
     """皮肤键 → hycdn 编码形态（审计 #21）。
 
@@ -82,6 +82,7 @@ def _encode_skin_key(skin_id: str) -> str:
     if "#" not in value and "@" not in value:
         value += "#1"
     return value.replace("@", "%40").replace("#", "%23")
+
 
 def skin_avatar_url(skin_id: str) -> str:
     if not skin_id:
@@ -110,7 +111,9 @@ def equip_icon_url(equip_id: str) -> str:
     """模组图标 URL（PRTS torappu 资产，按 uniequip id 直取）。"""
     if not equip_id:
         return ""
-    return f"https://torappu.prts.wiki/assets/uniequip_img/{quote(equip_id, safe='')}.png"
+    return (
+        f"https://torappu.prts.wiki/assets/uniequip_img/{quote(equip_id, safe='')}.png"
+    )
 
 
 def base_avatar_url(char_id: str) -> str:
@@ -262,9 +265,12 @@ def build_campaign_context(
 def _profession_rows(chars: list[CharEntry]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for prof in PROFESSION_ORDER:
-        members = [c for c in chars if c.profession == prof or (
-            not c.profession and prof == "CASTER" and c.char_id == "char_002_amiya"
-        )]
+        members = [
+            c
+            for c in chars
+            if c.profession == prof
+            or (not c.profession and prof == "CASTER" and c.char_id == "char_002_amiya")
+        ]
         if not members:
             continue
         e2 = sum(1 for c in members if c.evolve_phase >= 2)
@@ -363,7 +369,7 @@ def equip_display_name(equip_id: str) -> str:
 
 
 def _mastery_target(
-    data: PlayerData, building: "BuildingData"
+    data: PlayerData, building: BuildingData
 ) -> tuple[CharEntry | None, int, int]:
     """受训干员与专精目标档（接口 targetSkill=技能序号；目标档=当前专精+1）。
 
@@ -382,7 +388,7 @@ def _mastery_target(
 
 async def build_building_context(
     data: PlayerData,
-    building: "BuildingData",
+    building: BuildingData,
     version: str,
     uid_masked: str = "",
 ) -> dict[str, Any] | None:
@@ -416,9 +422,7 @@ async def build_building_context(
                 else "未在生产"
             ),
             "speed_pct": round(room.speed * 100) if room.speed > 0 else 100,
-            "members": [
-                {"name": m.name, "char_id": m.char_id} for m in room.members
-            ],
+            "members": [{"name": m.name, "char_id": m.char_id} for m in room.members],
         }
         for i, room in enumerate(building.manufactures, start=1)
     ]
@@ -431,9 +435,7 @@ async def build_building_context(
             ),
             "stock": room.stock_count,
             "stock_limit": room.stock_limit,
-            "members": [
-                {"name": m.name, "char_id": m.char_id} for m in room.members
-            ],
+            "members": [{"name": m.name, "char_id": m.char_id} for m in room.members],
         }
         for i, room in enumerate(building.tradings, start=1)
     ]
@@ -471,9 +473,7 @@ async def build_building_context(
         "clue_board": building.clue_board,
         "clue_daily_reward": building.clue_daily_reward,
         "training_trainee": building.training_trainee,
-        "training_remain": training_status_text(
-            training_remaining_secs(building)
-        ),
+        "training_remain": training_status_text(training_remaining_secs(building)),
         "training_pct": training_progress_pct(
             building,
             base_hours=TRAINING_BASE_HOURS_BY_LEVEL.get(
@@ -494,7 +494,7 @@ async def build_building_context(
 
 async def build_training_context(
     data: PlayerData,
-    building: "BuildingData",
+    building: BuildingData,
     version: str,
     uid_masked: str = "",
 ) -> dict[str, Any] | None:
@@ -532,9 +532,9 @@ async def build_training_context(
     )
     finish_at = ""
     if remaining > 0:
-        finish_at = datetime.fromtimestamp(
-            time.time() + remaining
-        ).strftime("%m-%d %H:%M")
+        finish_at = datetime.fromtimestamp(time.time() + remaining).strftime(
+            "%m-%d %H:%M"
+        )
     if not trainee_id or remaining < 0:
         # remaining=-1 是接口哨兵（空闲/未知）：trainee 只是残留指派，
         # 不能当"受训中"渲染（空闲期的常态查询此前全部误标）
@@ -571,11 +571,7 @@ async def build_training_context(
         "base_exact": base_hours is not None,
         # speed 缺字段时为 0.0，与进度条口径（<=0 按 1.0x 折算）一致化，
         # 否则卡片显示"0.0x（无加成）"而进度按 1.0x 算，自相矛盾
-        "speed": (
-            building.training_speed
-            if building.training_speed > 0
-            else 1.0
-        ),
+        "speed": (building.training_speed if building.training_speed > 0 else 1.0),
         "version": version,
     }
 
@@ -585,8 +581,10 @@ async def build_char_card_context(
 ) -> dict[str, Any]:
     """ark_char_card.html（#5 单干员卡）。立绘/头像/技能图标走 hycdn 下载缓存。
 
-    skill_effects：技能名 → {current, current_level, final, final_level}
-    （PRTS 逐级描述，由调用方从 wiki 层取；缺省只展示专精点）。
+    skill_effects：技能名 → {current, final}，两者均为 utils.skillfx 的
+    等级上下文 {level, description, sp_init, sp_cost, duration, meta}
+    （PRTS 逐级描述 + 初动/消耗/持续，由调用方从 wiki 层取；缺省只展示
+    专精点）。
     """
     avatar = ""
     portrait = ""
@@ -640,16 +638,19 @@ async def build_char_card_context(
     skills: list[dict[str, Any]] = []
     for skill in entry.skills:
         name = skill_names.get(skill.skill_id) or skill.skill_id
-        effect = effects.get(name, {})
+        current = (effects.get(name) or {}).get("current") or {}
+        final = (effects.get(name) or {}).get("final") or {}
         skills.append(
             {
                 "icon": icon_by_id.get(skill.skill_id, ""),
                 "name": name,
                 "specialize": skill.specialize_level,
-                "current": effect.get("current", ""),
-                "current_level": effect.get("current_level", ""),
-                "final": effect.get("final", ""),
-                "final_level": effect.get("final_level", ""),
+                "current": current.get("description", ""),
+                "current_level": current.get("level", ""),
+                "current_meta": current.get("meta", ""),
+                "final": final.get("description", ""),
+                "final_level": final.get("level", ""),
+                "final_meta": final.get("meta", ""),
             }
         )
     equips = [
@@ -695,9 +696,7 @@ async def build_skin_context(
     if not catalog:
         return None
     char_index = await load_char_index() or {}
-    char_names = {
-        cid: str(info.get("name") or cid) for cid, info in char_index.items()
-    }
+    char_names = {cid: str(info.get("name") or cid) for cid, info in char_index.items()}
     summary = summarize_collection(
         catalog, data.owned_skin_ids, char_names, max_rows=max_rows
     )
@@ -722,9 +721,7 @@ async def build_skin_context(
                     "name": info["name"] if info else entry["id"],
                     "group": info["group"] if info else "",
                     "char": (
-                        char_names.get(info["char_id"], info["char_id"])
-                        if info
-                        else ""
+                        char_names.get(info["char_id"], info["char_id"]) if info else ""
                     ),
                     "ts": entry["ts"],
                     "avatar": await _skin_avatar_b64(entry["id"]),

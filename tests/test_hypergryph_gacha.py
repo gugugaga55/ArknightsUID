@@ -238,12 +238,75 @@ class GachaAnalyzeTest(unittest.TestCase):
         ]
         stats = gacha_svc.analyze_gacha(records)
         # 最新六星 D：同类别内 idx3，无前置六星 → 第 2 抽（C、D）
-        self.assertEqual(stats["recent"][0], {
-            "name": "D", "pool": "限定寻访·集结", "pull": 2,
-            "ts": 103, "category": "2",
-        })
+        newest = stats["recent"][0]
+        self.assertEqual(newest["name"], "D")
+        self.assertEqual(newest["pool"], "限定寻访·集结")
+        self.assertEqual(newest["pull"], 2)
+        self.assertEqual(newest["category"], "2")
+        self.assertEqual(newest["fives"], [])
         # B：类别 1 内第 2 抽
         self.assertEqual(stats["recent"][1]["pull"], 2)
+
+    def test_five_count_and_rate(self) -> None:
+        records = [
+            _rec(100, 1, 5, "五1"), _rec(101, 2, 6, "六1"),
+            _rec(102, 3, 5, "五2"), _rec(103, 4, 3, "A"),
+        ]
+        stats = gacha_svc.analyze_gacha(records)
+        self.assertEqual(stats["five_count"], 2)
+        self.assertEqual(stats["five_rate"], "50.00")
+
+    def test_recent_six_carries_segment_fives(self) -> None:
+        # 六1 段内无五星；六2 段内 2 个五星，按抽取顺序（旧→新）排列
+        records = [
+            _rec(100, 1, 6, "六1"),
+            _rec(101, 2, 5, "五A"), _rec(102, 3, 5, "五B"),
+            _rec(103, 4, 3, "A"), _rec(104, 5, 6, "六2"),
+        ]
+        stats = gacha_svc.analyze_gacha(records)
+        newest = stats["recent"][0]
+        self.assertEqual(newest["name"], "六2")
+        self.assertEqual([f["name"] for f in newest["fives"]], ["五A", "五B"])
+        self.assertEqual(newest["fives_extra"], 0)
+        self.assertEqual(stats["recent"][1]["fives"], [])
+
+    def test_segment_fives_do_not_cross_category(self) -> None:
+        # 类别 2 的五星不得挂到类别 1 的六星段下
+        records = [
+            _rec(100, 1, 5, "五跨类", category="2"),
+            _rec(101, 2, 6, "六1", category="1"),
+        ]
+        stats = gacha_svc.analyze_gacha(records)
+        self.assertEqual(stats["recent"][0]["fives"], [])
+        self.assertEqual(stats["pity_fives"], [])
+
+    def test_pity_fives_after_latest_six(self) -> None:
+        records = [
+            _rec(100, 1, 6, "六1"),
+            _rec(101, 2, 5, "五X"), _rec(102, 3, 4, "A"), _rec(103, 4, 5, "五Y"),
+        ]
+        stats = gacha_svc.analyze_gacha(records)
+        self.assertEqual(stats["pity"], 3)
+        self.assertEqual([f["name"] for f in stats["pity_fives"]], ["五X", "五Y"])
+        self.assertEqual(stats["pity_fives_extra"], 0)
+
+    def test_fives_display_cap(self) -> None:
+        # 单段五星超过展示上限：截断 + fives_extra 计数
+        records = (
+            [_rec(100, 1, 6, "六0")]
+            + [_rec(200 + i, i + 2, 5, f"五{i}") for i in range(14)]
+            + [_rec(300, 99, 6, "六1")]
+        )
+        stats = gacha_svc.analyze_gacha(records)
+        newest = stats["recent"][0]
+        self.assertEqual(len(newest["fives"]), 12)
+        self.assertEqual(newest["fives_extra"], 2)
+
+    def test_format_gacha_text_mentions_fives(self) -> None:
+        records = [_rec(100, 1, 5, "五A"), _rec(101, 2, 6, "六1")]
+        text = gacha_svc.format_gacha_text("", "123***789", records, "")
+        self.assertIn("五星 1", text)
+        self.assertIn("本段五星 ×1：五A", text)
 
     def test_empty_records(self) -> None:
         self.assertEqual(gacha_svc.analyze_gacha([]), {})

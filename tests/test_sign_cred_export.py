@@ -203,7 +203,7 @@ class GachaExportPrivacyTest(unittest.IsolatedAsyncioTestCase):
         records = [{"gacha_ts": 100, "pos": 1, "name": "A", "char_id": "c",
                     "rarity": 5, "is_new": False, "pool_name": "池", "category": "1"}]
         with mock.patch(
-            "ArknightsUID.arknightsuid_gacha.resolve_credential",
+            "ArknightsUID.utils.card.resolve_credential",
             new=mock.AsyncMock(return_value=credential),
         ), mock.patch(
             "ArknightsUID.arknightsuid_gacha.load_local_logs",

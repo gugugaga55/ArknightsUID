@@ -58,8 +58,13 @@ async def _smoke(cred: str) -> None:
         cookie_status="", cred=cred, token=token, hg_token="", skland_user_id="",
     )
 
-    print("\n=== 3. 6 接口实测（get_cultivate_character 需 character_id，跳过）===")
+    print("\n=== 3. 7 接口实测（get_cultivate_character 需 character_id，跳过）===")
     smoke: dict = {"interfaces": {}}
+
+    async def _rogue_probe(cred_obj) -> dict | None:
+        """arknights/rogue 战绩端点（topicId 用主题表键 rogue_N，6=黑流树海）。"""
+        return await skland_client.get_rogue_records(cred_obj, topic_id="rogue_6")
+
     for name, fn in [
         ("get_user_info", skland_client.get_user_info),
         ("get_binding", skland_client.get_binding),
@@ -67,6 +72,7 @@ async def _smoke(cred: str) -> None:
         ("get_cultivate_info", skland_client.get_cultivate_info),
         ("get_cultivate_player", skland_client.get_cultivate_player),
         ("get_player_info", skland_client.get_player_info),
+        ("get_rogue_records(t6)", _rogue_probe),
     ]:
         try:
             resp = await fn(cred_obj)
@@ -98,6 +104,24 @@ async def _smoke(cred: str) -> None:
         else:
             print(f"  rogue 类型: {type(rogue).__name__}（值: {rogue!r}）")
         print(f"  已写入 {rogue_out} + smoke_result.json")
+
+        print("\n=== 4b. 肉鸽战绩端点结构 dump（arknights/rogue，rogue_6）===")
+        # 战绩端点是独立数据源（战绩页明细），dump 供 utils/rogue/records.py
+        # 字段口径校对；失败不阻断后续步骤
+        rr = await skland_client.get_rogue_records(cred_obj, topic_id="rogue_6")
+        if isinstance(rr, dict) and rr.get("code") == 0:
+            rr_data = rr.get("data") or {}
+            (tools_dir / "rogue_records_dump.json").write_text(
+                json.dumps(rr_data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            history = rr_data.get("history") or {}
+            print(
+                f"  data 顶层 keys: {list(rr_data.keys())}；"
+                f"history.records {len(history.get('records') or [])} 条"
+            )
+            print("  已写入 rogue_records_dump.json（请校对 records.py 字段注释）")
+        else:
+            print(f"  战绩端点未通: code={rr.get('code') if isinstance(rr, dict) else rr!r}")
 
         print("\n=== 5. 基建解析实测（parse_building）===")
         from ArknightsUID.utils.player import parse_building, parse_player_info

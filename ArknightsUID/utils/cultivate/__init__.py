@@ -14,8 +14,10 @@
   位置对不上时退化为全量计入并打 warning）
 - 模组 equipCost 按顺序对位 char.equips；未安装的模组全量计入
 - 经验书（2001-2004）不按 200/400/1000/2000 经验值折算，按数量直列
-- 刷图推荐（yituliu）暂缺：其材料级接口线上 404（部署漂移），已知接口现状
+- 刷图建议不并入单干员计算：掉率数据源（yituliu COS 掉落矩阵）已由
+  wiki 模块接入，ark养成计划 经 _build_farm_rows 消费（arknightsuid_cultivate）
 """
+
 from __future__ import annotations
 
 from collections import Counter
@@ -63,9 +65,13 @@ class CultivateCost:
     """cal_character 响应的四段成本结构。"""
 
     evolve: list[list[dict[str, Any]]] = field(default_factory=list)  # 每阶段 items
-    main_skill: list[list[dict[str, Any]]] = field(default_factory=list)  # 每级 items（1-7）
+    main_skill: list[list[dict[str, Any]]] = field(
+        default_factory=list
+    )  # 每级 items（1-7）
     skills: list[dict[str, Any]] = field(default_factory=list)  # [{name, level_cost[]}]
-    equips: list[dict[str, Any]] = field(default_factory=list)  # [{type_name, level_cost[]}]
+    equips: list[dict[str, Any]] = field(
+        default_factory=list
+    )  # [{type_name, level_cost[]}]
     raw: dict[str, Any] = field(default_factory=dict)
 
 
@@ -80,23 +86,33 @@ def parse_cultivate_cost(response: Any) -> CultivateCost | None:
     if not isinstance(data, dict):
         return None
 
-    evolve = [_items_of(phase.get("items")) for phase in data.get("evolvePhaseCost") or []]
-    main_skill = [_items_of(level.get("items")) for level in data.get("mainSkillLevelCost") or []]
+    evolve = [
+        _items_of(phase.get("items")) for phase in data.get("evolvePhaseCost") or []
+    ]
+    main_skill = [
+        _items_of(level.get("items")) for level in data.get("mainSkillLevelCost") or []
+    ]
     skills = []
     for skill in data.get("skillCost") or []:
         if not isinstance(skill, dict):
             continue
-        levels = [_items_of(level.get("items")) for level in skill.get("levelCost") or []]
+        levels = [
+            _items_of(level.get("items")) for level in skill.get("levelCost") or []
+        ]
         skills.append({"name": str(skill.get("name") or ""), "level_cost": levels})
     equips = []
     for equip in data.get("equipCost") or []:
         if not isinstance(equip, dict):
             continue
-        levels = [_items_of(level.get("items")) for level in equip.get("levelCost") or []]
+        levels = [
+            _items_of(level.get("items")) for level in equip.get("levelCost") or []
+        ]
         equips.append(
             {"type_name": str(equip.get("typeName") or ""), "level_cost": levels}
         )
-    return CultivateCost(evolve=evolve, main_skill=main_skill, skills=skills, equips=equips, raw=data)
+    return CultivateCost(
+        evolve=evolve, main_skill=main_skill, skills=skills, equips=equips, raw=data
+    )
 
 
 def _owned_items(response: Any) -> dict[str, int]:
@@ -130,7 +146,7 @@ def _owned_items(response: Any) -> dict[str, int]:
 
 
 def build_remaining_need(
-    cost: CultivateCost, char: "CharEntry"
+    cost: CultivateCost, char: CharEntry
 ) -> tuple[dict[str, int], list[str]]:
     """当前练度 → 毕业的剩余材料需求 {itemId: count} + 假设性 warning 列表。"""
     warnings: list[str] = []
@@ -141,7 +157,7 @@ def build_remaining_need(
             need[entry["id"]] += entry["count"]
 
     # 精英化：当前阶段之后的所有阶段
-    for phase_items in cost.evolve[char.evolve_phase:_EVOLVE_MAX]:
+    for phase_items in cost.evolve[char.evolve_phase : _EVOLVE_MAX]:
         add(phase_items)
 
     # 主技能 1-7：main_skill 下标 = 等级-1，从当前级+1 起
@@ -153,11 +169,7 @@ def build_remaining_need(
     if cost.skills and len(cost.skills) != len(char.skills):
         warnings.append("技能顺序对位不全，专精按已持有技能数计算")
     for index, skill_cost in enumerate(cost.skills):
-        current = (
-            char.skills[index].specialize_level
-            if index < len(char.skills)
-            else 0
-        )
+        current = char.skills[index].specialize_level if index < len(char.skills) else 0
         for mastery in range(current + 1, _MASTERY_MAX + 1):
             level_index = _MASTERY_COST_BASE + mastery - 1
             if level_index < len(skill_cost["level_cost"]):
@@ -191,6 +203,7 @@ def summarize_gap(
     仓库 10 的干员会各自显示无缺口，真实缺口 6 被漏算。龙门币同理必须
     用 gold_need 求和后统一 max(0, need-owned)，不能累加各自折算值。
     """
+
     def display_name(item_id: str) -> str:
         info = item_index.get(item_id)
         if info and info.get("name"):
@@ -217,7 +230,14 @@ def summarize_gap(
     for item_id, count in sorted(
         need.items(),
         key=lambda kv: (
-            -int(str((item_index.get(kv[0]) or {}).get("rarity", "0").replace("TIER_", "")) or 0),
+            -int(
+                str(
+                    (item_index.get(kv[0]) or {})
+                    .get("rarity", "0")
+                    .replace("TIER_", "")
+                )
+                or 0
+            ),
             (item_index.get(kv[0]) or {}).get("sort", 0),
             kv[0],
         ),
@@ -253,7 +273,7 @@ def summarize_gap(
 
 
 async def calculate_cultivation(
-    credential: "ArkCredential",
+    credential: ArkCredential,
     char_id: str,
     max_rows: int = 12,
     *,
@@ -289,18 +309,27 @@ async def calculate_cultivation(
     if cost is None:
         return "森空岛养成材料接口返回异常，无法计算。"
 
+    # 持有量失败不中断计算（缺口仍可展示），但必须显式告警——
+    # 否则按持有 0 计算会呈现"缺全部材料"的误导清单；
+    # 成本接口失败则上方已直接 return，两者口径刻意不同
     owned_response = await fetch_cultivate_player(credential)
-    owned = (
-        _owned_items(owned_response)
-        if not isinstance(owned_response, str)
-        else {}
-    )
+    owned: dict[str, int] = {}
+    owned_warnings: list[str] = []
+    if isinstance(owned_response, str):
+        owned_warnings.append(
+            f"持有材料获取失败（{owned_response}），以下缺口按持有 0 估算"
+        )
+    else:
+        owned = _owned_items(owned_response)
+        if value(owned_response, "code") not in (None, 0) or (
+            path(owned_response, "data", "player_item_data") is None
+        ):
+            owned_warnings.append("持有材料接口返回异常，以下缺口按持有 0 估算")
 
     need, warnings = build_remaining_need(cost, char)
+    warnings = owned_warnings + warnings
     item_index = await load_item_index()
-    gap = summarize_gap(
-        need, owned, item_index, max_rows=max_rows, keep_zero=keep_zero
-    )
+    gap = summarize_gap(need, owned, item_index, max_rows=max_rows, keep_zero=keep_zero)
 
     return {
         "char": char,
@@ -355,9 +384,7 @@ def merge_cultivation_results(results: list[dict[str, Any]]) -> dict[str, Any]:
             gold_lack += int(gap.get("gold_lack") or 0)
         warnings.extend(result.get("warnings") or [])
         char_material_total = sum(
-            1
-            for row in gap.get("materials") or []
-            if int(row.get("lack", 0)) > 0
+            1 for row in gap.get("materials") or [] if int(row.get("lack", 0)) > 0
         )
         for row in gap.get("materials") or []:
             _absorb(materials, row)

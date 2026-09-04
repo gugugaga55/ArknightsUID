@@ -18,16 +18,23 @@
 
 真实联调状态：token 链单测全 mock；cateId 由 tools/probe_skland_ann.py 探测验证。
 """
+
 from __future__ import annotations
 
 import json
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+from typing import Any
 
 from gsuid_core.logger import logger
 
-from ..api.request_util import SIGN_VNAME, RespCode
+from ..api.request_util import (
+    SIGN_VNAME,
+    RespCode,
+    build_query_string,
+    envelope_ok,
+    require_envelope,
+)
 from ..api.smsdk import get_device_id
 from ..http import request_json
 from . import client as skland_client
@@ -46,7 +53,8 @@ WEB_USER_AGENT = (
 )
 
 # 明日方舟在森空岛 web 端的游戏/公告分类 ID（gameId=1 即 channelMasterId；
-# cateId 探测候选：1=官方公告？以探测结果为准，默认 1）
+# cateId=1 官方公告：原为探测候选默认值，现经生产公告链验证可用
+# （消费方：arknightsuid_push 的 get_ark_ann_list；服务端改版需重新探测）
 ARK_GAME_ID = 1
 ARK_ANN_CATE_ID = 1
 
@@ -118,11 +126,7 @@ async def _http_get_json(url: str, headers: dict[str, str]) -> dict[str, Any] | 
 async def refresh_public_web_token(force: bool = False) -> str:
     """获取/刷新公开 Web token（空 token + 设备 ID 签名）。失败返回空串。"""
     now = time.time()
-    if (
-        not force
-        and _token_cache["token"]
-        and now - _token_cache["ts"] < _TOKEN_TTL
-    ):
+    if not force and _token_cache["token"] and now - _token_cache["ts"] < _TOKEN_TTL:
         return str(_token_cache["token"])
 
     async def do_request(did: str) -> dict[str, Any] | None:
@@ -149,11 +153,12 @@ async def refresh_public_web_token(force: bool = False) -> str:
             return ""
         data = await do_request(did)
 
-    if not isinstance(data, dict) or data.get("code") != 0:
-        logger.warning(
-            "[ArknightsUID·公告] web token 刷新失败: "
-            f"code={data.get('code') if isinstance(data, dict) else '?'}"
+    if (
+        require_envelope(
+            data, action="web token 刷新失败", log_prefix="[ArknightsUID·公告]"
         )
+        is None
+    ):
         return ""
     token = str((data.get("data") or {}).get("token") or "")
     if token:
@@ -162,14 +167,11 @@ async def refresh_public_web_token(force: bool = False) -> str:
     return token
 
 
-def _query_string(params: dict[str, Any]) -> str:
-    # 与签名要求一致：原始键值按序拼接（不做 URL 编码；参数仅含数字）
-    return "&".join(f"{k}={v}" for k, v in params.items())
-
-
 async def web_public_get(path: str, params: dict[str, Any]) -> dict[str, Any] | None:
     """公开 Web GET（自动 token/设备 ID；token 失效或设备被拒各重试一次）。"""
-    query = _query_string(params)
+    # 签名查询串统一走 request_util.build_query_string（sorted by key，
+    # 与 Skland 官方签名算法一致；发送与签名用同一字符串，自洽）
+    query = build_query_string(params)
 
     async def do_request(token: str, did: str) -> dict[str, Any] | None:
         sign_data = skland_client._generate_sign(
@@ -240,7 +242,7 @@ def parse_ann_list(
     响应结构（与终末地同型）：data.list[] = {item: {title, url, date...}, user: {...}}
     cover/avatar 供列表卡内嵌官方图（纯文本公告无封面时为空串）。
     """
-    if not isinstance(response, dict) or response.get("code") != 0:
+    if not envelope_ok(response):
         return []
     entries = ((response.get("data") or {}).get("list")) or []
     result: list[dict[str, str]] = []
@@ -303,11 +305,12 @@ async def get_ark_ann_list(limit: int = 10) -> list[dict[str, str]]:
             params["pageToken"] = page_token
         prev_len = len(collected)
         response = await web_public_get(WEB_HOME_PATH, params)
-        if not isinstance(response, dict) or response.get("code") != 0:
-            logger.warning(
-                "[ArknightsUID·公告] 公告列表拉取失败: "
-                f"code={response.get('code') if isinstance(response, dict) else '?'}"
+        if (
+            require_envelope(
+                response, action="公告列表拉取失败", log_prefix="[ArknightsUID·公告]"
             )
+            is None
+        ):
             break
         for ann in parse_ann_list(response, limit=PAGE_SIZE_MAX):
             if ann["id"] in seen_ids:
@@ -337,7 +340,7 @@ def parse_ann_detail(response: dict[str, Any] | None) -> dict[str, Any] | None:
     按 format.data 遍历 paragraph 节点，用 contents[].contentId 反查 textSlice.id
     拼接每个段落内的 text/link 片段。format 缺失/解析失败时退回原始存储顺序。
     """
-    if not isinstance(response, dict) or response.get("code") != 0:
+    if not envelope_ok(response):
         return None
     data = response.get("data") or {}
     item = data.get("item") or {}
@@ -358,11 +361,11 @@ def parse_ann_detail(response: dict[str, Any] | None) -> dict[str, Any] | None:
     if fmt_raw:
         try:
             fmt_obj = json.loads(fmt_raw)
-            for node in (fmt_obj.get("data") or []):
+            for node in fmt_obj.get("data") or []:
                 if not isinstance(node, dict) or node.get("type") != "paragraph":
                     continue
                 parts: list[str] = []
-                for content in (node.get("contents") or []):
+                for content in node.get("contents") or []:
                     if not isinstance(content, dict):
                         continue
                     if content.get("type") in ("text", "link"):
@@ -386,6 +389,7 @@ def parse_ann_detail(response: dict[str, Any] | None) -> dict[str, Any] | None:
         for img in (item.get("imageListSlice") or [])
         if isinstance(img, dict)
     ]
+
     def _cover_url(video: dict) -> str:
         cover = video.get("cover")
         return str(cover.get("url") or "") if isinstance(cover, dict) else ""
@@ -414,7 +418,7 @@ def parse_ann_detail(response: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
-async def get_ann_detail(post_id: Any) -> Optional[dict[str, Any]]:
+async def get_ann_detail(post_id: Any) -> dict[str, Any] | None:
     """公告详情（10 分钟缓存）。失败返回 None。"""
     key = str(post_id)
     cached = _detail_cache.get(key)

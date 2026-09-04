@@ -3,6 +3,7 @@
 account / gacha 等命令模块共用，防止上游错误消息（或中间人环境下被
 污染的响应）夹带 cred/token 类键值经 bot 回复泄漏到群聊。
 """
+
 from __future__ import annotations
 
 import re
@@ -28,7 +29,9 @@ _SENSITIVE_ASSIGNMENT_RE = re.compile(
     rf"(?:\"[^\"]*\"|'[^']*'|[^,，;；\s]+)"
 )
 _SENSITIVE_FIELD_RE = re.compile(rf"(?i){_FIELD_EDGE.format(_sensitive_fields)}")
-_SENTINEL_VALUE_RE = re.compile(r"(?i)(?<![A-Za-z0-9_])SENTINEL_[A-Z0-9_]*(?![A-Za-z0-9_])")
+_SENTINEL_VALUE_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_])SENTINEL_[A-Z0-9_]*(?![A-Za-z0-9_])"
+)
 
 _REDACTED = "已隐藏敏感内容"
 

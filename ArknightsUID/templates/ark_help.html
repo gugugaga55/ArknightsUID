@@ -5,6 +5,8 @@
   上下文：
     version: str
     groups: [{name: str, en: str, cmds: [{cmd: str, desc: str, eg: str}]}]
+    focus: str（可选）  单组明细视图的分组名（ark帮助 <分组>），非空时标题
+                        与底部提示切到明细口径
 -->
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -19,8 +21,8 @@
         <div class="titleblock">
             <div>
                 <div class="eyebrow">ArknightsUID · 使用说明</div>
-                <h1 class="title">指令<em>帮助</em></h1>
-                <div class="title-rule"><span class="en">COMMAND MANUAL</span></div>
+                <h1 class="title">{% if focus %}{{ focus }}<em>指令</em>{% else %}指令<em>帮助</em>{% endif %}</h1>
+                <div class="title-rule"><span class="en">{% if focus %}GROUP DETAIL{% else %}COMMAND MANUAL{% endif %}</span></div>
             </div>
             <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_help.b64" %}" alt="阿米娅">
         </div>
@@ -41,6 +43,14 @@
             {% endfor %}
         </div>
         {% endfor %}
+
+        {% if focus %}
+        <div class="chip-flow" style="margin-top: var(--space-4);">
+            <span class="chip chip--ghost">ark帮助 · 返回总览</span>
+            <span class="chip chip--ghost">ark帮助 全部 · 全量命令</span>
+            <span class="chip chip--ghost">ark帮助搜索 &lt;关键词&gt;</span>
+        </div>
+        {% endif %}
 
         <div class="foot">
             <span class="foot-brand">ArknightsUID · 帮助</span>

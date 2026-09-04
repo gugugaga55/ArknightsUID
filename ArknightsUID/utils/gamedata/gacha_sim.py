@@ -10,6 +10,7 @@
 这是「全干员池」模拟，不区分常驻/限定/中坚——模拟仅供娱乐，
 卡面文案注明与真实卡池无关、不累计垫刀。
 """
+
 from __future__ import annotations
 
 import random
@@ -35,16 +36,14 @@ def roll_rarity(rng: random.Random) -> int:
 def roll_rarity_at_least(rng: random.Random, floor: int) -> int:
     """保底池：只从 >= floor 的稀有度抽（权重归一化）。"""
     candidates = [
-        (rarity, weight)
-        for rarity, weight in RARITY_WEIGHTS
-        if rarity >= floor
+        (rarity, weight) for rarity, weight in RARITY_WEIGHTS if rarity >= floor
     ]
     rarities, weights = zip(*candidates)
     return rng.choices(rarities, weights=weights, k=1)[0]
 
 
 def build_draw_pools(
-    char_index: dict[str, dict[str, Any]]
+    char_index: dict[str, dict[str, Any]],
 ) -> dict[int, list[dict[str, Any]]]:
     """干员索引 → {稀有度: [干员条目]}（仅 3-6 星入池）。"""
     pools: dict[int, list[dict[str, Any]]] = {r: [] for r in POOL_RARITIES}
@@ -80,7 +79,9 @@ def simulate_pulls(
     for i in range(count):
         is_last = i == count - 1
         need_guarantee = (
-            guarantee and is_last and count == 10
+            guarantee
+            and is_last
+            and count == 10
             and all(r["rarity"] < FOUR_STAR_GUARANTEE for r in results)
         )
         rarity = (

@@ -7,7 +7,7 @@
 4. 统一磁盘缓存层：旧格式兼容 + 原子写 + TTL 判定
 5. 共享 HTTP 层 request_json 的结果形状
 6. PRTS 查询链 deadline 耗尽后不再逐页解析
-7. RespCode / HttpCode 命名空间拆分
+7. RespCode 业务码收敛（未接线成员/HttpCode 已随死代码清理移除）
 """
 from __future__ import annotations
 
@@ -22,7 +22,8 @@ from typing import Any
 from unittest import mock
 
 from ArknightsUID.utils import disk_cache
-from ArknightsUID.utils.api.request_util import HttpCode, RespCode
+from ArknightsUID.utils.api import request_util
+from ArknightsUID.utils.api.request_util import RespCode
 from ArknightsUID.utils.hypergryph import client as hyper_client
 from ArknightsUID.utils.hypergryph import gacha as gacha_svc
 from ArknightsUID.utils.skland import client as skland_client
@@ -380,16 +381,15 @@ class PRTSDeadlineTest(unittest.IsolatedAsyncioTestCase):
 
 
 class RespCodeNamespaceTest(unittest.TestCase):
-    def test_business_and_http_codes_are_separate_namespaces(self) -> None:
+    def test_business_codes_kept_and_unused_removed(self) -> None:
         self.assertEqual(int(RespCode.OK), 0)
         self.assertEqual(int(RespCode.TOKEN_INVALID), 220)
         self.assertEqual(int(RespCode.REQUEST_ERROR), 10000)
-        self.assertEqual(int(HttpCode.OK), 200)
-        self.assertEqual(int(HttpCode.METHOD_NOT_ALLOWED), 405)
-        # RespCode 不再携带 HTTP 状态码成员
-        self.assertFalse(hasattr(RespCode, "OK_HTTP"))
-        self.assertFalse(hasattr(RespCode, "BAD_REQUEST"))
-        self.assertFalse(hasattr(HttpCode, "TOKEN_INVALID"))
+        self.assertEqual(int(RespCode.LOGIN_EXPIRED), 10002)
+        # 未接线的成员（TIME_ERROR/CAPTCHA_*/HttpCode）已随死代码清理移除
+        for member in ("TIME_ERROR", "CAPTCHA_ERROR", "CAPTCHA_EXPIRED"):
+            self.assertFalse(hasattr(RespCode, member))
+        self.assertFalse(hasattr(request_util, "HttpCode"))
 
 
 if __name__ == "__main__":

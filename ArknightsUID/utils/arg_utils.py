@@ -1,9 +1,9 @@
-"""公共命令参数解析工具。
+"""公共命令参数解析工具（单一事实源）。
 
-与 arknightsuid_account 的私有 _extract_uid/_extract_index 同源（regex 一致）。
-接受短期双份：account 保留私有副本不动（降风险），本模块为 rogue 等新模块的
-单一事实源。两处 regex 必须保持一致——若改动，同步更新 arknightsuid_account.__init__。
+arknightsuid_account 的 _extract_uid/_extract_index 为本模块别名
+（保留旧名供既有调用/测试引用）。
 """
+
 from __future__ import annotations
 
 import re

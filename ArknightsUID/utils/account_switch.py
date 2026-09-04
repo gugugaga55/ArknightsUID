@@ -7,6 +7,7 @@
 不经过数据库（ArkUser 行没有"默认"语义，EndUID 回退账号更是只读），
 独立小状态文件最稳：删账号/清缓存都不影响其他用户。
 """
+
 from __future__ import annotations
 
 import json
@@ -14,10 +15,7 @@ import os
 
 from gsuid_core.logger import logger
 
-try:
-    from ArknightsUID.ArknightsUID.utils.path import MAIN_PATH
-except ModuleNotFoundError:
-    from ArknightsUID.utils.path import MAIN_PATH
+from .path import MAIN_PATH
 
 _STATE_PATH = MAIN_PATH / "account_switch.json"
 
