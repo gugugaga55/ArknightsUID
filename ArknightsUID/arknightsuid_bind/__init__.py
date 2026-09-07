@@ -188,10 +188,13 @@ async def scan_login(bot: Bot, ev: Event) -> None:
     await _send_login_success(bot, ev, roles or [])
 
 
-@web_login_sv.on_command(("网页登录", "手机登录", "手机号登录"), block=True)
+@web_login_sv.on_command(
+    ("登录", "网页登录", "手机登录", "手机号登录"), block=True
+)
 async def phone_web_login(bot: Bot, ev: Event) -> None:
-    """手机号验证码网页登录（EndUID 同源协议）。
+    """ark登录：手机号验证码网页登录（EndUID 同源协议）。
 
+    ArkLoginUrl 未配置时在 web_login_entry 内回退扫码登录。
     实现与网页路由在 web_login.py；开关判定在 handler 内实时读取
     （与扫码同因：area="DIRECT" 是框架级静默拦截，不能挂在 bind_sv 下）。
     注意函数名不能叫 web_login：会遮蔽底部 `from . import web_login`

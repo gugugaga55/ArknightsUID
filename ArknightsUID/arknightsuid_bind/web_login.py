@@ -119,7 +119,7 @@ def get_token() -> str:
 
 
 def _configured_login_url() -> str:
-    """读 ArkLoginUrl；未配置返回空串（命令侧据此拒绝，不猜测 HOST:PORT）。"""
+    """读 ArkLoginUrl；未配置返回空串（命令侧据此回退扫码登录）。"""
     url = str(ArkConfig.get_config("ArkLoginUrl").data or "").strip()
     if not url:
         return ""
@@ -136,15 +136,21 @@ _GROUP_LINK_NOTICE = (
     "⚠️ 链接在群内公开：3 分钟内任何人用此链接登录，都会把 TA 的账号"
     "绑定到你名下。确认周围是熟人再点。"
 )
-_UNCONFIGURED_HINT = (
-    "网页登录未启用：管理员需在插件配置「网页登录对外地址」（ArkLoginUrl）"
-    "填写本 core 的对外可达地址（域名/穿透/反代）。\n"
-    "在此之前可使用 ark扫码登录 或私聊 ark绑定 <cred>。"
-)
 
 
 async def web_login_entry(bot: Bot, ev: Event) -> None:
-    """ark网页登录 命令入口：发链接 + 轮询会话终态（失败转达回聊天）。"""
+    """ark登录 命令入口：发链接 + 轮询会话终态（失败转达回聊天）。
+
+    ArkLoginUrl 未配置时回退扫码登录（EndUID end登录 同款行为）——
+    回退放在群聊开关判定之前：群内未配置时由扫码流程给出自己的开关
+    提示，而不是一条"网页链接"文案。
+    """
+    base_url = _configured_login_url()
+    if not base_url:
+        from . import scan_login
+
+        return await scan_login(bot, ev)
+
     if ev.group_id and not bool(
         ArkConfig.get_config("AllowGroupScanLogin").data
     ):
@@ -153,12 +159,8 @@ async def web_login_entry(bot: Bot, ev: Event) -> None:
             ev,
             "网页登录链接默认仅私聊发放（链接等于一次免密登录入口）。\n"
             "管理员可在插件配置开启「允许群聊扫码登录」（AllowGroupScanLogin）"
-            "后群内使用。",
+            "后群内使用，或留空 ArkLoginUrl 回退为扫码登录。",
         )
-
-    base_url = _configured_login_url()
-    if not base_url:
-        return await _send_text(bot, ev, _UNCONFIGURED_HINT)
 
     # 同一新登录使旧链接失效：链接是"绑定到发起人"的入口，不允许并存
     store.delete_where(

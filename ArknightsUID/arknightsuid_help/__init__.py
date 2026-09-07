@@ -29,9 +29,9 @@ HELP_GROUPS = [
                 "eg": "ark扫码登录",
             },
             {
-                "cmd": "ark网页登录",
-                "desc": "手机号验证码网页登录（需配置 ArkLoginUrl）",
-                "eg": "ark网页登录",
+                "cmd": "ark登录",
+                "desc": "手机号验证码网页登录（未配置 ArkLoginUrl 时回退扫码）",
+                "eg": "ark登录",
             },
             {"cmd": "ark账号", "desc": "绑定账号列表（标注默认）", "eg": "ark账号"},
             {

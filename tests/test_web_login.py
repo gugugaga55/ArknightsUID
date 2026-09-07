@@ -173,14 +173,15 @@ class WebLoginEntryTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("仅私聊", text)
         self.assertNotIn("/ark/i/", text)
 
-    async def test_unconfigured_hint(self) -> None:
+    async def test_unconfigured_falls_back_to_scan(self) -> None:
         _set_config("ArkLoginUrl", "")
-        bot = await self._run(FakeEvent(group_id=None))
-        self.assertEqual(len(bot.sent), 1)
-        text = str(bot.sent[0])
-        self.assertIn("ArkLoginUrl", text)
-        self.assertIn("ark扫码登录", text)
-        self.assertNotIn("/ark/i/", text)
+        with mock.patch(
+            "ArknightsUID.arknightsuid_bind.scan_login",
+            new=mock.AsyncMock(),
+        ) as scan:
+            bot = await self._run(FakeEvent(group_id=None))
+        scan.assert_awaited_once()  # 回退扫码登录，本入口不发链接
+        self.assertEqual(len(bot.sent), 0)
 
     async def test_private_sends_link_and_evicts_old(self) -> None:
         _set_config("ArkLoginUrl", "https://ark.example.com/")
@@ -498,4 +499,4 @@ class ConfigAndHelpWiringTest(unittest.TestCase):
     def test_help_mentions_web_login(self) -> None:
         from ArknightsUID.arknightsuid_help import HELP_TEXT
 
-        self.assertIn("ark网页登录", HELP_TEXT)
+        self.assertIn("ark登录", HELP_TEXT)

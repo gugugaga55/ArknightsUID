@@ -75,8 +75,8 @@ CONFIG_DEFAULT: dict[str, GSC] = {
     ),
     "ArkLoginUrl": GsStrConfig(
         "网页登录对外地址",
-        "ark网页登录（手机号验证码）页面的对外地址：域名/穿透/反代到本 core，"
-        "如 https://ark.example.com。留空时 ark网页登录 不可用（提示未配置）。"
+        "ark登录（手机号验证码）页面的对外地址：域名/穿透/反代到本 core，"
+        "如 https://ark.example.com。留空时 ark登录 回退为扫码登录。"
         "发出的链接形如 {地址}/ark/i/{一次性令牌}，3 分钟有效；"
         "群聊远端用户需能访问到该地址，建议反代后在此填写。",
         "",
