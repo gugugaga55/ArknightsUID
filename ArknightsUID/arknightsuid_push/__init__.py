@@ -848,12 +848,16 @@ async def show_farm_plan(bot: Bot, ev: Event) -> None:
         lines.append(f"未识别：{'、'.join(unknown)}（支持精确材料名）")
     lines.append(f"直刷合计 ≈{total_farm:.0f} 理智")
     lines.append("数据：ArknightsGameData + ark.yituliu.cn（样本>300 关卡）")
-    # 材料图标（失败空串降级）
+    # 材料图标（受限并发批量挂载，失败空串降级）
     try:
         from ArknightsUID.utils.gamedata.itemicon import item_icon_b64
+        from ArknightsUID.utils.image import gather_b64
 
-        for row in card_rows:
-            row["icon"] = await item_icon_b64(row["name"])
+        icons = await gather_b64(
+            item_icon_b64, [str(row.get("name") or "") for row in card_rows]
+        )
+        for row, icon in zip(card_rows, icons):
+            row["icon"] = icon
     except Exception as e:
         logger.debug(f"[ArknightsUID] 计划卡材料图标获取失败: {e}")
     await send_card_or_text(

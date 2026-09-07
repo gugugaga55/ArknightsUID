@@ -4,14 +4,15 @@
   上下文（arknightsuid_cultivate.show_cultivation_plan 组装）：
     name/uid: str
     merged: {
-      chars: [{name, rarity, current{evolve_phase,main_skill_lvl,masteries[]}, gap_count}]
+      chars: [{name, char_id, avatar, rarity,
+               current{evolve_phase,main_skill_lvl,masteries[]}, gap_count}]
       materials: [{id, name, rarity, need, owned, lack, icon}]   合并缺口（lack>0）
       materials_total: int
       exp_books: [{name, lack, icon}]
       gold_lack: int, gold_icon: str
       warnings: [str]
     }
-    farm_rows: [{name, lack, advice}]   刷图建议（前 5 缺口，可为空）
+    farm_rows: [{name, lack, advice, icon}]   刷图建议（前 5 缺口，可为空）
     version: str
 -->
 <!DOCTYPE html>
@@ -40,7 +41,10 @@
         <div class="rows">
             {% for c in merged.chars %}
             <div class="row {% if loop.first %}row--active{% endif %}">
-                <span class="row-label">{{ c.name }}</span>
+                <span class="row-label" style="display: inline-flex; align-items: center; gap: 8px; min-width: 0;">
+                    {% if c.avatar %}<span class="aicon"><img src="{{ c.avatar }}" alt="{{ c.name }}"></span>{% endif %}
+                    {{ c.name }}
+                </span>
                 <span class="row-value u-mute">精{{ c.current.evolve_phase }} · 技能{{ c.current.main_skill_lvl }} · 专精{{ c.current.masteries | join('/') or '-' }}</span>
                 <span class="bar-num">缺 {{ c.gap_count }} 种</span>
             </div>
@@ -99,7 +103,10 @@
             {% for f in farm_rows %}
             <div class="row" style="display: block;">
                 <div class="bar-row" style="margin-bottom: 4px;">
-                    <span class="row-label">{{ f.name }} <span class="mono u-mute">缺{{ f.lack }}</span></span>
+                    <span class="row-label" style="display: inline-flex; align-items: center; gap: 6px;">
+                        {% if f.icon %}<span class="aicon" style="width: 20px; height: 20px;"><img src="{{ f.icon }}" alt=""></span>{% endif %}
+                        {{ f.name }} <span class="mono u-mute">缺{{ f.lack }}</span>
+                    </span>
                 </div>
                 <div class="row-value" style="font-size: 12px;">{{ f.advice }}</div>
             </div>

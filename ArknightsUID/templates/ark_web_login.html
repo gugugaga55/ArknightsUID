@@ -1,0 +1,209 @@
+<!--
+  ark_web_login.html —— 手机号网页登录页（自包含，浏览器直接打开）
+  上下文（由 arknightsuid_bind.web_login 组装）：
+    auth: str 一次性令牌（过期页为空串）
+    user_id: str 发起命令的用户 id
+    expired: bool 会话不存在/已超时/已被新链接顶掉
+  设计语言对齐罗德岛终端卡（深底 + 信号黄），但零外部依赖：无 CDN/字体/图片请求。
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>明日方舟 · 手机号登录</title>
+<style>
+  :root {
+    --bg: #16181d;
+    --panel: #1e2128;
+    --line: #2c3038;
+    --text: #e8e6df;
+    --mute: #8b8f99;
+    --accent: #ffd23e;
+    --accent-ink: #16181d;
+    --danger: #ff6d5a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC",
+      "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px calc(24px + env(safe-area-inset-bottom));
+  }
+  .card {
+    width: 100%;
+    max-width: 380px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-top: 3px solid var(--accent);
+    padding: 28px 22px;
+  }
+  .brand {
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    color: var(--mute);
+    margin-bottom: 18px;
+  }
+  .brand b { color: var(--accent); font-weight: 700; }
+  h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+  h1 em { color: var(--accent); font-style: normal; }
+  .sub { font-size: 13px; color: var(--mute); line-height: 1.6; margin-bottom: 22px; }
+  .uid-line {
+    font-size: 12px; color: var(--mute); margin-bottom: 22px;
+    padding: 8px 10px; background: rgba(255, 210, 62, 0.06);
+    border-left: 2px solid var(--accent);
+  }
+  .uid-line b { color: var(--text); }
+  label { display: block; font-size: 12px; color: var(--mute); margin: 14px 0 6px; }
+  input {
+    width: 100%; height: 46px; padding: 0 14px;
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 0;
+    font-size: 17px; letter-spacing: 0.06em; outline: none;
+  }
+  input:focus { border-color: var(--accent); }
+  .code-row { display: flex; gap: 10px; }
+  .code-row input { flex: 1; }
+  .btn-send {
+    flex-shrink: 0; width: 118px; height: 46px;
+    background: transparent; color: var(--accent);
+    border: 1px solid var(--accent); border-radius: 0;
+    font-size: 13px; cursor: pointer;
+  }
+  .btn-send:disabled { color: var(--mute); border-color: var(--line); cursor: default; }
+  .btn-login {
+    width: 100%; height: 48px; margin-top: 24px;
+    background: var(--accent); color: var(--accent-ink);
+    border: none; border-radius: 0;
+    font-size: 15px; font-weight: 700; letter-spacing: 0.2em; cursor: pointer;
+  }
+  .btn-login:disabled { opacity: 0.5; cursor: default; }
+  .msg { min-height: 20px; margin-top: 14px; font-size: 13px; line-height: 1.5; }
+  .msg.err { color: var(--danger); }
+  .msg.ok { color: var(--accent); }
+  .done { text-align: center; padding: 30px 0 10px; }
+  .done .mark { font-size: 40px; color: var(--accent); margin-bottom: 14px; }
+  .done p { color: var(--mute); font-size: 13px; margin-top: 8px; line-height: 1.7; }
+  .foot { margin-top: 22px; font-size: 11px; color: var(--mute); line-height: 1.7; }
+</style>
+</head>
+<body>
+{% if expired %}
+  <div class="card">
+    <div class="brand"><b>ArknightsUID</b> // WEB LOGIN</div>
+    <h1>链接已<em>失效</em></h1>
+    <div class="sub">登录链接为一次性且 3 分钟内有效（重复发起登录也会使旧链接失效）。请在聊天窗口重新发送「ark网页登录」获取新链接。</div>
+  </div>
+{% else %}
+  <div class="card" id="login-card">
+    <div class="brand"><b>ArknightsUID</b> // WEB LOGIN</div>
+    <h1>手机号<em>登录</em></h1>
+    <div class="sub">使用鹰角账号绑定手机号接收短信验证码，登录后即可绑定「明日方舟」账号。手机号与验证码仅提交至本页面，不会出现在聊天记录中。</div>
+    <div class="uid-line">发起用户 id：<b>{{ user_id }}</b><br>若这不是你发起的登录，请立即关闭本页。</div>
+    <label for="phone">手机号</label>
+    <input id="phone" type="tel" inputmode="numeric" maxlength="11" placeholder="11 位手机号" autocomplete="tel">
+    <label for="code">短信验证码</label>
+    <div class="code-row">
+      <input id="code" type="text" inputmode="numeric" maxlength="6" placeholder="6 位验证码" autocomplete="one-time-code">
+      <button id="btn-send" class="btn-send" type="button">获取验证码</button>
+    </div>
+    <button id="btn-login" class="btn-login" type="button" disabled>登 录</button>
+    <div id="msg" class="msg"></div>
+    <div class="foot">本页面由 ArknightsUID 机器人实例提供，仅供该群/该用户完成账号绑定使用。</div>
+  </div>
+  <div class="card" id="done-card" style="display:none">
+    <div class="brand"><b>ArknightsUID</b> // WEB LOGIN</div>
+    <div class="done">
+      <div class="mark">✔</div>
+      <h1>登录<em>成功</em></h1>
+      <p>绑定结果已推送到聊天窗口。<br>现在可以关闭本页面。</p>
+    </div>
+  </div>
+
+<script>
+(function () {
+  var AUTH = "{{ auth }}";
+  var phoneEl = document.getElementById("phone");
+  var codeEl = document.getElementById("code");
+  var sendBtn = document.getElementById("btn-send");
+  var loginBtn = document.getElementById("btn-login");
+  var msgEl = document.getElementById("msg");
+  var timer = null;
+
+  function setMsg(text, cls) {
+    msgEl.textContent = text || "";
+    msgEl.className = "msg" + (cls ? " " + cls : "");
+  }
+  function checkReady() {
+    loginBtn.disabled = !(phoneEl.value.trim() && codeEl.value.trim());
+  }
+  phoneEl.addEventListener("input", checkReady);
+  codeEl.addEventListener("input", checkReady);
+
+  function post(path, body) {
+    return fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (r) { return r.json(); });
+  }
+
+  sendBtn.addEventListener("click", function () {
+    var phone = phoneEl.value.trim();
+    if (!/^1\d{10}$/.test(phone)) { setMsg("请先输入正确的 11 位手机号", "err"); return; }
+    sendBtn.disabled = true;
+    setMsg("正在发送验证码…");
+    post("/ark/sendCode", { auth: AUTH, phone: phone }).then(function (res) {
+      if (res.success) {
+        setMsg("验证码已发送，请查收短信", "ok");
+        var left = 60;
+        sendBtn.textContent = left + "s";
+        timer = setInterval(function () {
+          left -= 1;
+          if (left <= 0) {
+            clearInterval(timer);
+            sendBtn.textContent = "重新获取";
+            sendBtn.disabled = false;
+          } else { sendBtn.textContent = left + "s"; }
+        }, 1000);
+      } else {
+        setMsg(res.msg || "验证码发送失败", "err");
+        sendBtn.disabled = false;
+      }
+    }).catch(function () {
+      setMsg("网络异常，请重试", "err");
+      sendBtn.disabled = false;
+    });
+  });
+
+  loginBtn.addEventListener("click", function () {
+    var phone = phoneEl.value.trim();
+    var code = codeEl.value.trim();
+    if (!/^1\d{10}$/.test(phone)) { setMsg("手机号格式错误", "err"); return; }
+    if (!/^\d+$/.test(code)) { setMsg("验证码应为数字", "err"); return; }
+    loginBtn.disabled = true;
+    setMsg("正在登录…");
+    post("/ark/login", { auth: AUTH, phone: phone, code: code }).then(function (res) {
+      if (res.success) {
+        document.getElementById("login-card").style.display = "none";
+        document.getElementById("done-card").style.display = "block";
+        if (timer) { clearInterval(timer); }
+      } else {
+        setMsg(res.msg || "登录失败，请重试", "err");
+        loginBtn.disabled = false;
+      }
+    }).catch(function () {
+      setMsg("网络异常，请重试", "err");
+      loginBtn.disabled = false;
+    });
+  });
+})();
+</script>
+{% endif %}
+</body>
+</html>

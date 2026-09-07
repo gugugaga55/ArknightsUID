@@ -99,6 +99,28 @@ class MergeCultivationTest(unittest.TestCase):
         self.assertEqual(len(merged["warnings"]), 1)
         self.assertIn("42", merged["warnings"][0])
 
+    def test_chars_carry_char_id_for_avatars(self) -> None:
+        """干员清单带 char_id（卡片干员头像用）；char 对象缺字段时回退空串。"""
+        merged = merge_cultivation_results([_result("银灰", [])])
+        self.assertEqual(merged["chars"][0]["char_id"], "")  # _C 桩无 char_id
+
+        class _WithId:
+            display_name = "史尔特尔"
+            rarity_display = 6
+            char_id = "char_350_surtr"
+
+        merged2 = merge_cultivation_results(
+            [
+                {
+                    "char": _WithId(),
+                    "gap": {"materials": [], "exp_books": [], "gold_lack": 0},
+                    "current": {},
+                    "warnings": [],
+                }
+            ]
+        )
+        self.assertEqual(merged2["chars"][0]["char_id"], "char_350_surtr")
+
     def test_rarity_desc_sort(self) -> None:
         merged = merge_cultivation_results(
             [
@@ -268,6 +290,43 @@ class PlanHelpersTest(unittest.TestCase):
             ),
             "无直刷/合成数据",
         )
+
+
+class PlanTemplateContractTest(unittest.TestCase):
+    """ark_cultivate_plan.html 渲染契约：干员头像 + 材料/刷图建议图标位。"""
+
+    def test_template_renders_with_avatars_and_icons(self) -> None:
+        from ArknightsUID.utils.render import ark_templates
+
+        context = {
+            "version": "v0.0.0",
+            "uid": "12****89",
+            "merged": {
+                "chars": [
+                    {"name": "银灰", "char_id": "char_172_svrash", "avatar": "A",
+                     "rarity": 6, "current": {"evolve_phase": 2, "main_skill_lvl": 7,
+                                              "masteries": [3, 0, 0]},
+                     "gap_count": 6}
+                ],
+                "materials": [
+                    {"id": "2004", "name": "D32钢", "rarity": "5★",
+                     "need": 8, "owned": 2, "lack": 6, "icon": "I"}
+                ],
+                "materials_total": 1,
+                "exp_books": [],
+                "gold_lack": 0,
+                "gold_icon": "",
+                "warnings": [],
+            },
+            "farm_rows": [
+                {"name": "D32钢", "lack": 6, "advice": "直刷 13-4", "icon": "I"}
+            ],
+        }
+        template = ark_templates.get_template("ark_cultivate_plan.html")
+        html = template.render(font_css_url="about:blank", **context)
+        self.assertIn("养成", html)
+        self.assertIn('src="A"', html)  # 干员清单头像
+        self.assertIn('src="I"', html)  # 材料 + 刷图建议图标
 
 
 if __name__ == "__main__":

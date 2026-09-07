@@ -29,6 +29,9 @@ CRED_API = "https://zonai.skland.com/api/v1/user/auth/generate_cred_by_code"
 SCAN_LOGIN_API = "https://as.hypergryph.com/general/v1/gen_scan/login"
 SCAN_STATUS_API = "https://as.hypergryph.com/general/v1/scan_status"
 TOKEN_BY_SCAN_CODE_API = "https://as.hypergryph.com/user/auth/v1/token_by_scan_code"
+# 手机号验证码登录（网页登录链，协议与 EndUID 同源）
+SEND_PHONE_CODE_API = "https://as.hypergryph.com/general/v1/send_phone_code"
+TOKEN_BY_PHONE_CODE_API = "https://as.hypergryph.com/user/auth/v1/token_by_phone_code"
 
 # get_cred_by_token 的错误码（结构化，替代此前的字面量 "405" 三态返回）
 CRED_ERR_OK = ""
@@ -125,6 +128,48 @@ async def get_token_by_scan_code(scan_code: str) -> dict[str, str] | None:
         "token": payload.get("token", ""),
         "device_token": payload.get("deviceToken", ""),
     }
+
+
+def is_valid_phone(phone: str) -> bool:
+    """大陆手机号格式校验：11 位、1 开头、纯数字。仅格式，不判运营商。"""
+    value = (phone or "").strip()
+    return len(value) == 11 and value.isdigit() and value[0] == "1"
+
+
+async def send_phone_code(phone: str) -> tuple[bool, str]:
+    """触发鹰角账号登录短信验证码。返回 (是否成功, 提示)。
+
+    失败提示来自服务端 msg（"发送过于频繁"等），不含手机号本体。
+    """
+    status, data = await _request(
+        "POST",
+        SEND_PHONE_CODE_API,
+        headers=get_oauth_header(),
+        body={"phone": phone, "type": 1},
+    )
+    if status != 200 or not data:
+        return False, "验证码发送失败，请稍后重试"
+    if data.get("status") != 0:
+        return False, str(data.get("msg") or "验证码发送失败")
+    return True, "OK"
+
+
+async def get_token_by_phone_code(phone: str, code: str) -> tuple[str | None, str]:
+    """手机号 + 短信验证码 → (token, 提示)。失败时 token 为 None。"""
+    status, data = await _request(
+        "POST",
+        TOKEN_BY_PHONE_CODE_API,
+        headers=get_oauth_header(),
+        body={"phone": phone, "code": code},
+    )
+    if status != 200 or not data:
+        return None, "登录失败，请稍后重试"
+    if data.get("status") != 0:
+        return None, str(data.get("msg") or "验证码错误或已过期")
+    token = (data.get("data") or {}).get("token", "")
+    if not token:
+        return None, "登录失败，请重试"
+    return token, "OK"
 
 
 async def get_cred_by_token(token: str) -> tuple[dict[str, str] | None, str]:

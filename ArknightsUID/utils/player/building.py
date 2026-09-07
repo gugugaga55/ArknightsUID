@@ -8,9 +8,12 @@
 - powers: [{level, chars}]                 发电站
 - dormitories: [{level, chars, comfort}]   宿舍（comfort = 氛围值）
 - meeting: {level, chars, clue: {own, board[], dailyReward}} 会客室（线索）
+- hire: {level, chars, refreshCount, ...}  办公室（联络）
 - training: {level, trainee{charId}, trainer, remainPoint, speed,
              lastUpdateTime, remainSecs, slotState}          训练室
 - manufactureFormulaInfoMap（data 顶层）: {formulaId → {itemId, count, ...}}
+
+注：dump 无 workshop（加工站）字段，基建总览卡不出加工站（宁缺毋滥）。
 
 心情（morale）计量单位（dump 实测推断，双重证据）：
 - chars[].ap 为细粒度内部值，满心情 = 8640000（宿舍干员全部为该哨兵值）
@@ -172,6 +175,7 @@ class RoomMember:
     char_id: str
     name: str  # charInfoMap 解析名，缺失回退 char_id
     morale: float  # 心情点 0-24
+    profession: str = ""  # 职业代码（CASTER 等；charInfoMap 缺失时空串）
 
 
 @dataclass(slots=True)
@@ -221,15 +225,21 @@ class TiredChar:
 @dataclass(slots=True)
 class BuildingData:
     control_level: int = 0
+    control_members: list[RoomMember] = field(default_factory=list)
     labor_value: int = 0
     labor_max: int = 0
     manufactures: list[ManufactureRoom] = field(default_factory=list)
     tradings: list[TradingRoom] = field(default_factory=list)
     powers: list[PowerRoom] = field(default_factory=list)
     dormitories: list[DormitoryRoom] = field(default_factory=list)
+    meeting_level: int = 0  # 会客室等级（0 = 无该房间数据）
+    meeting_members: list[RoomMember] = field(default_factory=list)
+    hire_level: int = 0  # 办公室等级（0 = 无该房间数据）
+    hire_members: list[RoomMember] = field(default_factory=list)
     clue_own: int = 0
     clue_board: list[str] = field(default_factory=list)  # 派系中文名
     clue_daily_reward: bool = False
+    training_level: int = 0  # 训练室房间等级（0 = 无该房间数据）
     training_speed: float = 0.0
     training_trainee: str = ""  # 训练中干员名（空 = 未在训练）
     training_trainee_id: str = ""  # 在训干员 charId（干员查询匹配用）
@@ -258,12 +268,17 @@ def _parse_members(raw: Any, info_map: dict[str, Any]) -> list[RoomMember]:
         if not char_id:
             continue
         info = info_map.get(char_id)
-        name = str(path(info, "name") or "") if isinstance(info, dict) else ""
+        if isinstance(info, dict):
+            name = str(path(info, "name") or "")
+            profession = str(path(info, "profession") or "")
+        else:
+            name, profession = "", ""
         members.append(
             RoomMember(
                 char_id=char_id,
                 name=name or char_id,
                 morale=morale_points(item.get("ap")),
+                profession=profession,
             )
         )
     return members
@@ -287,6 +302,9 @@ def parse_building(data: PlayerData) -> BuildingData | None:
 
     result = BuildingData(
         control_level=_as_int(path(building, "control", "level")),
+        control_members=_parse_members(
+            path(building, "control", "chars"), info_map
+        ),
         labor_value=_as_int(path(building, "labor", "value")),
         labor_max=_as_int(path(building, "labor", "maxValue")),
     )
@@ -349,20 +367,30 @@ def parse_building(data: PlayerData) -> BuildingData | None:
             )
         )
 
-    clue = path(building, "meeting", "clue")
-    if isinstance(clue, dict):
-        result.clue_own = _as_int(clue.get("own"))
-        result.clue_daily_reward = bool(clue.get("dailyReward"))
-        board: list[str] = []
-        for code in clue.get("board") or []:
-            board.append(CLUE_FACTION_NAMES.get(str(code), str(code)))
-        result.clue_board = board
+    meeting = building.get("meeting")
+    if isinstance(meeting, dict):
+        result.meeting_level = _as_int(meeting.get("level"))
+        result.meeting_members = _parse_members(meeting.get("chars"), info_map)
+        clue = meeting.get("clue")
+        if isinstance(clue, dict):
+            result.clue_own = _as_int(clue.get("own"))
+            result.clue_daily_reward = bool(clue.get("dailyReward"))
+            board: list[str] = []
+            for code in clue.get("board") or []:
+                board.append(CLUE_FACTION_NAMES.get(str(code), str(code)))
+            result.clue_board = board
+
+    hire = building.get("hire")
+    if isinstance(hire, dict):
+        result.hire_level = _as_int(hire.get("level"))
+        result.hire_members = _parse_members(hire.get("chars"), info_map)
 
     training = building.get("training")
     if isinstance(training, dict):
         # training.level 是训练室房间等级（基建升级），不是专精目标等级；
         # 专精目标取 trainee.targetSkill（技能序号 0/1/2，-1=空闲，森空岛
         # building.training 一手字段，目标档位由玩家 chars 该技能当前专精+1 推得）
+        result.training_level = _as_int(training.get("level"))
         result.training_speed = _as_float(training.get("speed"))
         result.training_remain_secs = _as_int(training.get("remainSecs"), -1)
         result.training_last_update = _as_int(training.get("lastUpdateTime"))

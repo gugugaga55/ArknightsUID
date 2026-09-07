@@ -951,19 +951,6 @@ async def show_ark_building(bot: Bot, ev: Event) -> None:
         )
 
     context = await build_building_context(data, building, ArknightsUID_version, shown)
-    if context is not None:
-        # 房间成员挂初始头像（EndUID 基建卡同款展示），失败空串降级
-        try:
-            from ArknightsUID.utils.player.context import char_avatar_b64
-
-            for room in context.get("manufactures", []) + context.get("tradings", []):
-                for m in room.get("members", []):
-                    m["avatar"] = await char_avatar_b64(str(m.get("char_id", "")))
-        except Exception as exc:
-            logger.debug(
-                f"[ArknightsUID·基建] 房间成员头像挂载失败（降级无头像）: "
-                f"{exc.__class__.__name__}"
-            )
     await send_card_or_text(
         bot,
         ev,

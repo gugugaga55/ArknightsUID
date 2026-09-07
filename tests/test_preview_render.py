@@ -15,8 +15,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
-# 非业务卡：head 是 include 片段；ping 是渲染管线自检（test_p0_render 覆盖）
-_NON_BUSINESS = {"ark_head.html", "ark_ping.html"}
+# 非业务卡：head 是 include 片段；ping 是渲染管线自检（test_p0_render 覆盖）；
+# web_login 是手机号网页登录的浏览器页面（自包含样式，不经 PicRender 出图，
+# 由 web_login._render_page 直接 HTMLResponse）
+_NON_BUSINESS = {"ark_head.html", "ark_ping.html", "ark_web_login.html"}
 
 
 def _load_preview_module():
