@@ -1,29 +1,232 @@
 <!--
-  ark_building.html —— 基建总览卡（#23）
-  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  ark_building.html —— 基建总览卡（#23，游戏内基建面板风格重构版）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）——画幅背景与其他卡统一
+  （舰桥场景图 + 纸白纱罩 + 寻访纹底缘 + 幽灵字），房间区为内嵌深色屏幕面板，
+  还原游戏内「基建」总览：
+    · 房间卡 = 彩色边条 + 等级圆点（● 数 = 房间等级）+ 右侧房间读数
+    · 进驻干员 = 方头像（左上职业角标）+ 心情细条 + 名字（低心情红字压暗）
+    · 宿舍空位 = AUTO 自动补位；其余空位 = 斜线空方
+    · 房间位容量（中枢=等级 / 宿舍 5 / 会客室 2 / 办公室 1 / 训练 2 / 发电站 1）
+      为游戏机制
   上下文（utils/player/context.build_building_context）：
     name: str, uid: str
-    control_level: int                 控制中枢等级（基建等级）
-    labor_value/labor_max/labor_pct    无人机
-    manufactures: [{label, level, formula, speed_pct, members[]}]
-    tradings: [{label, level, strategy, stock, stock_limit, members[]}]
-    power_count: int, power_levels: [int]
-    dormitories: [{label, comfort, comfort_pct}]
-    clue_own: int, clue_board: [str], clue_daily_reward: bool
-    training_trainee: str（空 = 未在训练）
-    training_remain: str（"剩约H小时M分"/"已完成"，空 = 未在训练/未知）
-    training_pct: int|null（训练进度估算 0-100，null = 未在训/未知）
-    recruit_total: int              公招标位总数（0 = 数据缺失）
-    recruit_done: int               已到点可领取槽数
-    recruit_next: str               最早未完成槽位剩余文案（空 = 无进行中）
-    tired_chars: [{name, room, morale}]  低心情干员（心情 < 12，升序前 8）
-    tired_more: int
+    labor_value/labor_max/labor_pct       无人机
+    clue_own/clue_daily_reward/clue_board 会客室线索（板为派系中文名列表）
+    recruit_total/recruit_done/recruit_next  公开招募
+    tired_count: int                      低心情（<12）干员数
+    control: {level, members[], slots[]}  控制中枢（slots 含补位空方）
+    manufactures: [{label, level, formula, speed_pct, slots[]}]
+    tradings: [{label, level, strategy, stock, stock_limit, stock_pct, slots[]}]
+    powers: [{label, level, slots[]}]
+    dormitories: [{label, level, comfort, comfort_pct, slots[]}]
+    meeting: {level, slots[]} | None      会客室（无数据时 None）
+    hire: {level, slots[]} | None         办公室（无数据时 None）
+    training: {state, level, remain, pct, slots[]}   训练室（state 受训中/已完成/空闲）
+    slot（干员）: {name, char_id, avatar, prof_icon, morale, morale_pct, tired}
+      morale=None 表示该位无心情口径（训练位），不出心情条
+    slot（空位）: {empty: True, label, face}
     version: str
 -->
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head>{% include "ark_head.html" %}</head>
+<head>{% include "ark_head.html" %}
+<style>
+    /* === 内嵌深色屏幕面板：游戏内基建面板语言（背景与终端基座统一）=== */
+    .b-screen {
+        margin-top: var(--space-4);
+        background: #17191d;
+        border: 1px solid #101315;
+        outline: 1px solid rgba(255, 255, 255, 0.05);
+        outline-offset: -4px;
+        padding: 12px 10px 10px;
+    }
+
+    /* 读数条：无人机 / 线索 / 公招 / 待换班 */
+    .b-stats { display: flex; gap: 8px; }
+    .b-stat {
+        flex: 1;
+        min-width: 0;
+        background: #212429;
+        border: 1px solid #2e3338;
+        padding: 7px 9px;
+    }
+    .b-stat-label {
+        font-size: 9px;
+        letter-spacing: 0.14em;
+        color: #6e767e;
+        text-transform: uppercase;
+        white-space: nowrap;
+        overflow: hidden;
+    }
+    .b-stat-value {
+        margin-top: 2px;
+        font-family: var(--mono);
+        font-variant-numeric: tabular-nums;
+        font-size: 16px;
+        font-weight: 700;
+        color: #e8edf1;
+        white-space: nowrap;
+        overflow: hidden;
+    }
+    .b-stat-value small { font-size: 10px; font-weight: 500; color: #6e767e; }
+    .b-stat-value.warn { color: #f0c24b; }
+    .b-stat-value.bad { color: #ff7369; }
+    .b-stat-sub {
+        margin-top: 2px;
+        font-size: 9px;
+        color: #6e767e;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .b-stat-bar { margin-top: 4px; height: 3px; background: #171a1d; }
+    .b-stat-bar i { display: block; height: 100%; background: #f0c24b; }
+
+    /* 房间网格：整行 / 半行 / 三分之一行 */
+    .b-rooms {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 10px;
+    }
+    .room {
+        background: #22262a;
+        border: 1px solid #30353b;
+        padding: 9px 10px 10px;
+    }
+    .w1 { width: calc(50% - 4px); }
+    .w2 { width: 100%; }
+    .w3 { width: calc(33.333% - 6px); }
+
+    /* 房间头：彩色边条 + 名称 + 等级圆点 + 右侧读数 */
+    .room-head { display: flex; align-items: center; gap: 7px; }
+    .edge { width: 3px; height: 12px; background: var(--ac); flex-shrink: 0; }
+    .room-name {
+        font-size: 12px;
+        font-weight: 700;
+        color: #eef1f4;
+        white-space: nowrap;
+    }
+    .pips { display: inline-flex; gap: 3px; align-items: center; }
+    .pips i { width: 6px; height: 6px; border-radius: 50%; background: #3a4046; }
+    .pips i.on { background: var(--ac); }
+    .room-meta {
+        margin-left: auto;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.04em;
+        color: var(--ac);
+        white-space: nowrap;
+        overflow: hidden;
+    }
+
+    /* 房间副行：效率 / 订单 / 线索等读数 */
+    .room-sub {
+        margin-top: 5px;
+        font-size: 10px;
+        line-height: 1.6;
+        color: #8b939b;
+    }
+    .room-sub b {
+        font-family: var(--mono);
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
+        color: var(--ac);
+    }
+    .room-sub.dim { color: #626a72; }
+    .b-bar {
+        margin-top: 6px;
+        height: 4px;
+        background: #171a1d;
+        border: 1px solid #2e3338;
+    }
+    .b-bar i { display: block; height: 100%; background: var(--ac); }
+
+    /* 进驻干员：方头像 + 职业角标 + 心情细条 + 名字 */
+    .ops { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+    .op { width: 62px; flex-shrink: 0; }
+    .op-face {
+        position: relative;
+        width: 62px;
+        height: 62px;
+        background: #1b1e22;
+        border: 1px solid #363c42;
+        overflow: hidden;
+    }
+    .op-face img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .op-face .cls {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 16px;
+        height: 16px;
+        background: rgba(14, 16, 18, 0.85);
+    }
+    .op-face .cls img { width: 16px; height: 16px; object-fit: contain; }
+    .op-mo { margin-top: 3px; height: 2px; background: #343a40; }
+    .op-mo i { display: block; height: 100%; background: #6fbf73; }
+    .op-mo i.mid { background: #d8a23a; }
+    .op-mo i.lo { background: #e05a4e; }
+    .op-name {
+        margin-top: 3px;
+        font-size: 10px;
+        color: #c9ced4;
+        text-align: center;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    /* 低心情：名字红字 + 头像压暗（游戏内涣散语言）*/
+    .op.tired .op-name { color: #ff7369; }
+    .op.tired .op-face img { opacity: 0.5; filter: grayscale(35%); }
+
+    /* 空位：斜线空方（宿舍带 AUTO 自动补位字）。斜线用内联 SVG 背景 +
+       显式 background-size：takumi 对未约束尺寸的渐变/SVG 背景会泄漏成
+       全页斜线（实机踩坑，基座寻访斜纹同款约束写法）*/
+    .op--empty .op-face {
+        background: #1b1e22;
+        border: 1px dashed #343a40;
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='64' height='64'%3E%3Cline x1='1' y1='63' x2='63' y2='1' stroke='%2330363c' stroke-width='2'/%3E%3C/svg%3E");
+        background-size: 100% 100%;
+        background-repeat: no-repeat;
+    }
+    .op--empty .auto {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        font-family: var(--mono);
+        font-size: 8px;
+        letter-spacing: 0.12em;
+        color: #565e66;
+    }
+    .op--empty .op-name { color: #565e66; }
+
+    /* 三分之一行房间（发电站/小卡）头像收窄 */
+    .w3 .op { width: 50px; }
+    .w3 .op-face { width: 50px; height: 50px; }
+    .w3 .op-face .cls { width: 14px; height: 14px; }
+    .w3 .op-face .cls img { width: 14px; height: 14px; }
+</style>
+</head>
 <body>
+{% macro pips(level, maxlv) %}<span class="pips">{% for i in range(1, maxlv + 1) %}<i{% if i <= level %} class="on"{% endif %}></i>{% endfor %}</span>{% endmacro %}
+{% macro opslot(s) %}
+                <div class="op{% if s.empty %} op--empty{% elif s.tired %} tired{% endif %}">
+                    <div class="op-face">
+                        {% if s.empty %}
+                        {% if s.face %}<span class="auto">{{ s.face }}</span>{% endif %}
+                        {% else %}
+                        {% if s.avatar %}<img src="{{ s.avatar }}" alt="{{ s.name }}">{% endif %}
+                        {% if s.prof_icon %}<span class="cls"><img src="{{ s.prof_icon }}" alt=""></span>{% endif %}
+                        {% endif %}
+                    </div>
+                    {% if not s.empty and s.morale is not none %}
+                    <div class="op-mo"><i class="{% if s.morale < 6 %}lo{% elif s.tired %}mid{% endif %}" style="width: {{ s.morale_pct }}%;"></i></div>
+                    {% endif %}
+                    <div class="op-name">{{ s.label if s.empty else s.name }}</div>
+                </div>
+{% endmacro %}
     <div class="container" data-ghost="BASE">
         <div class="mast">
             <span class="mast-brand">ArknightsUID <em>// 基建总览 BASE</em></span>
@@ -39,156 +242,132 @@
             <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_building.b64" %}" alt="博士">
         </div>
 
-        <div class="sect">
-            <span class="sect-label bk">设施读数</span>
-            <span class="sect-en">READOUTS</span>
-        </div>
-        <div class="grid grid-4">
-            <div class="cell">
-                <div class="cell-label">控制中枢 CONTROL</div>
-                <div class="cell-value">Lv{{ control_level }}</div>
-                <div class="cell-sub">发电站 ×{{ power_count }}</div>
-            </div>
-            <div class="cell">
-                <div class="cell-label">无人机 DRONES</div>
-                <div class="cell-value">{{ labor_value }}<span style="font-size: 12px; color: var(--tx-3);">/{{ labor_max }}</span></div>
-                <div class="bar" style="margin-top: 4px;"><i style="width: {{ labor_pct }}%;"></i></div>
-            </div>
-            <div class="cell">
-                <div class="cell-label">线索持有 CLUES</div>
-                <div class="cell-value">{{ clue_own }}</div>
-                <div class="cell-sub">{% if clue_daily_reward %}今日奖励已领{% else %}今日奖励未领{% endif %}</div>
-            </div>
-            <div class="cell">
-                <div class="cell-label">待换班 TIRED</div>
-                <div class="cell-value {% if tired_chars %}u-red{% endif %}">{{ tired_chars | length }}{% if tired_more %}+{% endif %}</div>
-                <div class="cell-sub">心情不足 12 的干员</div>
-            </div>
-        </div>
-
-        {% if clue_board %}
-        <div class="rows" style="margin-top: 0; border-top: 0;">
-            <div class="row">
-                <span class="row-label">会客室线索板</span>
-                <span class="row-value">{% for c in clue_board %}<span class="chip" style="margin-left: 6px;">{{ c }}</span>{% endfor %}</span>
-            </div>
-        </div>
-        {% endif %}
-
-        {% if manufactures %}
-        <div class="sect">
-            <span class="sect-label bk">制造流水线</span>
-            <span class="sect-en">MANUFACTURES</span>
-        </div>
-        <div class="rows">
-            {% for m in manufactures %}
-            <div class="row">
-                <span class="row-label">{{ m.label }} <span class="mono u-mute">Lv{{ m.level }}</span></span>
-                <span class="row-value">{{ m.formula }} <span class="mono u-mute">{{ m.speed_pct }}%</span></span>
-                <span style="display: inline-flex; gap: 4px;">
-                    {% for mb in m.members %}
-                    <span class="aicon" title="{{ mb.name }}">{% if mb.avatar %}<img src="{{ mb.avatar }}" alt="{{ mb.name }}">{% endif %}</span>
-                    {% endfor %}
-                </span>
-            </div>
-            {% endfor %}
-        </div>
-        {% endif %}
-
-        {% if tradings %}
-        <div class="sect">
-            <span class="sect-label bk">贸易订单</span>
-            <span class="sect-en">TRADING</span>
-        </div>
-        <div class="rows">
-            {% for t in tradings %}
-            <div class="row" style="display: block;">
-                <div class="bar-row" style="margin-bottom: var(--space-2);">
-                    <span class="row-label">{{ t.label }} <span class="mono u-mute">Lv{{ t.level }}</span> · {{ t.strategy }}</span>
-                    <span style="flex: 1;"></span>
-                    <span class="bar-num">{{ t.stock }} / {{ t.stock_limit }}</span>
+        <div class="b-screen">
+            <div class="b-stats">
+                <div class="b-stat">
+                    <div class="b-stat-label">无人机 DRONES</div>
+                    <div class="b-stat-value">{{ labor_value }}<small>/{{ labor_max }}</small></div>
+                    <div class="b-stat-bar"><i style="width: {{ labor_pct }}%;"></i></div>
                 </div>
-                <div class="bar"><i style="width: {{ (t.stock * 100 / t.stock_limit) | round | int if t.stock_limit else 0 }}%;"></i></div>
-                <div style="margin-top: 6px; display: flex; align-items: center; gap: 4px;">
-                    {% for mb in t.members %}
-                    <span class="aicon" title="{{ mb.name }}">{% if mb.avatar %}<img src="{{ mb.avatar }}" alt="{{ mb.name }}">{% endif %}</span>
-                    {% endfor %}
-                    <span style="font-size: 10px; color: var(--tx-3); margin-left: 4px;">{{ t.members | map(attribute="name") | join(" · ") }}</span>
+                <div class="b-stat">
+                    <div class="b-stat-label">线索 CLUES</div>
+                    <div class="b-stat-value">{{ clue_own }}</div>
+                    <div class="b-stat-sub">{% if clue_daily_reward %}今日奖励已领{% else %}今日奖励未领{% endif %}</div>
+                </div>
+                <div class="b-stat">
+                    <div class="b-stat-label">公开招募 RECRUIT</div>
+                    {% if recruit_done %}
+                    <div class="b-stat-value warn">{{ recruit_done }} 槽可领</div>
+                    <div class="b-stat-sub">前往办公室领取</div>
+                    {% elif recruit_next %}
+                    <div class="b-stat-value">招募中</div>
+                    <div class="b-stat-sub">最早{{ recruit_next }}后可领</div>
+                    {% elif recruit_total %}
+                    <div class="b-stat-value">空闲</div>
+                    <div class="b-stat-sub">{{ recruit_total }} 个槽位空置</div>
+                    {% else %}
+                    <div class="b-stat-value">--</div>
+                    <div class="b-stat-sub">数据缺失</div>
+                    {% endif %}
+                </div>
+                <div class="b-stat">
+                    <div class="b-stat-label">待换班 TIRED</div>
+                    <div class="b-stat-value{% if tired_count %} bad{% endif %}">{{ tired_count }}</div>
+                    <div class="b-stat-sub">心情不足 12 的干员</div>
                 </div>
             </div>
-            {% endfor %}
-        </div>
-        {% endif %}
 
-        {% if dormitories %}
-        <div class="sect">
-            <span class="sect-label bk">宿舍氛围</span>
-            <span class="sect-en">DORMITORIES</span>
-        </div>
-        <div class="rows">
-            {% for d in dormitories %}
-            <div class="row" style="display: block;">
-                <div class="bar-row" style="margin-bottom: var(--space-2);">
-                    <span class="row-label">{{ d.label }}</span>
-                    <span style="flex: 1;"></span>
-                    <span class="bar-num">{{ d.comfort }} <span class="u-mute">/ 5000</span></span>
+            <div class="b-rooms">
+                {% if control.level > 0 %}
+                <div class="room w2" style="--ac: #d3dae1;">
+                    <div class="room-head">
+                        <span class="edge"></span><span class="room-name">控制中枢</span>{{ pips(control.level, 5) }}
+                    </div>
+                    <div class="ops">{% for s in control.slots %}{{ opslot(s) }}{% endfor %}</div>
                 </div>
-                <div class="bar"><i style="width: {{ d.comfort_pct }}%;"></i></div>
-            </div>
-            {% endfor %}
-        </div>
-        {% endif %}
+                {% endif %}
 
-        {% if training_trainee %}
-        <div class="rows" style="margin-top: 0; border-top: 0;">
-            <div class="row" style="display: block;">
-                <div class="bar-row" style="margin-bottom: var(--space-2);">
-                    <span class="row-label">训练室 TRAINING</span>
-                    <span style="flex: 1;"></span>
-                    <span class="bar-num">{{ training_trainee }} 专精训练中{% if training_remain %} · {{ training_remain }}{% endif %}</span>
+                {% for t in tradings %}
+                <div class="room w1" style="--ac: #5ea9f6;">
+                    <div class="room-head">
+                        <span class="edge"></span><span class="room-name">{{ t.label }}</span>{{ pips(t.level, 3) }}
+                        <span class="room-meta">{{ t.strategy }}</span>
+                    </div>
+                    <div class="room-sub">待交付订单 <b>{{ t.stock }}</b> / {{ t.stock_limit }}</div>
+                    <div class="b-bar"><i style="width: {{ t.stock_pct }}%;"></i></div>
+                    <div class="ops">{% for s in t.slots %}{{ opslot(s) }}{% endfor %}</div>
                 </div>
-                <div class="bar bar--lg">
-                    <i style="width: {{ training_pct if training_pct is not none else 0 }}%;"></i>
-                    <span class="bar-txt">{% if training_pct is not none %}{{ training_pct }}%{% else %}--{% endif %}</span>
+                {% endfor %}
+
+                {% for m in manufactures %}
+                <div class="room w1" style="--ac: #f0c24b;">
+                    <div class="room-head">
+                        <span class="edge"></span><span class="room-name">{{ m.label }}</span>{{ pips(m.level, 3) }}
+                        <span class="room-meta">{{ m.formula }}</span>
+                    </div>
+                    <div class="room-sub">生产效率 <b>{{ m.speed_pct }}%</b></div>
+                    <div class="ops">{% for s in m.slots %}{{ opslot(s) }}{% endfor %}</div>
                 </div>
-            </div>
-        </div>
-        {% endif %}
+                {% endfor %}
 
-        {% if recruit_total %}
-        <div class="rows" style="margin-top: 0; border-top: 0;">
-            <div class="row">
-                <span class="row-label">公开招募 RECRUIT</span>
-                <span class="row-value">{% if recruit_done %}<span class="chip chip--yellow">{{ recruit_done }} 槽位可领取</span>{% elif recruit_next %}招募中 · 最早{{ recruit_next }}后可领取{% else %}全部空闲{% endif %}</span>
-            </div>
-        </div>
-        {% endif %}
+                {% for p in powers %}
+                <div class="room w3" style="--ac: #9ed95e;">
+                    <div class="room-head">
+                        <span class="edge"></span><span class="room-name">{{ p.label }}</span>{{ pips(p.level, 3) }}
+                    </div>
+                    <div class="ops">{% for s in p.slots %}{{ opslot(s) }}{% endfor %}</div>
+                </div>
+                {% endfor %}
 
-        {% if tired_chars %}
-        <div class="sect">
-            <span class="sect-label bk">低心情干员</span>
-            <span class="sect-en">SHIFT CHANGE</span>
-        </div>
-        <div class="rows">
-            {% for c in tired_chars %}
-            <div class="row {% if loop.first %}row--active{% endif %}">
-                <span class="row-label">{{ c.name }}</span>
-                <span class="row-value u-mute">{{ c.room }}</span>
-                <span class="row-value mono {% if c.morale < 6 %}u-red{% endif %}">{{ c.morale }} / 24</span>
+                {% if meeting %}
+                <div class="room w1" style="--ac: #d3dae1;">
+                    <div class="room-head">
+                        <span class="edge"></span><span class="room-name">会客室</span>{{ pips(meeting.level, 3) }}
+                    </div>
+                    <div class="room-sub">线索 <b>×{{ clue_own }}</b> · {% if clue_daily_reward %}今日奖励已领{% else %}今日奖励未领{% endif %}</div>
+                    {% if clue_board %}<div class="room-sub dim">线索板 · {{ clue_board | join(" · ") }}</div>{% endif %}
+                    <div class="ops">{% for s in meeting.slots %}{{ opslot(s) }}{% endfor %}</div>
+                </div>
+                {% endif %}
+
+                {% if hire %}
+                <div class="room w1" style="--ac: #d3dae1;">
+                    <div class="room-head">
+                        <span class="edge"></span><span class="room-name">办公室</span>{{ pips(hire.level, 3) }}
+                    </div>
+                    <div class="ops">{% for s in hire.slots %}{{ opslot(s) }}{% endfor %}</div>
+                </div>
+                {% endif %}
+
+                <div class="room w2" style="--ac: #d3dae1;">
+                    <div class="room-head">
+                        <span class="edge"></span><span class="room-name">训练室</span>{% if training.level %}{{ pips(training.level, 3) }}{% endif %}
+                        <span class="room-meta">{{ training.state }}</span>
+                    </div>
+                    {% if training.state == "受训中" %}
+                    <div class="room-sub">专精训练中{% if training.remain %} · {{ training.remain }}{% endif %}</div>
+                    {% if training.pct is not none %}
+                    <div class="b-bar"><i style="width: {{ training.pct }}%;"></i></div>
+                    {% endif %}
+                    {% elif training.state == "已完成" %}
+                    <div class="room-sub">专精训练已完成 · 待收取</div>
+                    {% else %}
+                    <div class="room-sub dim">暂无受训干员</div>
+                    {% endif %}
+                    <div class="ops">{% for s in training.slots %}{{ opslot(s) }}{% endfor %}</div>
+                </div>
+
+                {% for d in dormitories %}
+                <div class="room w2" style="--ac: #45c2a0;">
+                    <div class="room-head">
+                        <span class="edge"></span><span class="room-name">{{ d.label }}</span>{{ pips(d.level, 5) }}
+                        <span class="room-meta">氛围 {{ d.comfort }} / 5000</span>
+                    </div>
+                    <div class="ops">{% for s in d.slots %}{{ opslot(s) }}{% endfor %}</div>
+                </div>
+                {% endfor %}
             </div>
-            {% endfor %}
         </div>
-        {% if tired_more %}
-        <div style="margin-top: 4px; font-size: 10px; color: var(--tx-3);">… 其余 {{ tired_more }} 名低心情干员未列出</div>
-        {% endif %}
-        {% else %}
-        <div class="rows" style="margin-top: 0; border-top: 0;">
-            <div class="row">
-                <span class="row-label">换班状态</span>
-                <span class="row-value">在岗干员心情充足，无需换班</span>
-            </div>
-        </div>
-        {% endif %}
 
         <div class="foot">
             <span class="foot-brand">ArknightsUID · 基建</span>

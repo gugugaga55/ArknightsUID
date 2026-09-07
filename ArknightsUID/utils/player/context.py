@@ -17,9 +17,12 @@ from urllib.parse import quote
 from gsuid_core.logger import logger
 
 from .building import (
+    MORALE_LOW_THRESHOLD,
+    MORALE_MAX_POINTS,
     TRADING_STRATEGY_NAMES,
     TRAINING_BASE_HOURS_BY_LEVEL,
     BuildingData,
+    RoomMember,
     format_training_remaining,
     training_progress_pct,
     training_remaining_secs,
@@ -27,6 +30,7 @@ from .building import (
 )
 from .parse import (
     CAMPAIGN_STAGE_KILL_CAP,
+    PROFESSION_NAMES,
     PROFESSION_ORDER,
     CharEntry,
     PlayerData,
@@ -392,7 +396,7 @@ async def build_building_context(
     version: str,
     uid_masked: str = "",
 ) -> dict[str, Any] | None:
-    """ark_building.html（基建总览）。需要 building 解析结果可用。"""
+    """ark_building.html（基建总览，深色房间网格版）。需要 building 解析结果可用。"""
     if not building.available:
         return None
 
@@ -412,51 +416,222 @@ async def build_building_context(
             return str(info["name"])
         return f"物品#{item_id}" if item_id else "未知配方"
 
-    manufactures = [
-        {
-            "label": "制造站" if i == 1 else f"制造站{i}",
-            "level": room.level,
-            "formula": (
-                f"{_item_name(room.item_id)}×{room.item_count}"
-                if room.item_id
-                else "未在生产"
-            ),
-            "speed_pct": round(room.speed * 100) if room.speed > 0 else 100,
-            "members": [{"name": m.name, "char_id": m.char_id} for m in room.members],
-        }
-        for i, room in enumerate(building.manufactures, start=1)
+    def _member_dicts(
+        members: list[RoomMember], with_morale: bool = True
+    ) -> list[dict[str, Any]]:
+        """房间成员 → 模板成员 dict（头像/职业图标由 _mount_assets 后补）。"""
+        return [
+            {
+                "name": m.name,
+                "char_id": m.char_id,
+                "avatar": "",
+                "profession": m.profession,
+                "prof_icon": "",
+                # 训练位等无心情口径的成员传 None（模板不出心情条）
+                "morale": m.morale if with_morale else None,
+                "morale_pct": (
+                    round(m.morale * 100 / MORALE_MAX_POINTS) if with_morale else 0
+                ),
+                "tired": with_morale and m.morale < MORALE_LOW_THRESHOLD,
+            }
+            for m in members
+        ]
+
+    # 训练位成员（受训/协助干员无 ap 字段，不出心情条）；职业经 charInfoMap 反查
+    info_map = data.raw.get("charInfoMap")
+    if not isinstance(info_map, dict):
+        info_map = {}
+
+    def _profession_of(char_id: str) -> str:
+        info = info_map.get(char_id)
+        return str(info.get("profession") or "") if isinstance(info, dict) else ""
+
+    def _empty_slot(label: str, face: str = "") -> dict[str, Any]:
+        return {"empty": True, "label": label, "face": face}
+
+    remaining = training_remaining_secs(building)
+    if not building.training_trainee_id or remaining < 0:
+        training_state = "空闲"
+    elif remaining == 0:
+        training_state = "已完成"
+    else:
+        training_state = "受训中"
+    training_members: list[dict[str, Any]] = []
+    for char_id, name in (
+        (building.training_trainee_id, building.training_trainee),
+        (building.training_trainer_id, building.training_trainer),
+    ):
+        if not char_id:
+            continue
+        training_members.append(
+            {
+                "name": name,
+                "char_id": char_id,
+                "avatar": "",
+                "profession": _profession_of(char_id),
+                "prof_icon": "",
+                "morale": None,
+                "morale_pct": 0,
+                "tired": False,
+            }
+        )
+    # 训练位固定 2（受训 + 协助；游戏机制），空位带槽位名便于辨认缺谁
+    training_slots: list[dict[str, Any]] = list(training_members)
+    if not building.training_trainee_id:
+        training_slots.append(_empty_slot("受训位"))
+    if not building.training_trainer_id:
+        training_slots.append(_empty_slot("协助位"))
+
+    control = {
+        "level": building.control_level,
+        "members": _member_dicts(building.control_members),
+        # 中枢进驻位 = 房间等级（游戏机制，上限 5）
+        "empty": max(
+            0, min(building.control_level, 5) - len(building.control_members)
+        ),
+    }
+    control["slots"] = control["members"] + [
+        _empty_slot("空闲") for _ in range(control["empty"])
     ]
-    tradings = [
-        {
-            "label": "贸易站" if i == 1 else f"贸易站{i}",
-            "level": room.level,
-            "strategy": TRADING_STRATEGY_NAMES.get(
-                room.strategy, room.strategy or "未知"
-            ),
-            "stock": room.stock_count,
-            "stock_limit": room.stock_limit,
-            "members": [{"name": m.name, "char_id": m.char_id} for m in room.members],
-        }
-        for i, room in enumerate(building.tradings, start=1)
-    ]
+    manufactures = []
+    for i, room in enumerate(building.manufactures, start=1):
+        members = _member_dicts(room.members)
+        manufactures.append(
+            {
+                "label": "制造站" if i == 1 else f"制造站{i}",
+                "level": room.level,
+                "formula": (
+                    f"{_item_name(room.item_id)}×{room.item_count}"
+                    if room.item_id
+                    else "未在生产"
+                ),
+                "speed_pct": round(room.speed * 100) if room.speed > 0 else 100,
+                "members": members,
+                "slots": members,
+            }
+        )
+    tradings = []
+    for i, room in enumerate(building.tradings, start=1):
+        members = _member_dicts(room.members)
+        tradings.append(
+            {
+                "label": "贸易站" if i == 1 else f"贸易站{i}",
+                "level": room.level,
+                "strategy": TRADING_STRATEGY_NAMES.get(
+                    room.strategy, room.strategy or "未知"
+                ),
+                "stock": room.stock_count,
+                "stock_limit": room.stock_limit,
+                "stock_pct": (
+                    min(100, round(room.stock_count * 100 / room.stock_limit))
+                    if room.stock_limit > 0
+                    else 0
+                ),
+                "members": members,
+                "slots": members,
+            }
+        )
+    powers = []
+    for i, room in enumerate(building.powers, start=1):
+        members = _member_dicts(room.members)
+        powers.append(
+            {
+                "label": f"发电站{i}",
+                "level": room.level,
+                "members": members,
+                # 发电站固定 1 个进驻位（游戏机制）
+                "slots": members
+                + [_empty_slot("空闲") for _ in range(max(0, 1 - len(members)))],
+            }
+        )
     dormitories = [
         {
             "label": f"宿舍{i}",
+            "level": room.level,
             "comfort": room.comfort,
             "comfort_pct": min(100, round(room.comfort * 100 / 5000)),
+            "members": _member_dicts(room.members),
+            # 宿舍固定 5 个休息位（游戏机制，与等级无关）
+            "empty": max(0, 5 - len(room.members)),
         }
         for i, room in enumerate(building.dormitories, start=1)
     ]
-    tired = [
-        {"name": c.name, "room": c.room, "morale": c.morale}
-        for c in building.tired_chars[:8]
-    ]
+    for dorm in dormitories:
+        dorm["slots"] = dorm["members"] + [
+            _empty_slot("自动补位", face="AUTO") for _ in range(dorm["empty"])
+        ]
+    meeting = None
+    if building.meeting_level > 0 or building.meeting_members:
+        # 会客室固定 2 个进驻位（游戏机制）
+        empty = max(0, 2 - len(building.meeting_members))
+        meeting_members = _member_dicts(building.meeting_members)
+        meeting = {
+            "level": building.meeting_level,
+            "members": meeting_members,
+            "empty": empty,
+            "slots": meeting_members + [_empty_slot("空闲") for _ in range(empty)],
+        }
+    hire = None
+    if building.hire_level > 0 or building.hire_members:
+        # 办公室固定 1 个进驻位（游戏机制）
+        empty = max(0, 1 - len(building.hire_members))
+        hire_members = _member_dicts(building.hire_members)
+        hire = {
+            "level": building.hire_level,
+            "members": hire_members,
+            "empty": empty,
+            "slots": hire_members + [_empty_slot("空闲") for _ in range(empty)],
+        }
+
+    # 全房间成员头像 + 职业图标：受限并发批量挂载（磁盘缓存，失败空串降级）；
+    # 资产层故障不拖垮整卡（降级无头像，与既有卡片同口径）
+    try:
+        from ..gamedata.itemicon import profession_icon_b64
+        from ..image import gather_b64
+
+        all_slots = (
+            control["slots"]
+            + training_slots
+            + [
+                s
+                for room in (
+                    manufactures + tradings + powers + dormitories
+                )
+                for s in room.get("slots", room["members"])
+            ]
+            + (meeting["slots"] if meeting else [])
+            + (hire["slots"] if hire else [])
+        )
+        all_members = [s for s in all_slots if not s.get("empty") and s.get("char_id")]
+        char_ids = list(dict.fromkeys(m["char_id"] for m in all_members))
+        avatars = await gather_b64(char_avatar_b64, char_ids)
+        avatar_map = dict(zip(char_ids, avatars))
+        prof_names = list(
+            dict.fromkeys(
+                PROFESSION_NAMES[m["profession"]]
+                for m in all_members
+                if m["profession"] in PROFESSION_NAMES
+            )
+        )
+        icons = await gather_b64(profession_icon_b64, prof_names)
+        icon_by_name = dict(zip(prof_names, icons))
+        icon_map = {
+            code: icon_by_name[name]
+            for code, name in PROFESSION_NAMES.items()
+            if name in icon_by_name
+        }
+        for m in all_members:
+            m["avatar"] = avatar_map.get(m["char_id"], "")
+            m["prof_icon"] = icon_map.get(m["profession"], "")
+    except Exception:
+        logger.debug("[ArknightsUID·基建] 房间成员资产挂载失败（降级无头像）", exc_info=True)
+
     recruit_done = recruit_done_count(data.recruit_slots)
     recruit_next = recruit_next_remaining(data.recruit_slots)
     return {
         "name": data.name or "博士",
         "uid": _mask_uid(uid_masked, data.uid),
-        "control_level": building.control_level,
+        "control": control,
         "labor_value": building.labor_value,
         "labor_max": building.labor_max,
         "labor_pct": (
@@ -466,28 +641,35 @@ async def build_building_context(
         ),
         "manufactures": manufactures,
         "tradings": tradings,
-        "power_count": len(building.powers),
-        "power_levels": [room.level for room in building.powers],
+        "powers": powers,
         "dormitories": dormitories,
+        "meeting": meeting,
+        "hire": hire,
         "clue_own": building.clue_own,
         "clue_board": building.clue_board,
         "clue_daily_reward": building.clue_daily_reward,
-        "training_trainee": building.training_trainee,
-        "training_remain": training_status_text(training_remaining_secs(building)),
-        "training_pct": training_progress_pct(
-            building,
-            base_hours=TRAINING_BASE_HOURS_BY_LEVEL.get(
-                _mastery_target(data, building)[2] or 0
+        "training": {
+            "state": training_state,
+            "level": building.training_level,
+            "members": training_members,
+            "slots": training_slots,
+            "remain": (
+                training_status_text(remaining) if training_members else ""
             ),
-        ),
+            "pct": training_progress_pct(
+                building,
+                base_hours=TRAINING_BASE_HOURS_BY_LEVEL.get(
+                    _mastery_target(data, building)[2] or 0
+                ),
+            ),
+        },
         "recruit_total": len(data.recruit_slots),
         "recruit_done": recruit_done,
         # 最早一个未完成槽位的剩余文案（全部空闲/已完成为空串）
         "recruit_next": (
             format_training_remaining(recruit_next) if recruit_next else ""
         ),
-        "tired_chars": tired,
-        "tired_more": max(0, len(building.tired_chars) - 8),
+        "tired_count": len(building.tired_chars),
         "version": version,
     }
 

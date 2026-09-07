@@ -201,6 +201,26 @@ class ParseBuildingTest(unittest.TestCase):
         self.assertEqual(b.labor_value, 130)
         self.assertEqual(b.labor_max, 200)
 
+    def test_control_members_with_profession(self) -> None:
+        b = self.building
+        self.assertEqual(
+            [m.name for m in b.control_members],
+            ["阿米娅", "濯尘芙蓉", "诗怀雅", "杜宾", "清道夫"],
+        )
+        self.assertEqual(b.control_members[0].profession, "CASTER")
+        self.assertEqual(b.control_members[0].morale, 0.0)
+
+    def test_meeting_and_hire_rooms(self) -> None:
+        """会客室/办公室的房间级字段（等级 + 进驻成员）解析。"""
+        b = self.building
+        self.assertEqual(b.meeting_level, 3)
+        self.assertEqual([m.name for m in b.meeting_members], ["微风"])
+        self.assertEqual(b.hire_level, 3)
+        self.assertEqual(b.hire_members, [])
+
+    def test_training_room_level(self) -> None:
+        self.assertEqual(self.building.training_level, 3)
+
     def test_manufactures_with_formula(self) -> None:
         b = self.building
         self.assertEqual(len(b.manufactures), 2)
@@ -309,7 +329,12 @@ class ParseBuildingTest(unittest.TestCase):
 
 class BuildingContextTest(unittest.IsolatedAsyncioTestCase):
     async def _build_context(self, item_index: dict[str, dict] | None):
-        """受控 item_table：None = 索引不可用（回落 物品#<id>）。"""
+        """受控 item_table：None = 索引不可用（回落 物品#<id>）。
+
+        头像/职业图标挂载打桩为离线假值（不触网），验证挂载路径本身。
+        """
+        from unittest import mock
+
         data = parse_player_info(_player_info())
         assert data is not None
         building = parse_building(data)
@@ -317,35 +342,96 @@ class BuildingContextTest(unittest.IsolatedAsyncioTestCase):
 
         from ArknightsUID.utils.gamedata import charinfo as charinfo_mod
 
-        if item_index is None:
-            async def no_index() -> None:
-                return None
+        async def no_index() -> None:
+            return None
 
-            orig = charinfo_mod.load_item_index
+        orig = charinfo_mod.load_item_index
+        if item_index is None:
             charinfo_mod.load_item_index = no_index
-            try:
+        try:
+            with (
+                mock.patch(
+                    "ArknightsUID.utils.player.context.char_avatar_b64",
+                    new=mock.AsyncMock(return_value="A"),
+                ),
+                mock.patch(
+                    "ArknightsUID.utils.gamedata.itemicon.profession_icon_b64",
+                    new=mock.AsyncMock(return_value="P"),
+                ),
+            ):
                 return await build_building_context(
                     data, building, VERSION, "123***789"
                 )
-            finally:
-                charinfo_mod.load_item_index = orig
-        return await build_building_context(data, building, VERSION, "123***789")
+        finally:
+            charinfo_mod.load_item_index = orig
 
     async def test_context_shape(self) -> None:
         context = await self._build_context(None)
         assert context is not None
         for key in (
-            "name", "uid", "control_level", "labor_value", "labor_max", "labor_pct",
-            "manufactures", "tradings", "power_count", "power_levels",
-            "dormitories", "clue_own", "clue_board", "clue_daily_reward",
-            "training_trainee", "training_remain", "tired_chars", "tired_more",
-            "version",
+            "name", "uid", "control", "labor_value", "labor_max", "labor_pct",
+            "manufactures", "tradings", "powers", "dormitories",
+            "meeting", "hire", "training",
+            "clue_own", "clue_board", "clue_daily_reward",
+            "recruit_total", "recruit_done", "recruit_next",
+            "tired_count", "version",
         ):
             self.assertIn(key, context)
         self.assertEqual(context["labor_pct"], 65)
-        self.assertEqual(context["power_count"], 2)
         # item_table 不可用时配方名回退 "物品#<id>"
         self.assertEqual(context["manufactures"][0]["formula"], "物品#3003×1")
+
+    async def test_room_slots_and_assets(self) -> None:
+        """房间网格上下文：容量补位 + 头像/职业图标挂载 + 心情口径。"""
+        context = await self._build_context(None)
+        assert context is not None
+        # 控制中枢：5 人全进驻（容量=等级），无补位
+        control = context["control"]
+        self.assertEqual(control["level"], 5)
+        self.assertEqual(len(control["slots"]), 5)
+        amiya = control["slots"][0]
+        self.assertEqual(amiya["name"], "阿米娅")
+        self.assertEqual(amiya["avatar"], "A")
+        self.assertEqual(amiya["prof_icon"], "P")
+        self.assertTrue(amiya["tired"])  # 心情 0 < 12
+        self.assertEqual(amiya["morale_pct"], 0)
+        # 贸易站库存百分比
+        self.assertEqual(context["tradings"][0]["stock_pct"], 17)
+        # 发电站：固定 1 进驻位，空房间补 1 个空槽
+        powers = context["powers"]
+        self.assertEqual([p["label"] for p in powers], ["发电站1", "发电站2"])
+        self.assertEqual(len(powers[0]["slots"]), 1)
+        self.assertEqual(powers[0]["slots"][0]["name"], "芳汀")
+        self.assertTrue(powers[1]["slots"][0]["empty"])
+        # 宿舍：空房间补 5 个 AUTO 位
+        dorm = context["dormitories"][0]
+        self.assertEqual(dorm["level"], 5)
+        self.assertEqual(len(dorm["slots"]), 5)
+        self.assertTrue(all(s.get("empty") for s in dorm["slots"]))
+        self.assertEqual(dorm["slots"][0]["face"], "AUTO")
+        # 会客室：1 人 + 1 空位（容量 2）；办公室：0 人 + 1 空位
+        meeting = context["meeting"]
+        assert meeting is not None
+        self.assertEqual(meeting["level"], 3)
+        self.assertEqual(len(meeting["slots"]), 2)
+        self.assertEqual(meeting["slots"][0]["name"], "微风")
+        self.assertTrue(meeting["slots"][1]["empty"])
+        hire = context["hire"]
+        assert hire is not None
+        self.assertEqual(hire["level"], 3)
+        self.assertEqual(len(hire["slots"]), 1)
+        self.assertTrue(hire["slots"][0]["empty"])
+        # 训练室：受训位芬（无心情口径）+ 协助位空槽；快照久远 → 已完成
+        training = context["training"]
+        self.assertEqual(training["level"], 3)
+        self.assertEqual(training["state"], "已完成")
+        self.assertEqual(len(training["slots"]), 2)
+        self.assertEqual(training["slots"][0]["name"], "芬")
+        self.assertIsNone(training["slots"][0]["morale"])
+        self.assertTrue(training["slots"][1]["empty"])
+        self.assertEqual(training["slots"][1]["label"], "协助位")
+        # 低心情计数：工作房间聚合（fixture 共 8 人 < 12）
+        self.assertEqual(context["tired_count"], 8)
 
     async def test_context_with_item_names(self) -> None:
         context = await self._build_context(
@@ -361,12 +447,16 @@ class BuildingContextTest(unittest.IsolatedAsyncioTestCase):
         assert context is not None
         template = ark_templates.get_template("ark_building.html")
         html = template.render(font_css_url="about:blank", **context)
-        self.assertIn("基建", html)
-        self.assertIn("无人机", html)
-        self.assertIn("企鹅物流", html)
-        self.assertIn("低心情干员", html)
-        # 训练室行带剩余时间（fixture 快照久远 → 折算为已完成）
-        self.assertIn("专精训练中 · 已完成", html)
+        for marker in (
+            "基建总览", "无人机", "待换班", "公开招募",
+            "控制中枢", "贸易站", "制造站", "发电站1",
+            "会客室", "办公室", "宿舍1", "训练室",
+            "物品#3003×1", "龙门币",
+            "企鹅物流",  # 会客室线索板
+            "自动补位", "协助位",
+            "专精训练已完成",  # fixture 快照久远 → 折算为已完成
+        ):
+            self.assertIn(marker, html)
 
 
 if __name__ == "__main__":
@@ -385,7 +475,6 @@ class TrainingContextTest(unittest.IsolatedAsyncioTestCase):
         return payload
 
     async def _context(self, payload: dict) -> dict | None:
-        import time as time_mod
         from unittest import mock
 
         from ArknightsUID.utils.player.context import build_training_context

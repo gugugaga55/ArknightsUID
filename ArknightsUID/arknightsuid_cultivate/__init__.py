@@ -21,7 +21,8 @@ from ArknightsUID.utils.enduid.adapter import (
 )
 from ArknightsUID.utils.gamedata.charinfo import resolve_query
 from ArknightsUID.utils.gamedata.itemicon import item_icon_b64
-from ArknightsUID.utils.player.context import char_portrait_b64
+from ArknightsUID.utils.image import gather_b64
+from ArknightsUID.utils.player.context import char_avatar_b64, char_portrait_b64
 from ArknightsUID.version import ArknightsUID_version
 
 cultivate_sv = SV("ArknightsUID养成", priority=5)
@@ -161,11 +162,20 @@ async def show_cultivation_plan(bot: Bot, ev: Event) -> None:
 
     farm_rows = await _build_farm_rows(merged, credential)
 
+    # 图文并茂：材料/经验书/刷图建议挂 PRTS 道具图标、干员清单挂头像，
+    # 受限并发批量取图（失败空串降级，不拖垮整卡）
     gap = merged
-    for row in gap["materials"] + gap["exp_books"]:
-        row["icon"] = await item_icon_b64(row["name"])
+    icon_rows = gap["materials"] + gap["exp_books"] + farm_rows
+    icons = await gather_b64(item_icon_b64, [str(r.get("name") or "") for r in icon_rows])
+    for row, icon in zip(icon_rows, icons):
+        row["icon"] = icon
     if gap["gold_lack"]:
         gap["gold_icon"] = await item_icon_b64("龙门币")
+    avatars = await gather_b64(
+        char_avatar_b64, [str(c.get("char_id") or "") for c in merged["chars"]]
+    )
+    for char_row, avatar in zip(merged["chars"], avatars):
+        char_row["avatar"] = avatar
 
     shown_uid = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
     context = {
@@ -219,8 +229,10 @@ async def show_cultivation(bot: Bot, ev: Event) -> None:
 
     # 图文并茂：材料/经验书/龙门币行挂上 PRTS 带框道具图标（失败降级空串）
     gap = result["gap"]
-    for row in gap["materials"] + gap["exp_books"]:
-        row["icon"] = await item_icon_b64(row["name"])
+    icon_rows = gap["materials"] + gap["exp_books"]
+    icons = await gather_b64(item_icon_b64, [str(r.get("name") or "") for r in icon_rows])
+    for row, icon in zip(icon_rows, icons):
+        row["icon"] = icon
     if gap["gold_lack"]:
         gap["gold_icon"] = await item_icon_b64("龙门币")
 

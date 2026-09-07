@@ -79,6 +79,138 @@ def _gacha_plan_preview() -> dict:
     )
 
 
+# 基建总览预览：房间干员（morale<12 触发待换班红字/压暗；morale=None 不出心情条）
+def _bm(name: str, char_id: str, profession: str, morale: float | None) -> dict:
+    return {
+        "name": name,
+        "char_id": char_id,
+        "avatar": "",
+        "profession": profession,
+        "prof_icon": "",
+        "morale": morale,
+        "morale_pct": round(morale * 100 / 24) if morale is not None else 0,
+        "tired": morale is not None and morale < 12,
+    }
+
+
+def _be(label: str, face: str = "") -> dict:
+    return {"empty": True, "label": label, "face": face}
+
+
+def _building_preview() -> dict:
+    control_members = [
+        _bm("阿米娅", "char_002_amiya", "CASTER", 0.0),
+        _bm("诗怀雅", "char_308_swire", "PIONEER", 3.2),
+        _bm("杜宾", "char_130_doberm", "PIONEER", 24.0),
+        _bm("清道夫", "char_149_scave", "SPECIAL", 24.0),
+        _bm("濯尘芙蓉", "char_1024_hbisc2", "MEDIC", 18.5),
+    ]
+    trading_rooms = [
+        {"label": "贸易站", "level": 3, "strategy": "龙门币",
+         "stock": 8, "stock_limit": 12, "stock_pct": 67,
+         "members": [
+             _bm("能天使", "char_103_angel", "SNIPER", 13.8),
+             _bm("德克萨斯", "char_102_texas", "PIONEER", 21.0),
+             _bm("拉普兰德", "char_140_whitew", "WARRIOR", 24.0),
+         ]},
+        {"label": "贸易站2", "level": 3, "strategy": "合成玉",
+         "stock": 2, "stock_limit": 10, "stock_pct": 20,
+         "members": [
+             _bm("雪雉", "char_118_yuki", "SPECIAL", 6.6),
+             _bm("逻各斯", "char_4133_logos", "CASTER", 16.2),
+         ]},
+    ]
+    manufacture_rooms = [
+        {"label": "制造站", "level": 3, "formula": "赤金×1", "speed_pct": 163,
+         "members": [
+             _bm("假日威龙陈", "char_1013_chen2", "SNIPER", 5.1),
+             _bm("刻俄柏", "char_2013_cerber", "CASTER", 20.0),
+             _bm("伊芙利特", "char_134_ifrit", "CASTER", 24.0),
+         ]},
+        {"label": "制造站2", "level": 3, "formula": "赤金×1", "speed_pct": 111,
+         "members": [
+             _bm("古米", "char_196_sunbr", "TANK", 24.0),
+             _bm("桃金娘", "char_151_myrtle", "PIONEER", 22.4),
+         ]},
+        {"label": "制造站3", "level": 3, "formula": "高级作战记录×1", "speed_pct": 103,
+         "members": [_bm("夜烟", "char_141_nights", "CASTER", 0.0)]},
+        {"label": "制造站4", "level": 2, "formula": "未在生产", "speed_pct": 100,
+         "members": []},
+    ]
+    power_rooms = [
+        {"label": "发电站1", "level": 3,
+         "members": [_bm("承曦格雷伊", "char_4055_bgsnow", "CASTER", 9.4)]},
+        {"label": "发电站2", "level": 3,
+         "members": [_bm("芳汀", "char_385_finlpp", "WARRIOR", 0.0)]},
+        {"label": "发电站3", "level": 1, "members": []},
+    ]
+    meeting_members = [
+        _bm("微风", "char_275_breeze", "MEDIC", 24.0),
+        _bm("艾雅法拉", "char_180_amgoat", "CASTER", 24.0),
+    ]
+    hire_members = [_bm("银灰", "char_172_svrash", "WARRIOR", 24.0)]
+    training_slots = [
+        _bm("维什戴尔", "char_1035_wisdel", "SNIPER", None),
+        _bm("逻各斯", "char_4133_logos", "CASTER", None),
+    ]
+    dorm_rooms = [
+        {"label": "宿舍1", "level": 5, "comfort": 5000, "comfort_pct": 100,
+         "members": [
+             _bm("左乐", "char_4121_zuole", "WARRIOR", 12.4),
+             _bm("乌尔比安", "char_4145_ulpia", "WARRIOR", 18.2),
+             _bm("纯烬艾雅法拉", "char_1016_agoat2", "MEDIC", 6.0),
+         ]},
+        {"label": "宿舍2", "level": 5, "comfort": 4980, "comfort_pct": 100,
+         "members": [_bm("荒芜拉普兰德", "char_1038_whitw2", "SPECIAL", 15.1)]},
+        {"label": "宿舍3", "level": 4, "comfort": 4320, "comfort_pct": 86, "members": []},
+        {"label": "宿舍4", "level": 4, "comfort": 3145, "comfort_pct": 63, "members": []},
+    ]
+
+    def _pad(members: list, capacity: int, label: str = "空闲", face: str = "") -> list:
+        return list(members) + [
+            _be(label, face) for _ in range(max(0, capacity - len(members)))
+        ]
+
+    return {
+        "name": "刀客塔不吃香菜",
+        "uid": "12****89",
+        "labor_value": 130,
+        "labor_max": 200,
+        "labor_pct": 65,
+        "recruit_total": 4,
+        "recruit_done": 1,
+        "recruit_next": "约2小时15分",
+        "tired_count": 5,
+        "control": {"level": 5, "members": control_members,
+                    "slots": _pad(control_members, 5)},
+        "manufactures": [
+            {**r, "slots": r["members"]} for r in manufacture_rooms
+        ],
+        "tradings": [{**r, "slots": r["members"]} for r in trading_rooms],
+        "powers": [{**r, "slots": _pad(r["members"], 1)} for r in power_rooms],
+        "dormitories": [
+            {**r, "slots": _pad(r["members"], 5, "自动补位", "AUTO")}
+            for r in dorm_rooms
+        ],
+        "meeting": {"level": 3, "members": meeting_members,
+                    "slots": _pad(meeting_members, 2)},
+        "hire": {"level": 3, "members": hire_members,
+                 "slots": _pad(hire_members, 1)},
+        "clue_own": 9,
+        "clue_board": ["企鹅物流", "喀兰贸易", "莱茵生命"],
+        "clue_daily_reward": True,
+        "training": {
+            "state": "受训中",
+            "level": 3,
+            "members": training_slots,
+            "slots": training_slots,
+            "remain": "剩约2小时15分",
+            "pct": 62,
+        },
+        "version": VERSION,
+    }
+
+
 MOCK_CONTEXTS = {
     "ark_help.html": {
         "version": VERSION,
@@ -1204,9 +1336,9 @@ MOCK_CONTEXTS = {
         "uid": "12****89",
         "merged": {
             "chars": [
-                {"name": "银灰", "rarity": 6, "current": {"evolve_phase": 2, "main_skill_lvl": 7, "masteries": [3, 0, 0]}, "gap_count": 6},
-                {"name": "史尔特尔", "rarity": 6, "current": {"evolve_phase": 2, "main_skill_lvl": 7, "masteries": [1, 0, 0]}, "gap_count": 8},
-                {"name": "42", "rarity": 6, "current": {"evolve_phase": 2, "main_skill_lvl": 6, "masteries": [0, 0, 0]}, "gap_count": 9},
+                {"name": "银灰", "char_id": "char_172_svrash", "avatar": "", "rarity": 6, "current": {"evolve_phase": 2, "main_skill_lvl": 7, "masteries": [3, 0, 0]}, "gap_count": 6},
+                {"name": "史尔特尔", "char_id": "char_350_surtr", "avatar": "", "rarity": 6, "current": {"evolve_phase": 2, "main_skill_lvl": 7, "masteries": [1, 0, 0]}, "gap_count": 8},
+                {"name": "42", "char_id": "char_350_surtr", "avatar": "", "rarity": 6, "current": {"evolve_phase": 2, "main_skill_lvl": 6, "masteries": [0, 0, 0]}, "gap_count": 9},
             ],
             "materials": [
                 {"id": "2004", "name": "D32钢", "rarity": "5★", "need": 8, "owned": 2, "lack": 6, "icon": ""},
@@ -1223,10 +1355,10 @@ MOCK_CONTEXTS = {
             "warnings": ["42 的技能顺序对位不全，专精按已持有技能数计算"],
         },
         "farm_rows": [
-            {"name": "D32钢", "lack": 6, "advice": "直刷 13-4（约 18 把，2394 理智）；合成（叶子约 2210 理智）→ 合成更省"},
-            {"name": "聚合剂", "lack": 5, "advice": "不可直刷，合成（叶子直刷约 1980 理智）"},
-            {"name": "改量装置", "lack": 7, "advice": "直刷 10-4（约 9 把，720 理智）"},
-            {"name": "聚酸酯组", "lack": 12, "advice": "直刷 S4-6（约 15 把，600 理智）；合成（叶子约 640 理智）→ 直刷更省"},
+            {"name": "D32钢", "lack": 6, "icon": "", "advice": "直刷 13-4（约 18 把，2394 理智）；合成（叶子约 2210 理智）→ 合成更省"},
+            {"name": "聚合剂", "lack": 5, "icon": "", "advice": "不可直刷，合成（叶子直刷约 1980 理智）"},
+            {"name": "改量装置", "lack": 7, "icon": "", "advice": "直刷 10-4（约 9 把，720 理智）"},
+            {"name": "聚酸酯组", "lack": 12, "icon": "", "advice": "直刷 S4-6（约 15 把，600 理智）；合成（叶子约 640 理智）→ 直刷更省"},
         ],
         "version": VERSION,
     },
@@ -1259,57 +1391,7 @@ MOCK_CONTEXTS = {
         ],
         "version": VERSION,
     },
-    "ark_building.html": {
-        "name": "刀客塔不吃香菜",
-        "uid": "12****89",
-        "control_level": 5,
-        "labor_value": 130,
-        "labor_max": 200,
-        "labor_pct": 65,
-        "recruit_total": 4,
-        "recruit_done": 1,
-        "recruit_next": "约2小时15分",
-        "training_pct": 62,
-        "manufactures": [
-            {"label": "制造站", "level": 3, "formula": "赤金×1", "speed_pct": 163,
-             "members": [{"name": "温蒂", "char_id": ""}, {"name": "森蚺", "char_id": ""}, {"name": "澄闪", "char_id": ""}]},
-            {"label": "制造站2", "level": 3, "formula": "赤金×1", "speed_pct": 111,
-             "members": [{"name": "红云", "char_id": ""}, {"name": "泡泡", "char_id": ""}]},
-            {"label": "制造站3", "level": 3, "formula": "高级作战记录×1", "speed_pct": 103,
-             "members": [{"name": "夜烟", "char_id": ""}]},
-        ],
-        "tradings": [
-            {"label": "贸易站", "level": 3, "strategy": "龙门币", "stock": 8, "stock_limit": 12,
-             "members": [{"name": "能天使", "char_id": ""}, {"name": "德克萨斯", "char_id": ""}, {"name": "拉普兰德", "char_id": ""}]},
-            {"label": "贸易站2", "level": 3, "strategy": "合成玉", "stock": 2, "stock_limit": 10,
-             "members": [{"name": "雪雉", "char_id": ""}, {"name": "崖心", "char_id": ""}]},
-        ],
-        "power_count": 3,
-        "power_levels": [3, 3, 3],
-        "dormitories": [
-            {"label": "宿舍1", "comfort": 5000, "comfort_pct": 100},
-            {"label": "宿舍2", "comfort": 4980, "comfort_pct": 100},
-            {"label": "宿舍3", "comfort": 4320, "comfort_pct": 86},
-            {"label": "宿舍4", "comfort": 3145, "comfort_pct": 63},
-        ],
-        "clue_own": 9,
-        "clue_board": ["企鹅物流", "喀兰贸易", "莱茵生命"],
-        "clue_daily_reward": True,
-        "training_trainee": "史尔特尔",
-        "training_remain": "剩约2小时15分",
-        "tired_chars": [
-            {"name": "阿米娅", "room": "控制中枢", "morale": 0.0},
-            {"name": "濯尘芙蓉", "room": "控制中枢", "morale": 0.0},
-            {"name": "诗怀雅", "room": "控制中枢", "morale": 3.2},
-            {"name": "假日威龙陈", "room": "制造站", "morale": 5.1},
-            {"name": "浊心斯卡蒂", "room": "制造站", "morale": 5.1},
-            {"name": "鸿雪", "room": "贸易站", "morale": 6.6},
-            {"name": "讯使", "room": "贸易站", "morale": 6.6},
-            {"name": "角峰", "room": "贸易站2", "morale": 9.6},
-        ],
-        "tired_more": 3,
-        "version": VERSION,
-    },
+    "ark_building.html": _building_preview(),
     "ark_training.html": {
         "name": "刀客塔不吃香菜",
         "uid": "12****89",
@@ -1517,6 +1599,25 @@ async def _enrich_icons(name: str, context: dict) -> None:
                 await _bake_named(five)
         for five in context.get("pity_fives", []):
             await _bake_named(five)
+
+    if name == "ark_cultivate_plan.html":
+        # 材料/经验书/刷图建议道具图标 + 干员清单头像（与生产同一取图函数）
+        from ArknightsUID.utils.player.context import char_avatar_b64
+
+        plan_gap = context["merged"]
+        for row in (
+            plan_gap["materials"] + plan_gap["exp_books"] + context.get("farm_rows", [])
+        ):
+            row["icon"] = await item_icon_b64(row["name"])
+        if plan_gap.get("gold_lack"):
+            plan_gap["gold_icon"] = await item_icon_b64("龙门币")
+        for c in plan_gap.get("chars", []):
+            c["avatar"] = await char_avatar_b64(str(c.get("char_id") or ""))
+
+    if name == "ark_farm_plan.html":
+        # 目标材料行图标（与生产 show_farm_plan 同一取图函数）
+        for row in context.get("rows", []):
+            row["icon"] = await item_icon_b64(row["name"])
 
     if name == "ark_craft.html":
         # 目标材料图标 + 首两层子材料图标（与生产 show_craft_tree 同规则）
@@ -1990,19 +2091,26 @@ async def _enrich_icons(name: str, context: dict) -> None:
                 row["avatar"] = await char_avatar_b64(hit) if hit else ""
 
     if name == "ark_building.html":
-        # 房间成员头像：名称反查 charId → 初始头像
-        from ArknightsUID.utils.gamedata.charinfo import load_char_index
+        # 房间成员头像 + 职业图标：mock 直接带 char_id/职业代码（与生产
+        # build_building_context 的挂载口径一致），失败空串降级
+        from ArknightsUID.utils.gamedata.itemicon import profession_icon_b64
         from ArknightsUID.utils.player.context import char_avatar_b64
+        from ArknightsUID.utils.player.parse import PROFESSION_NAMES
 
-        char_index = await load_char_index()
-        for room in context.get("manufactures", []) + context.get("tradings", []):
-            for m in room.get("members", []):
-                hit = next(
-                    (cid for cid, info in char_index.items()
-                     if info.get("name") == m.get("name")),
-                    "",
-                )
-                m["avatar"] = await char_avatar_b64(hit) if hit else ""
+        slots: list[dict] = list(context["control"]["slots"])
+        for key in ("manufactures", "tradings", "powers", "dormitories"):
+            for room in context.get(key, []):
+                slots.extend(room["slots"])
+        for room in (context.get("meeting"), context.get("hire")):
+            if room:
+                slots.extend(room["slots"])
+        slots.extend(context["training"]["slots"])
+        for slot in slots:
+            if slot.get("empty") or not slot.get("char_id"):
+                continue
+            slot["avatar"] = await char_avatar_b64(slot["char_id"])
+            prof = PROFESSION_NAMES.get(str(slot.get("profession") or ""), "")
+            slot["prof_icon"] = await profession_icon_b64(prof) if prof else ""
 
     if name == "ark_fortune.html":
         # 同行干员头像：干员名反查 charId（与生产 send_daily_fortune 同口径）

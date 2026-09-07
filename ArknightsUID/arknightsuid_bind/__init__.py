@@ -27,6 +27,9 @@ from ArknightsUID.utils.skland import store as ark_store
 # 开关在 handler 内实时判定——area="DIRECT" 是框架级静默拦截，开关
 # 开了也进不来，所以扫码不能挂在 bind_sv 下
 scan_sv = SV("ArknightsUID扫码登录", priority=5)
+# 网页登录链接同属"免密登录入口"向量，与扫码共用 AllowGroupScanLogin 开关，
+# 也不挂 bind_sv
+web_login_sv = SV("ArknightsUID网页登录", priority=5)
 
 _PRIVATE_ONLY_HINT = "绑定/登录涉及凭据安全，请私聊我使用本命令。"
 _GROUP_SCAN_OFF_HINT = (
@@ -45,13 +48,8 @@ bind_sv = SV("ArknightsUID绑定", area="DIRECT", priority=5)
 # 文本回复公共实现在 utils.card.send_text；保留模块级别名供调用点/测试 patch
 from ArknightsUID.utils.card import send_text as _send_text  # noqa: E402
 
-
-def _format_bind_success(roles: list[dict]) -> str:
-    lines = ["「明日方舟」登录成功，已写入账号："]
-    for role in roles:
-        lines.append(f"- {role['nickname']}（UID {hide_uid(role['role_id'])}）")
-    lines.append("现在可使用 ark理智 / ark每日 / ark肉鸽 等命令。")
-    return "\n".join(lines)
+# 登录成功回执的纯文本格式化（命令侧卡片回退文本与网页登录推送共用）
+from ._format import format_bind_success as _format_bind_success  # noqa: E402
 
 
 async def _send_login_success(bot: Bot, ev: Event, roles: list[dict]) -> None:
@@ -188,6 +186,20 @@ async def scan_login(bot: Bot, ev: Event) -> None:
     if err:
         return await _send_text(bot, ev, err)
     await _send_login_success(bot, ev, roles or [])
+
+
+@web_login_sv.on_command(("网页登录", "手机登录", "手机号登录"), block=True)
+async def phone_web_login(bot: Bot, ev: Event) -> None:
+    """手机号验证码网页登录（EndUID 同源协议）。
+
+    实现与网页路由在 web_login.py；开关判定在 handler 内实时读取
+    （与扫码同因：area="DIRECT" 是框架级静默拦截，不能挂在 bind_sv 下）。
+    注意函数名不能叫 web_login：会遮蔽底部 `from . import web_login`
+    的子模块导入（from-import 见属性已存在就不再加载模块，路由挂不上）。
+    """
+    from .web_login import web_login_entry
+
+    await web_login_entry(bot, ev)
 
 
 @bind_sv.on_command(("删除登录", "解除绑定"), block=True)
@@ -343,3 +355,8 @@ async def set_user_alias(bot: Bot, ev: Event) -> None:
         ev,
         f"已设置别名：{alias} → {canonical}（ark干员/面板/养成/练度卡/模组 均生效）",
     )
+
+
+# 挂载网页登录路由（GET /ark/i/{auth}、POST /ark/sendCode、POST /ark/login）。
+# 模块导入即注册到 core 的 FastAPI 实例，与 EndUID end_bind 同款做法。
+from . import web_login  # noqa: E402,F401

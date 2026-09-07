@@ -393,6 +393,7 @@ def merge_cultivation_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         chars.append(
             {
                 "name": char.display_name,
+                "char_id": getattr(char, "char_id", ""),  # 干员清单头像用
                 "rarity": char.rarity_display,
                 "current": result.get("current") or {},
                 "gap_count": char_material_total,

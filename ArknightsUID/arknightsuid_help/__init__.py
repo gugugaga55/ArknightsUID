@@ -28,6 +28,11 @@ HELP_GROUPS = [
                 "desc": "森空岛 APP 扫码（仅私聊）",
                 "eg": "ark扫码登录",
             },
+            {
+                "cmd": "ark网页登录",
+                "desc": "手机号验证码网页登录（需配置 ArkLoginUrl）",
+                "eg": "ark网页登录",
+            },
             {"cmd": "ark账号", "desc": "绑定账号列表（标注默认）", "eg": "ark账号"},
             {
                 "cmd": "ark切换 <序号|UID>",
