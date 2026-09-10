@@ -22,9 +22,10 @@ from typing import Any
 
 from gsuid_core.logger import logger
 
-from ..http import download_bytes
+from ..http import download_bytes_conditional
 from ..disk_cache import (
     cache_read,
+    cache_read_validators,
     cache_saved_ts,
     cache_write,
     is_fresh,
@@ -66,8 +67,11 @@ CRISIS_V2_TABLE_PATH = GAMEDATA_CACHE_DIR / "crisis_v2_table.json"
 SKIN_TABLE_PATH = GAMEDATA_CACHE_DIR / "skin_table.json"
 STAGE_TABLE_PATH = GAMEDATA_CACHE_DIR / "stage_table.json"
 
-# 全量缓存 TTL（game data 随版本更新，7 天足够）
-CHAR_TABLE_TTL = 7 * 86400
+# 复核间隔（非数据寿命）：全量表内容近永久，只在版本更新时变化——
+# 间隔到点走条件 GET（ETag/If-None-Match）diff，上游没变（304）时
+# 零下载零解析仅续期；所以间隔可以比旧 TTL（7 天）激进得多，
+# 新干员/新期数据最长 1 天即可见。
+CHAR_TABLE_TTL = 86400
 
 # per-path 下载锁：TTL 过期瞬间的并发调用只触发一次 15-18MB 下载
 # （single-flight：锁内复查缓存新鲜度，等锁的协程直接命中新缓存）
@@ -118,24 +122,39 @@ _GAMEDATA_MIRROR_TEMPLATES = (
 )
 
 
-async def _download_json(url: str) -> Any | None:
-    """下载 JSON（共享 HTTP 层；全量表放宽到 120s；raw 失败走 jsdelivr 镜像）。"""
+async def _parse_json_bytes(raw: bytes) -> Any | None:
+    """全量表 15-18MB，json.loads 实测 ~130ms/15MB——下放线程池，
+    否则复核到点后第一个用到该表的命令会卡住整个事件循环。"""
+    try:
+        return await asyncio.to_thread(json.loads, raw)
+    except Exception as exc:
+        logger.warning(
+            f"[ArknightsUID·gamedata] 响应非 JSON: {exc.__class__.__name__}: {exc}"
+        )
+        return None
+
+
+async def _download_json(url: str) -> tuple[Any | None, dict]:
+    """下载 JSON（共享 HTTP 层；全量表放宽到 120s；raw 失败走 jsdelivr 镜像）。
+
+    返回 (parsed, validators)：validators 含命中 URL 的 ETag/Last-Modified
+    与 source_url，落盘后供下次复核做条件 diff（多镜像 ETag 不互通，
+    条件请求必须回当初命中的源）。
+    """
     name = url.rsplit("/", 1)[-1]
     for template in _GAMEDATA_MIRROR_TEMPLATES:
         try_url = url if template is None else template.format(name=name)
-        raw = await download_bytes(try_url, timeout=120.0)
+        status, raw, validators = await download_bytes_conditional(
+            try_url, timeout=120.0
+        )
         if raw is None:
             continue
-        try:
-            # 全量表 15-18MB，json.loads 实测 ~130ms/15MB——下放线程池，
-            # 否则 TTL 过期后第一个用到该表的命令会卡住整个事件循环
-            return await asyncio.to_thread(json.loads, raw)
-        except Exception as exc:
-            logger.warning(
-                f"[ArknightsUID·gamedata] 响应非 JSON {try_url.rsplit('/', 1)[-1]}: "
-                f"{exc.__class__.__name__}: {exc}"
-            )
-    return None
+        parsed = await _parse_json_bytes(raw)
+        if parsed is None:
+            continue
+        merged = {**validators, "source_url": try_url}
+        return parsed, merged
+    return None, {}
 
 
 async def _read_wrapped_cache(path: Path) -> dict[str, Any] | None:
@@ -203,9 +222,39 @@ async def _ensure_table(
             fresh = await _read_fresh_from_disk(path, ttl)
             if fresh is not None:
                 return fresh
-        fresh = await _download_json(url)
+        # ---- 条件 diff 复核：有校验器且上游未变（304）→ 零下载零解析续期 ----
+        validators = await cache_read_validators(path)
+        if validators.get("etag") or validators.get("last_modified"):
+            cond_url = str(validators.get("source_url") or url)
+            status, raw, new_v = await download_bytes_conditional(
+                cond_url,
+                timeout=120.0,
+                etag=str(validators.get("etag")) if validators.get("etag") else None,
+                last_modified=(
+                    str(validators.get("last_modified"))
+                    if validators.get("last_modified")
+                    else None
+                ),
+            )
+            if status == 304:
+                old_payload, _ = await cache_read(path)
+                if isinstance(old_payload, dict):
+                    merged = {**validators, **new_v, "source_url": cond_url}
+                    await cache_write(path, old_payload, validators=merged)
+                    _memo_put(path, time.time(), old_payload)
+                    return old_payload
+                # 304 却无旧 payload（旁车与主缓存脱节的异常态）：落全量
+            elif raw is not None:
+                parsed = await _parse_json_bytes(raw)
+                if isinstance(parsed, dict):
+                    merged = {**validators, **new_v, "source_url": cond_url}
+                    await cache_write(path, parsed, validators=merged)
+                    _memo_put(path, time.time(), parsed)
+                    return parsed
+        # ---- 无校验器（历史缓存）/ 条件请求网络失败 → 全量下载（镜像链）----
+        fresh, fresh_validators = await _download_json(url)
         if isinstance(fresh, dict):
-            await cache_write(path, fresh)
+            await cache_write(path, fresh, validators=fresh_validators or None)
             _memo_put(path, time.time(), fresh)
             return fresh
         return await _read_wrapped_cache(path)

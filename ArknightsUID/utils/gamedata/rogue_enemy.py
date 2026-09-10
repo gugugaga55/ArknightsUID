@@ -25,8 +25,17 @@ from typing import Any
 
 from gsuid_core.logger import logger
 
-from ..http import download_bytes, download_bytes_status
-from ..disk_cache import cache_read, cache_write, is_fresh
+from ..http import (
+    download_bytes,
+    download_bytes_conditional,
+    download_bytes_status,
+)
+from ..disk_cache import (
+    cache_read,
+    cache_read_validators,
+    cache_write,
+    is_fresh,
+)
 from ._table_cache import GAMEDATA_CACHE_DIR
 # 期表数据收敛至 rogue_registry（唯一事实源）；此处按原名再导出，
 # rogue_ending 与既有测试的导入路径不破坏
@@ -37,10 +46,11 @@ from .rogue_registry import (  # noqa: F401
 )
 
 IS_ENEMY_CACHE_DIR = GAMEDATA_CACHE_DIR / "is_enemy"
-# 全量缓存 TTL。肉鸽数据只随游戏版本更新（半年一更，历史期几乎不变），
-# 全部落盘约 12MB（敌人库 1.4M + 技能词典 0.5M + 关卡 ~10M），30 天足够；
-# 下载失败时以过期缓存兜底，只有完全无缓存才走负标记。
-_DATA_TTL = 30 * 86400.0
+# 复核间隔（非数据寿命）：敌人库/技能词典内容近永久，只在版本更新时
+# 变化——间隔到点走条件 GET diff，304 时零下载零解析仅续期，故比旧
+# TTL（30 天）激进；新期敌人最长 1 天即可见。下载失败以过期缓存兜底，
+# 只有完全无缓存才走负标记。
+_DATA_TTL = 86400.0
 
 # 数据直链（jsdelivr CDN：content-type 正确、快；raw 直链核心下载器会 5s 超时）
 _TOMIMI_BASE = "https://cdn.jsdelivr.net/gh/tanch-p/tomimi-dev@main/src/lib/data"
@@ -678,7 +688,12 @@ def _miss_ttl(miss_path: Path) -> float:
 
 
 async def _fetch_url_json_cached(url: str, path: Path) -> Any:
-    """任意 tomimi 直链 JSON → 本地缓存（30 天 TTL；失败过期兜底 + 负标记）。"""
+    """任意 tomimi 直链 JSON → 本地缓存（每日条件 diff；失败过期兜底 + 负标记）。
+
+    有校验器（ETag/Last-Modified 旁车）时先条件 GET：304 = 上游未变，
+    仅续期时间戳零下载；200 = 版本更新，全量换。无校验器（历史缓存）
+    或条件请求网络失败，落普通 GET。
+    """
     import json
 
     payload, saved_ts = await cache_read(path)
@@ -692,8 +707,37 @@ async def _fetch_url_json_cached(url: str, path: Path) -> Any:
             miss_path.unlink()
         except OSError:
             return None
+    validators = await cache_read_validators(path)
+    if validators.get("etag") or validators.get("last_modified"):
+        status, raw, new_v = await download_bytes_conditional(
+            url,
+            timeout=20.0,
+            etag=str(validators.get("etag")) if validators.get("etag") else None,
+            last_modified=(
+                str(validators.get("last_modified"))
+                if validators.get("last_modified")
+                else None
+            ),
+        )
+        if status == 304 and payload is not None:
+            await cache_write(
+                path, payload, validators={**validators, **new_v, "source_url": url}
+            )
+            return payload
+        if raw is not None:
+            try:
+                data = json.loads(raw)
+            except Exception:
+                return payload
+            await cache_write(
+                path, data, validators={**validators, **new_v, "source_url": url}
+            )
+            return data
+        # 条件请求网络失败 → 落普通 GET 兜底（下方，仍回收校验器）
     # quiet_404：数据文件 404 = 该期尚未上传（写 "404" miss 的设计语义）
-    status, raw = await download_bytes_status(url, timeout=20.0, quiet_404=True)
+    status, raw, new_v = await download_bytes_conditional(
+        url, timeout=20.0, quiet_404=True
+    )
     if raw is None:
         if payload is not None:
             # 网络抖动/CDN 故障：宁可给过期数据，不写负标记（恢复即自愈）
@@ -707,7 +751,9 @@ async def _fetch_url_json_cached(url: str, path: Path) -> Any:
         data = json.loads(raw)
     except Exception:
         return payload
-    await cache_write(path, data)
+    await cache_write(
+        path, data, validators={**new_v, "source_url": url} if new_v else None
+    )
     return data
 
 

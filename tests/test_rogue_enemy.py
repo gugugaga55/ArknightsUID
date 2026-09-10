@@ -468,6 +468,10 @@ class CachePolicyTest(unittest.IsolatedAsyncioTestCase):
             calls.append(url)
             return 404, None
 
+        async def fake_cond(url, *, timeout=0.0, **kw):
+            calls.append(url)
+            return 404, None, {}
+
         target = re_mod.Path("/tmp/ark_test_miss.json")
         miss = target.with_suffix(target.suffix + ".miss")
         miss.unlink(missing_ok=True)
@@ -475,6 +479,7 @@ class CachePolicyTest(unittest.IsolatedAsyncioTestCase):
         with (
             mock.patch.object(re_mod, "cache_read", new=fake_cache_read),
             mock.patch.object(re_mod, "download_bytes_status", new=fake_download),
+            mock.patch.object(re_mod, "download_bytes_conditional", new=fake_cond),
         ):
             first = await re_mod._fetch_url_json_cached(
                 "https://example.com/y.json", target
@@ -505,6 +510,9 @@ class CachePolicyTest(unittest.IsolatedAsyncioTestCase):
         async def fake_download(url, timeout=0.0, **kw):
             return 0, None
 
+        async def fake_cond(url, *, timeout=0.0, **kw):
+            return 0, None, {}
+
         target = re_mod.Path("/tmp/ark_test_net_miss.json")
         miss = target.with_suffix(target.suffix + ".miss")
         miss.unlink(missing_ok=True)
@@ -512,6 +520,7 @@ class CachePolicyTest(unittest.IsolatedAsyncioTestCase):
         with (
             mock.patch.object(re_mod, "cache_read", new=fake_cache_read),
             mock.patch.object(re_mod, "download_bytes_status", new=fake_download),
+            mock.patch.object(re_mod, "download_bytes_conditional", new=fake_cond),
         ):
             first = await re_mod._fetch_url_json_cached(
                 "https://example.com/y.json", target
@@ -523,10 +532,10 @@ class CachePolicyTest(unittest.IsolatedAsyncioTestCase):
 
             async def fake_download_2(url, timeout=0.0, **kw):
                 calls.append(url)
-                return 200, b"[]"
+                return 200, b"[]", {}
 
             with mock.patch.object(
-                re_mod, "download_bytes_status", new=fake_download_2
+                re_mod, "download_bytes_conditional", new=fake_download_2
             ):
                 blocked = await re_mod._fetch_url_json_cached(
                     "https://example.com/y.json", target
@@ -537,7 +546,7 @@ class CachePolicyTest(unittest.IsolatedAsyncioTestCase):
             old = time_mod.time() - 3700
             os.utime(miss, (old, old))
             with mock.patch.object(
-                re_mod, "download_bytes_status", new=fake_download_2
+                re_mod, "download_bytes_conditional", new=fake_download_2
             ):
                 recovered = await re_mod._fetch_url_json_cached(
                     "https://example.com/y.json", target

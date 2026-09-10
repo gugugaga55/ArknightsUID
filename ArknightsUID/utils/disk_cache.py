@@ -119,14 +119,69 @@ async def cache_read(path: Path) -> tuple[Any | None, float]:
         return None, 0.0
 
 
-async def cache_write(path: Path, payload: Any) -> None:
-    """原子写缓存；失败仅 debug 日志（缓存失败不影响主流程）。"""
+async def cache_write(path: Path, payload: Any, validators: dict | None = None) -> None:
+    """原子写缓存；失败仅 debug 日志（缓存失败不影响主流程）。
+
+    validators（etag/last_modified/source_url，条件 GET 复核用）写旁车
+    文件 ``<name>.validators.json``——不进信封：18MB 大表判鲜只读文件头，
+    信封塞校验器会破坏头部命中；旁车独立损坏也不影响主缓存读取。
+    """
     try:
         await asyncio.to_thread(_write_sync, path, payload)
+        if validators is not None:
+            sidecar = _validators_path(path)
+            await asyncio.to_thread(
+                _write_validators_sync, sidecar, validators
+            )
     except Exception as exc:
         logger.debug(
             f"[ArknightsUID·缓存] 写入失败 {path.name}: {exc.__class__.__name__}"
         )
+
+
+def _validators_path(path: Path) -> Path:
+    return path.with_name(path.name + ".validators.json")
+
+
+def _write_validators_sync(sidecar: Path, validators: dict) -> None:
+    sidecar.parent.mkdir(parents=True, exist_ok=True)
+    tmp = sidecar.with_name(
+        f"{sidecar.name}.tmp{os.getpid()}.{uuid4().hex[:8]}"
+    )
+    try:
+        tmp.write_text(
+            json.dumps(validators, ensure_ascii=False), encoding="utf-8"
+        )
+        os.replace(tmp, sidecar)
+    finally:
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+
+
+def _read_validators_sync(path: Path) -> dict:
+    sidecar = _validators_path(path)
+    try:
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+async def cache_read_validators(path: Path) -> dict:
+    """读旁车校验器；缺失/损坏/非 dict 返回 {}（复核退化为全量下载）。"""
+    if not _validators_path(path).exists():
+        return {}
+    try:
+        return await asyncio.to_thread(_read_validators_sync, path)
+    except Exception as exc:
+        logger.debug(
+            f"[ArknightsUID·缓存] 校验器读取失败 {path.name}: "
+            f"{exc.__class__.__name__}"
+        )
+        return {}
 
 
 def is_fresh(saved_ts: float, ttl: float) -> bool:
