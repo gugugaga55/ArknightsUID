@@ -230,5 +230,94 @@ class RogueCardUpgradeTest(unittest.TestCase):
         self.assertIn("合计通关 72 次（2 期主题）", text)
 
 
+class RelicIconSourceTest(unittest.TestCase):
+    """藏品图标源必须钉在活跃分支：上游 tanch-p/tomimi-dev 已删除 master
+    分支（活分支 main），@master 是 jsdelivr 缓存的死快照——黑流树海等
+    最新期的图标上传后永远到不了 @master（实测 2026-09）。"""
+
+    def test_base_uses_active_branch(self) -> None:
+        from ArknightsUID.utils.gamedata import rogue_relic
+
+        self.assertIn("@main/", rogue_relic._TOMIMI_STATIC_BASE)
+        self.assertNotIn("@master", rogue_relic._TOMIMI_STATIC_BASE)
+
+
+class RelicIconQuiet404Test(unittest.IsolatedAsyncioTestCase):
+    """404 = 数据源尚未上传该图标（最新期常态），应静默降级不打 warning。"""
+
+    async def test_icon_fetch_uses_main_url_and_quiet_404(self) -> None:
+        import tempfile
+        from unittest import mock
+
+        from ArknightsUID.utils.gamedata import rogue_relic
+
+        seen: dict = {}
+
+        async def fake_status(url: str, **kw):
+            seen["url"], seen["kw"] = url, kw
+            return 404, None
+
+        async def legacy_download(url: str, **kw):
+            seen["legacy"] = url
+            return None
+
+        with tempfile.TemporaryDirectory() as td:
+            with (
+                mock.patch.object(rogue_relic, "RELIC_ICON_CACHE_DIR", Path(td)),
+                mock.patch.object(rogue_relic, "download_bytes_status", fake_status),
+                # create=True：修复后模块已不导入旧入口；若回退到它会在此暴露
+                mock.patch.object(
+                    rogue_relic, "download_bytes", legacy_download, create=True
+                ),
+            ):
+                result = await rogue_relic.relic_icon_b64("rogue_6_relic_final_1")
+            # 404 落 .miss 负缓存（上游补图后 1h 内自动恢复）；须在临时目录清理前断言
+            miss_written = (Path(td) / "rogue_6_relic_final_1.webp.miss").exists()
+        self.assertEqual(result, "")
+        self.assertNotIn("legacy", seen)
+        self.assertIn("@main/", seen.get("url", ""))
+        self.assertTrue(seen.get("kw", {}).get("quiet_404"))
+        self.assertTrue(miss_written)
+
+
+class DownloadBytesQuiet404Test(unittest.IsolatedAsyncioTestCase):
+    """download_bytes_status(quiet_404=True)：404 降 debug；默认行为不变。"""
+
+    def _patch_client(self):
+        from unittest import mock
+
+        from ArknightsUID.utils import http as http_mod
+
+        class FakeResp:
+            status_code = 404
+
+        class FakeClient:
+            async def get(self, url, **kw):
+                return FakeResp()
+
+        async def fake_get_client():
+            return FakeClient()
+
+        return mock.patch.object(http_mod, "get_client", fake_get_client)
+
+    async def test_quiet_404_logs_debug_not_warning(self) -> None:
+        from ArknightsUID.utils import http as http_mod
+
+        with self._patch_client():
+            with self.assertNoLogs(http_mod.logger.name, level="WARNING"):
+                status, raw = await http_mod.download_bytes_status(
+                    "https://example.com/x.webp", quiet_404=True
+                )
+        self.assertEqual((status, raw), (404, None))
+
+    async def test_default_404_still_warns(self) -> None:
+        from ArknightsUID.utils import http as http_mod
+
+        with self._patch_client():
+            with self.assertLogs(http_mod.logger.name, level="WARNING") as logs:
+                await http_mod.download_bytes_status("https://example.com/x.webp")
+        self.assertTrue(any("404" in line for line in logs.output))
+
+
 if __name__ == "__main__":
     unittest.main()

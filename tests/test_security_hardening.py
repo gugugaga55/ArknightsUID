@@ -279,8 +279,8 @@ class GamedataPathEscapeTest(unittest.IsolatedAsyncioTestCase):
                 rogue_enemy, "IS_ENEMY_CACHE_DIR", tmp
             ), mock.patch.object(
                 rogue_enemy,
-                "download_bytes",
-                new=mock.AsyncMock(return_value=b"fake-webp"),
+                "download_bytes_status",
+                new=mock.AsyncMock(return_value=(200, b"fake-webp")),
             ):
                 result = await rogue_enemy.enemy_icon_b64("../../../etc/passwd")
 
@@ -297,8 +297,8 @@ class GamedataPathEscapeTest(unittest.IsolatedAsyncioTestCase):
                 rogue_relic, "RELIC_ICON_CACHE_DIR", tmp
             ), mock.patch.object(
                 rogue_relic,
-                "download_bytes",
-                new=mock.AsyncMock(return_value=b"fake-webp"),
+                "download_bytes_status",
+                new=mock.AsyncMock(return_value=(200, b"fake-webp")),
             ):
                 result = await rogue_relic.relic_icon_b64("..\\..\\system32")
 

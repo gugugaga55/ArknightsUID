@@ -725,7 +725,8 @@ async def _fetch_url_json_cached(url: str, path: Path) -> Any:
             miss_path.unlink()
         except OSError:
             return None
-    status, raw = await download_bytes_status(url, timeout=20.0)
+    # quiet_404：数据文件 404 = 该期尚未上传（写 "404" miss 的设计语义）
+    status, raw = await download_bytes_status(url, timeout=20.0, quiet_404=True)
     if raw is None:
         if payload is not None:
             # 网络抖动/CDN 故障：宁可给过期数据，不写负标记（恢复即自愈）
@@ -1087,7 +1088,10 @@ async def enemy_icon_b64(enemy_key: str) -> str:
                 return ""
             miss_path.unlink()
         if not local_path.exists():
-            raw = await download_bytes(f"{_ICON_BASE}/{filename}", timeout=20.0)
+            # quiet_404：最新期敌人图标上游渐进上传，404 是预期缺口
+            _status, raw = await download_bytes_status(
+                f"{_ICON_BASE}/{filename}", timeout=20.0, quiet_404=True
+            )
             if raw is None:
                 raise RuntimeError(f"icon download failed: {filename}")
             local_path.write_bytes(raw)

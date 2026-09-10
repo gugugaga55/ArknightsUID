@@ -464,7 +464,7 @@ class CachePolicyTest(unittest.IsolatedAsyncioTestCase):
 
         calls = []
 
-        async def fake_download(url, timeout=0.0):
+        async def fake_download(url, timeout=0.0, **kw):
             calls.append(url)
             return 404, None
 
@@ -502,7 +502,7 @@ class CachePolicyTest(unittest.IsolatedAsyncioTestCase):
         async def fake_cache_read(path):
             return (None, 0.0)
 
-        async def fake_download(url, timeout=0.0):
+        async def fake_download(url, timeout=0.0, **kw):
             return 0, None
 
         target = re_mod.Path("/tmp/ark_test_net_miss.json")
@@ -521,7 +521,7 @@ class CachePolicyTest(unittest.IsolatedAsyncioTestCase):
             # 标记新鲜期内（1h）不再请求
             calls = []
 
-            async def fake_download_2(url, timeout=0.0):
+            async def fake_download_2(url, timeout=0.0, **kw):
                 calls.append(url)
                 return 200, b"[]"
 
@@ -1127,6 +1127,40 @@ class SourceOutageTest(unittest.IsolatedAsyncioTestCase):
             result = await _build_rogue_stage_context("拆东补西 N15")
         self.assertIsInstance(result, str)
         self.assertIn("未找到关卡", result)
+
+
+class EnemyIconQuiet404Test(unittest.IsolatedAsyncioTestCase):
+    """敌人图标 404（最新期上游渐进上传）应静默：quiet_404 + .miss 负缓存。"""
+
+    async def test_icon_404_quiet_with_miss_marker(self) -> None:
+        import tempfile
+        from unittest import mock
+
+        from ArknightsUID.utils.gamedata import rogue_enemy
+
+        seen: dict = {}
+
+        async def fake_status(url: str, **kw):
+            seen["url"], seen["kw"] = url, kw
+            return 404, None
+
+        with tempfile.TemporaryDirectory() as td:
+            with (
+                mock.patch.object(rogue_enemy, "IS_ENEMY_CACHE_DIR", td),
+                mock.patch.object(rogue_enemy, "download_bytes_status", fake_status),
+                mock.patch.object(
+                    rogue_enemy,
+                    "download_bytes",
+                    mock.AsyncMock(side_effect=AssertionError("应走 _status 入口")),
+                    create=True,
+                ),
+            ):
+                result = await rogue_enemy.enemy_icon_b64("enemy_missing_key")
+            miss_written = (Path(td) / "icons" / "enemy_missing_key.webp.miss").exists()
+        self.assertEqual(result, "")
+        self.assertIn("enemy_icons", seen.get("url", ""))
+        self.assertTrue(seen.get("kw", {}).get("quiet_404"))
+        self.assertTrue(miss_written)
 
 
 if __name__ == "__main__":

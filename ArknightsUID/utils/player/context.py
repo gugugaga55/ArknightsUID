@@ -81,11 +81,14 @@ def _encode_skin_key(skin_id: str) -> str:
     @N → #N；裸 charId（接口未给 skinId 时调用方传 char_xxx 兜底）末尾
     补 #1——hycdn 无后缀路径 404，基础皮肤的真实键名是 char_xxx#1。
     已含 # 的装扮键保持原样。
+    完整 quote 而非手工替换 #/@：形态键含 +（如 char_002_amiya#1+）时
+    裸 + 会被 CDN 拒（实测 %2B 200 / 裸 + 404，2026-09）；常规键的
+    quote 输出与旧手工替换逐字一致，存量缓存名不变。
     """
     value = re.sub(r"@(\d+)$", r"#\1", skin_id)
     if "#" not in value and "@" not in value:
         value += "#1"
-    return value.replace("@", "%40").replace("#", "%23")
+    return quote(value, safe="")
 
 
 def skin_avatar_url(skin_id: str) -> str:

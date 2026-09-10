@@ -313,7 +313,11 @@ async def download_target(target: ResourceTarget, verify: bool = False) -> str:
         except OSError:
             pass
 
-    status, content = await download_bytes_status(target.url, timeout=60.0)
+    # quiet_404：预下载枚举出的 URL 上游未必都有（PRTS 未上传的关卡地图、
+    # torappu 未覆盖的肉鸽预览等），404 计入 missing 即可，不打 warning
+    status, content = await download_bytes_status(
+        target.url, timeout=60.0, quiet_404=True
+    )
     if status == 200 and content:
         try:
             target.cache_dir.mkdir(parents=True, exist_ok=True)
