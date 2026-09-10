@@ -733,7 +733,19 @@ async def _fetch_url_json_cached(url: str, path: Path) -> Any:
                 path, data, validators={**validators, **new_v, "source_url": url}
             )
             return data
-        # 条件请求网络失败 → 落普通 GET 兜底（下方，仍回收校验器）
+        if status != 0:
+            # 4xx 与普通 GET 同语义（404=该期尚未上传），不得对同一 URL
+            # 二次请求；有旧缓存服务过期数据，无旧缓存写负标记
+            if payload is not None:
+                return payload
+            try:
+                miss_path.write_text(
+                    "404" if status == 404 else "net", encoding="utf-8"
+                )
+            except OSError:
+                pass
+            return None
+        # status == 0：条件请求网络失败 → 落普通 GET 兜底（下方，仍回收校验器）
     # quiet_404：数据文件 404 = 该期尚未上传（写 "404" miss 的设计语义）
     status, raw, new_v = await download_bytes_conditional(
         url, timeout=20.0, quiet_404=True
