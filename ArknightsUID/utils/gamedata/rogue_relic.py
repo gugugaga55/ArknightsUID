@@ -30,15 +30,8 @@ from ._table_cache import (
 RELIC_INDEX_PATH = GAMEDATA_CACHE_DIR / "roguerelicindex.json"
 RELIC_ICON_CACHE_DIR = GAMEDATA_CACHE_DIR / "relic_icons"
 
-# 主题表 id 顺序（旧 → 新； rogue_1=傀影 … rogue_6=沉沦者的黑流树海）
-TABLE_THEME_ORDER = [
-    "rogue_1",
-    "rogue_2",
-    "rogue_3",
-    "rogue_4",
-    "rogue_5",
-    "rogue_6",
-]
+# 主题表 id 顺序（旧 → 新）收敛至 rogue_registry（唯一事实源）
+from .rogue_registry import TABLE_THEME_ORDER
 
 RARITY_NAMES = {
     "NORMAL": "普通",

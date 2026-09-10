@@ -31,28 +31,17 @@ __all__ = [
     "format_run_ts",
 ]
 
-# 期目录（utils.gamedata.rogue_enemy.THEME_DIRS 键）→ 战绩端点 topicId。
-# 主题表从傀影起编（rogue_1=傀影 … rogue_6=黑流树海），与社区
-# nonebot-plugin-skland Topics._MAPPING 一致；灰蕈迷境不在战绩页口径内。
-TOPIC_IDS = {
-    "phantom": "rogue_1",
-    "mizuki": "rogue_2",
-    "sami": "rogue_3",
-    "sarkaz": "rogue_4",
-    "sui": "rogue_5",
-    "black": "rogue_6",
-}
+# 期目录 → 战绩端点 topicId / 主题表键 → 芯片短名：收敛至
+# gamedata.rogue_registry（唯一事实源）。主题表从傀影起编
+# （rogue_1=傀影 … rogue_6=黑流树海），与社区 nonebot-plugin-skland
+# Topics._MAPPING 一致；灰蕈迷境不在战绩页口径内。
+from ..gamedata.rogue_registry import (
+    THEME_TABLE_IDS,
+    TOPIC_SHORT_NAMES,
+)
 
-
-# 主题表键 → 芯片短名（切换条用；全称 7-8 字 × 6 期超宽换行，短名一行放下）
-TOPIC_SHORT_NAMES = {
-    "rogue_1": "傀影",
-    "rogue_2": "水月",
-    "rogue_3": "萨米",
-    "rogue_4": "萨卡兹",
-    "rogue_5": "界园",
-    "rogue_6": "树海",
-}
+# 语义别名：战绩端点 topicId 即主题表键
+TOPIC_IDS = THEME_TABLE_IDS
 
 
 def topic_id_for(theme_dir: str) -> str:

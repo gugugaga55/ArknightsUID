@@ -69,7 +69,8 @@ CULTIVATE_INFO_URL = f"{MAIN_URL}api/{API_VERSION}/game/cultivate/info"
 CULTIVATE_PLAYER_URL = f"{MAIN_URL}api/{API_VERSION}/game/cultivate/player"
 # 肉鸽战绩（森空岛 App「战绩查询」页后端；参数形态见社区 nonebot-plugin-skland
 # 同名端点：GET uid + targetUserId + topicId，支持查指定玩家/指定主题/收藏标记。
-# topicId 用主题表键（rogue_1=傀影 … rogue_6=黑流树海，与社区实现一致），
+# topicId 用主题表键（rogue_1=傀影 … rogue_6=黑流树海，与社区实现一致；
+# 期号换算的唯一事实源见 utils/gamedata/rogue_registry.py），
 # 空串由服务端返回默认期（响应 topics[].isSelected 标记当前期）
 ARK_ROGUE_URL = f"{MAIN_URL}api/{API_VERSION}/game/arknights/rogue"
 

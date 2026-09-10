@@ -19,18 +19,10 @@ import time
 from typing import Any
 
 from ._table_cache import ensure_rogue_topic_table
-from .rogue_enemy import THEME_ALIASES, THEME_DIRS, resolve_theme_dir
-
-# 期目录 → 主题表编号（表 rogue_N 从傀影起编；玩家侧数据从灰蕈迷境起编，
-# 与 _THEME_ROGUE_NUM 同一推位规律，本模块自带映射避免私有跨模块导入）
-THEME_TABLE_IDS = {
-    "phantom": "rogue_1",
-    "mizuki": "rogue_2",
-    "sami": "rogue_3",
-    "sarkaz": "rogue_4",
-    "sui": "rogue_5",
-    "black": "rogue_6",
-}
+from .rogue_enemy import resolve_theme_dir
+# 期表数据收敛至 rogue_registry（唯一事实源）；THEME_TABLE_IDS 即
+# 期目录 → 主题表编号（表 rogue_N 从傀影起编，战绩 topicId 同口径）
+from .rogue_registry import THEME_ALIASES, THEME_DIRS, THEME_TABLE_IDS
 
 GUIDE_SOURCE_NOTE = "结局名单 ArknightsGameData · 攻略口径 PRTS Wiki"
 
