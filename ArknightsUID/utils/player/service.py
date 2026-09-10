@@ -30,6 +30,11 @@ if TYPE_CHECKING:
 # 缓存 TTL：300 秒（理智按 6 分钟回 1 点，5 分钟粒度足够）
 DEFAULT_TTL = 300.0
 _PLAYER_INFO_NAME = "player_info.json"
+# 时钟回拨保护：mtime 领先墙钟超过该容差（NTP 修正/WSL 休眠唤醒常见）
+# 视为缓存不可信，强制重取——否则 max(0, now-mtime) 把未来时间戳钳成
+# 0 岁，缓存被锁死到墙钟追上文件时刻（实况：ark基建持续吐旧缓存）。
+# 秒级抖动在容差内，避免 NTP 微调击穿缓存造成雪崩。
+_FUTURE_SKEW_TOLERANCE = 60.0
 
 
 def _cache_path(uid: str) -> Path:
@@ -54,9 +59,12 @@ def _cache_age_seconds(uid: str) -> float | None:
     if resolved is None:
         return None
     try:
-        return max(0.0, time.time() - resolved.stat().st_mtime)
+        age = time.time() - resolved.stat().st_mtime
     except OSError:
         return None
+    if age < -_FUTURE_SKEW_TOLERANCE:
+        return None
+    return max(0.0, age)
 
 
 async def read_cached_player_info(
