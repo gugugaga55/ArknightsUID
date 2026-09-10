@@ -263,7 +263,7 @@ class DiskCacheConcurrentWriteTest(unittest.IsolatedAsyncioTestCase):
             async def fake_download(url):
                 calls.append(url)
                 await asyncio.sleep(0.05)  # 模拟慢下载，让并发都堆在锁上
-                return {"v": 1}
+                return {"v": 1}, {"etag": '"e"', "source_url": url}
 
             with mock.patch.object(tc, "_download_json", new=fake_download):
                 results = await asyncio.gather(

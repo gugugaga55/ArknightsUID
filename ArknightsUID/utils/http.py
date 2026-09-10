@@ -258,6 +258,61 @@ async def download_bytes_status(
     return resp.status_code, resp.content
 
 
+async def download_bytes_conditional(
+    url: str,
+    *,
+    timeout: float = DEFAULT_TIMEOUT,
+    etag: str | None = None,
+    last_modified: str | None = None,
+    quiet_404: bool = False,
+) -> tuple[int, bytes | None, dict[str, str]]:
+    """条件 GET：带 If-None-Match/If-Modified-Since 的 diff 复核。
+
+    供"内容近永久、只在版本更新时变化"的大表（敌人库/全量表）使用：
+    上游未变 → (304, None, {})，调用方仅续期缓存时间戳，零下载零解析；
+    已变化 → (200, content, {"etag":…, "last_modified":…})，校验器随缓存
+    落盘供下次复核（校验器与具体 URL 绑定，多镜像不互通，调用方需
+    一并记来源 URL）。不带校验器时等价普通 GET（仅回收校验器）。
+
+    quiet_404 语义同 download_bytes_status（404 预期缺口降 debug）。
+    网络异常 → (0, None, {})；4xx/5xx → (status, None, {})。
+    """
+    headers: dict[str, str] = {}
+    if etag:
+        headers["If-None-Match"] = etag
+    if last_modified:
+        headers["If-Modified-Since"] = last_modified
+    client = await get_client()
+    try:
+        resp = await client.get(
+            url, timeout=timeout, headers=headers or None, follow_redirects=True
+        )
+    except Exception as exc:
+        logger.warning(f"[ArknightsUID·http] 下载失败 {url}: {describe_error(exc)}")
+        return 0, None, {}
+    if resp.status_code == 304:
+        logger.debug(f"[ArknightsUID·http] 上游未变化（304）: {url}")
+        return 304, None, {}
+    if resp.status_code >= 400:
+        if resp.status_code == 404 and quiet_404:
+            logger.debug(
+                f"[ArknightsUID·http] 下载缺失 {url}: HTTP 404（上游未上传）"
+            )
+        else:
+            logger.warning(
+                f"[ArknightsUID·http] 下载失败 {url}: HTTP {resp.status_code}"
+            )
+        return resp.status_code, None, {}
+    validators: dict[str, str] = {}
+    et = resp.headers.get("ETag") or resp.headers.get("etag")
+    lm = resp.headers.get("Last-Modified") or resp.headers.get("last-modified")
+    if et:
+        validators["etag"] = et
+    if lm:
+        validators["last_modified"] = lm
+    return resp.status_code, resp.content, validators
+
+
 async def assert_public_http_url(url: str) -> str:
     """校验 http(s) URL 的主机解析到公网地址；不合规抛 UnsafeUrlError。
 
