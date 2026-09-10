@@ -231,10 +231,13 @@ async def download_bytes_status(
     *,
     timeout: float = DEFAULT_TIMEOUT,
     follow_redirects: bool = True,
+    quiet_404: bool = False,
 ) -> tuple[int, bytes | None]:
     """下载二进制内容并附带 HTTP 状态码，供调用方区分 404 与网络故障。
 
     网络异常 → (0, None)；4xx/5xx → (status, None)；成功 → (200, content)。
+    quiet_404=True 时 404 降为 debug——供"上游渐进上传资源"的调用方
+    （如最新期肉鸽藏品图标）把预期缺口从 warning 噪音里摘出来。
     """
     client = await get_client()
     try:
@@ -243,7 +246,14 @@ async def download_bytes_status(
         logger.warning(f"[ArknightsUID·http] 下载失败 {url}: {describe_error(exc)}")
         return 0, None
     if resp.status_code >= 400:
-        logger.warning(f"[ArknightsUID·http] 下载失败 {url}: HTTP {resp.status_code}")
+        if resp.status_code == 404 and quiet_404:
+            logger.debug(
+                f"[ArknightsUID·http] 下载缺失 {url}: HTTP 404（上游未上传）"
+            )
+        else:
+            logger.warning(
+                f"[ArknightsUID·http] 下载失败 {url}: HTTP {resp.status_code}"
+            )
         return resp.status_code, None
     return resp.status_code, resp.content
 

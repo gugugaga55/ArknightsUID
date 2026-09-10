@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ..http import download_bytes
+from ..http import download_bytes_status
 from ._table_cache import (
     GAMEDATA_CACHE_DIR,
     ROGUE_TOPIC_TABLE_PATH,
@@ -50,8 +50,10 @@ RARITY_NAMES = {
 # 经 jsdelivr CDN 镜像取（image/webp）。不走核心 pic_download_from_url：
 # 其内部 httpx 客户端默认 5s 超时且不跟随重定向，实测此源必超时；
 # 这里自带 20s + follow_redirects 的客户端，失败落 .miss 负缓存（1h）。
+# 注意钉在活分支 @main：上游已删除 master 分支（2026-09 实测），@main 之外
+# 的引用是 jsdelivr 缓存的死快照，最新期（黑流树海）图标上传后永远取不到。
 _TOMIMI_STATIC_BASE = (
-    "https://cdn.jsdelivr.net/gh/tanch-p/tomimi-dev@master/static/images/relics"
+    "https://cdn.jsdelivr.net/gh/tanch-p/tomimi-dev@main/static/images/relics"
 )
 _ICON_MISS_TTL = 3600.0
 
@@ -198,7 +200,11 @@ async def relic_icon_b64(icon_id: str) -> str:
             miss_path.unlink()
         if not local_path.exists():
             url = f"{_TOMIMI_STATIC_BASE}/{filename}"
-            raw = await download_bytes(url, timeout=20.0)
+            # quiet_404：最新期（黑流树海等）图标上游渐进上传，404 是预期
+            # 缺口（debug 级），网络故障仍 warning；均落 .miss 负缓存自愈
+            _status, raw = await download_bytes_status(
+                url, timeout=20.0, quiet_404=True
+            )
             if raw is None:
                 raise ValueError(f"download failed: {filename}")
             local_path.write_bytes(raw)

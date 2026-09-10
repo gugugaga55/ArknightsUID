@@ -438,6 +438,55 @@ class CommandSmokeTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("正在进行中" in s for s in sent))
 
 
+class DownloadTargetQuiet404Test(unittest.IsolatedAsyncioTestCase):
+    """批量预下载的 404 是预期缺失（PRTS 未上传的关卡地图 / torappu 未覆盖
+    的肉鸽预览等），除计入 missing 外不应再刷 http 层 warning。"""
+
+    async def test_download_target_quiet_on_404(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            target = bd.ResourceTarget("https://media.prts.wiki/1/1a/x.png", Path(td))
+            dl = mock.AsyncMock(return_value=(404, None))
+            with mock.patch.object(bd, "download_bytes_status", dl):
+                status = await bd.download_target(target)
+            self.assertEqual(status, "miss")
+            self.assertTrue(dl.call_args.kwargs.get("quiet_404"))
+
+
+class SkinKeyPercentEncodingTest(unittest.TestCase):
+    """含 + 的形态键（char_002_amiya#1+，skin_table 真实键）必须完整
+    百分号编码：hycdn 实测 %2B 200 / 裸 + 404（2026-09）。常规键编码
+    输出与旧手工替换一致，存量缓存名不受影响。"""
+
+    def test_plus_form_fully_encoded(self) -> None:
+        from ArknightsUID.utils.player.context import (
+            skin_avatar_url,
+            skin_portrait_url,
+        )
+
+        self.assertTrue(
+            skin_portrait_url("char_002_amiya#1+").endswith(
+                "char_002_amiya%231%2B.png"
+            )
+        )
+        self.assertTrue(
+            skin_avatar_url("char_002_amiya#1+").endswith(
+                "char_002_amiya%231%2B.png"
+            )
+        )
+
+    def test_regular_keys_encoding_unchanged(self) -> None:
+        from ArknightsUID.utils.player.context import skin_portrait_url
+
+        self.assertTrue(
+            skin_portrait_url("char_002_amiya#1").endswith("char_002_amiya%231.png")
+        )
+        self.assertTrue(
+            skin_portrait_url("char_002_amiya@winter#1").endswith(
+                "char_002_amiya%40winter%231.png"
+            )
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
 

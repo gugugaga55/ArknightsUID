@@ -1091,7 +1091,10 @@ async def _get_stage_map_b64(code: str, name: str, stage_id: str = "") -> str:
         """
         from ArknightsUID.utils.http import download_bytes_status
 
-        status, content = await download_bytes_status(url, timeout=25.0)
+        # quiet_404：404 = 关卡确无地图文件（写负缓存的既定语义）
+        status, content = await download_bytes_status(
+            url, timeout=25.0, quiet_404=True
+        )
         if status == 404:
             try:
                 cache.mkdir(parents=True, exist_ok=True)
