@@ -15,6 +15,15 @@ from cryptography.fernet import Fernet
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
+
+# 与 render_previews 等开发工具互斥：首个 ArknightsUID/gsuid_core 配置导入
+# 会写回 core_config.json（boltons 排他 .part），并发入口会撞车（见
+# tools/dev_init_lock.py）。持有到进程退出，覆盖测试期所有惰性插件导入。
+sys.path.insert(0, str(ROOT / "tools"))
+from dev_init_lock import acquire_dev_init_lock  # noqa: E402
+
+acquire_dev_init_lock()
+
 sys.modules.pop("ArknightsUID", None)
 
 import ArknightsUID  # noqa: F401,E402 —— 立即以仓库根路径缓存内层包

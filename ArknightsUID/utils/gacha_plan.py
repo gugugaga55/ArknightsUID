@@ -287,14 +287,18 @@ class PlanSummary:
     notes: list[str] = field(default_factory=list)
 
 
-def build_summary(args: PlanArgs, pool: dict | None, pity: int) -> PlanSummary:
+def build_summary(
+    args: PlanArgs, pool: dict | None, pity: int, *, now_ts: float | None = None
+) -> PlanSummary:
     """组装规划摘要。pool 需含 title/end/end_ts（PRTS SMW 口径）。
 
     概率表按 up_mode 的 UP 占比从当前垫刀出发；每天需攒 = 井缺口 /
     剩余天数（剩余 0 天或未取到卡池时置 0，由展示层提示）。
+    now_ts 钉基准时钟（预览/测试用，保证 days_left 可回归），默认真实时间。
     """
     import time as _time
 
+    now = _time.time() if now_ts is None else float(now_ts)
     summary = PlanSummary(
         pity=pity if pity >= 0 else 0,
         pity_source=(
@@ -321,7 +325,7 @@ def build_summary(args: PlanArgs, pool: dict | None, pity: int) -> PlanSummary:
         summary.pool_end = str(pool.get("end") or "")
         end_ts = float(pool.get("end_ts") or 0)
         if end_ts > 0:
-            summary.days_left = max(0.0, (end_ts - _time.time()) / 86400)
+            summary.days_left = max(0.0, (end_ts - now) / 86400)
     if args.days is not None:
         # 手动指定规划天数（覆盖卡池剩余时间）
         summary.days_left = float(args.days)

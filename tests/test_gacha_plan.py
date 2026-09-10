@@ -206,6 +206,40 @@ class BuildSummaryTest(unittest.TestCase):
         summary = build_summary(args, None, pity=0)
         self.assertEqual(summary.up_share, UP_SHARE_DOUBLE)
 
+
+class BuildSummaryNowTsTest(unittest.TestCase):
+    """now_ts 钉基准时钟：预览/回归渲染的 days_left 可复现。"""
+
+    def test_now_ts_pins_days_left(self) -> None:
+        end_ts = 1789996800.0
+        summary = build_summary(
+            parse_plan_args(""),
+            {"title": "X", "end": "", "end_ts": end_ts},
+            pity=0,
+            now_ts=end_ts - 5 * 86400,
+        )
+        self.assertAlmostEqual(summary.days_left, 5.0)
+        # 到期后钳 0（不出现负数天数）
+        self.assertEqual(
+            build_summary(
+                parse_plan_args(""),
+                {"title": "X", "end": "", "end_ts": end_ts},
+                pity=0,
+                now_ts=end_ts + 86400,
+            ).days_left,
+            0.0,
+        )
+
+    def test_now_ts_default_uses_real_clock(self) -> None:
+        import time
+
+        summary = build_summary(
+            parse_plan_args(""),
+            {"title": "X", "end": "", "end_ts": time.time() + 86400},
+            pity=0,
+        )
+        self.assertGreater(summary.days_left, 0.99)
+
     def test_no_pool_no_daily(self) -> None:
         summary = build_summary(parse_plan_args(""), None, pity=0)
         self.assertEqual(summary.daily_needed, 0.0)
