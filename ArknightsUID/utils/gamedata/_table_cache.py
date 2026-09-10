@@ -4,8 +4,9 @@ character_table.json（~15MB）的下载与 TTL 缓存逻辑原来只在 recruit
 别名系统（charinfo.py）也需要同源数据——抽到此处做单一事实源：
 
 - 缓存文件：CACHE_PATH/gamedata/character_table.json，格式 {"_cache_time", "payload"}
-- TTL：7 天（游戏数据随版本更新）
-- 精简衍生缓存（recruit.json / charindex.json / skillnames.json）由各自模块生成
+- 复核间隔：每日条件 diff（内容近永久，304 零下载仅续期；详见 CHAR_TABLE_TTL 注释）
+- 精简衍生缓存（recruit.json / charindex.json / itemindex.json）由各自模块生成；
+  charinfo 系索引按"源表 mtime 覆盖"判鲜（源表刷新即重建，无独立 TTL）
 
 下载走共享 HTTP 层（utils.http），缓存读写走统一磁盘缓存层
 （utils.disk_cache：异步 I/O + 原子写，15-18MB 的全量表不再阻塞事件循环）。
