@@ -959,7 +959,7 @@ MOCK_CONTEXTS = {
         "topics": [
             {"id": "rogue_1", "name": "傀影与猩红孤钻", "short": "傀影", "selected": False},
             {"id": "rogue_2", "name": "水月与深蓝之树", "short": "水月", "selected": False},
-            {"id": "rogue_3", "name": "萨米的腐朽安眠", "short": "萨米", "selected": False},
+            {"id": "rogue_3", "name": "探索者的银凇止境", "short": "萨米", "selected": False},
             {"id": "rogue_4", "name": "萨卡兹的无终奇语", "short": "萨卡兹", "selected": False},
             {"id": "rogue_5", "name": "岁的界园志异", "short": "界园", "selected": True},
             {"id": "rogue_6", "name": "沉沦者的黑流树海", "short": "树海", "selected": False},

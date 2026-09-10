@@ -28,6 +28,13 @@ from gsuid_core.logger import logger
 from ..http import download_bytes, download_bytes_status
 from ..disk_cache import cache_read, cache_write, is_fresh
 from ._table_cache import GAMEDATA_CACHE_DIR
+# 期表数据收敛至 rogue_registry（唯一事实源）；此处按原名再导出，
+# rogue_ending 与既有测试的导入路径不破坏
+from .rogue_registry import (  # noqa: F401
+    THEME_ALIASES,
+    THEME_DIRS,
+    diff_file_for,
+)
 
 IS_ENEMY_CACHE_DIR = GAMEDATA_CACHE_DIR / "is_enemy"
 # 全量缓存 TTL。肉鸽数据只随游戏版本更新（半年一更，历史期几乎不变），
@@ -42,48 +49,8 @@ _ICON_BASE = (
 )
 _ICON_MISS_TTL = 3600.0
 
-# 期目录 → 显示名（tomimi 目录命名；black 为最新期沉沦者）
-THEME_DIRS = {
-    "phantom": "傀影与猩红孤钻",
-    "mizuki": "水月与深蓝之树",
-    "sami": "萨米的腐朽安眠",
-    "sarkaz": "萨卡兹的无终奇语",
-    "sui": "岁的界园志异",
-    "black": "沉沦者的黑流树海",
-}
-
-# 查询用的期别名（用户输入 → 期目录；含显示名、常用简称与「X肉鸽」叫法，
-# 多数用户记不住主题全称，短名/肉鸽后缀都叫得出来）
-THEME_ALIASES: dict[str, str] = {
-    "傀影": "phantom",
-    "猩红": "phantom",
-    "傀影与猩红孤钻": "phantom",
-    "傀影肉鸽": "phantom",
-    "猩红肉鸽": "phantom",
-    "水月": "mizuki",
-    "深蓝": "mizuki",
-    "水月与深蓝之树": "mizuki",
-    "水月肉鸽": "mizuki",
-    "萨米": "sami",
-    "银凇": "sami",
-    "萨米的腐朽安眠": "sami",
-    "萨米肉鸽": "sami",
-    "萨卡兹": "sarkaz",
-    "无终奇语": "sarkaz",
-    "萨卡兹的无终奇语": "sarkaz",
-    "萨卡兹肉鸽": "sarkaz",
-    "岁": "sui",
-    "界园": "sui",
-    "岁的界园志异": "sui",
-    "界园肉鸽": "sui",
-    "黑流": "black",
-    "树海": "black",
-    "沉沦者": "black",
-    "沉沦者的黑流树海": "black",
-    "黑流树海": "black",
-    "树海肉鸽": "black",
-    "黑流肉鸽": "black",
-}
+# 期目录 → 显示名 / 查询别名：见 rogue_registry.THEME_DIRS / THEME_ALIASES
+# （上方按原名导入；新一期在注册表加一行即全链路生效）
 
 # enemy.type 标签 → 期目录（归属启发式；权威判定是难度效果里的显式 targets）
 _TYPE_THEME_HINTS = {
@@ -754,15 +721,8 @@ async def load_enemy_db() -> dict[str, dict]:
 
 
 def _diff_file_url(theme_dir: str) -> str:
-    name = {
-        "phantom": "difficulty_mods_phantom.json",
-        "mizuki": "difficulty_mods_mizuki.json",
-        "sami": "difficulty_mods_sami.json",
-        "sarkaz": "difficulty_mods_sarkaz.json",
-        "sui": "difficulty_mods_sui.json",
-        "black": "difficulty_mods.json",
-    }[theme_dir]
-    return f"{_TOMIMI_BASE}/is/{theme_dir}/{name}"
+    # 文件名特例（black 期无期名后缀）收录在注册表行内
+    return f"{_TOMIMI_BASE}/is/{theme_dir}/{diff_file_for(theme_dir)}"
 
 
 async def load_difficulty_mods() -> dict[str, list]:

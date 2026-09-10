@@ -44,18 +44,11 @@ from ArknightsUID.utils.card import resolve_or_reply  # noqa: E402
 rogue_alias_sv = SV("ArknightsUID肉鸽别名", priority=5)
 rogue_sv = SV("ArknightsUID肉鸽", priority=5)
 
-# 集成战略主题名（玩家数据 rogue_id → 官方主题名，客观游戏数据）。
-# 推位规律（roguelike_topic_table 5 对名字全吻合验证）：主题表 rogue_N 从傀影
-# 起编，玩家数据从灰蕈迷境起编——玩家 rogue_6 = 表 rogue_5 = 岁的界园志异。
-ROGUE_THEME_NAMES = {
-    "rogue_1": "刻俄柏的灰蕈迷境",
-    "rogue_2": "傀影与猩红孤钻",
-    "rogue_3": "水月与深蓝之树",
-    "rogue_4": "探索者的银凇止境",
-    "rogue_5": "萨卡兹的无终奇语",
-    "rogue_6": "岁的界园志异",
-    "rogue_7": "沉沦者的黑流树海",
-}
+# 集成战略主题名（玩家数据 rogue_id → 官方主题名）收敛至
+# gamedata.rogue_registry（唯一事实源）。推位规律（roguelike_topic_table
+# 5 对名字全吻合验证）：主题表 rogue_N 从傀影起编，玩家数据从灰蕈迷境
+# 起编——玩家 rogue_6 = 表 rogue_5 = 岁的界园志异。
+from ..utils.gamedata.rogue_registry import ROGUE_THEME_NAMES
 
 
 # 文本回复公共实现在 utils.card.send_text；保留模块级别名供调用点/测试 patch
