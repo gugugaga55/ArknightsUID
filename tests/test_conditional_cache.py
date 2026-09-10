@@ -226,7 +226,7 @@ class EnemyJsonDiffTest(unittest.TestCase):
                 cache_write(
                     path,
                     {"enemy_1": {}},
-                    validators={"etag": '"e1"', "source_url": "https://tomomi/db"},
+                    validators={"etag": '"e1"', "source_url": "https://tomimi/db"},
                 )
             )
             # 复核到点：信封时间戳做旧（旁车不动）
@@ -256,6 +256,43 @@ class EnemyJsonDiffTest(unittest.TestCase):
             self.assertEqual(calls, ["https://tomimi/db"])
             _, saved = asyncio.run(cache_read(path))
             self.assertTrue(is_fresh(saved, 3600))
+
+    def test_conditional_4xx_no_second_request(self) -> None:
+        """条件 GET 得 4xx 与普通 GET 同语义，不得对同一 URL 二次请求。"""
+        import tempfile
+        import time
+
+        from ArknightsUID.utils.gamedata import rogue_enemy as re_mod
+
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "enemy_database.json"
+            asyncio.run(
+                re_mod.cache_write(
+                    path,
+                    {"enemy_1": {}},
+                    validators={"etag": '"e1"', "source_url": "https://tomimi/db"},
+                )
+            )
+            path.write_text(
+                json.dumps(
+                    {"_cache_time": time.time() - 2 * 86400, "payload": {"enemy_1": {}}}
+                ),
+                encoding="utf-8",
+            )
+            calls: list[int] = []
+
+            async def fake_cond(url, **kw):
+                calls.append(1)
+                return 404, None, {}
+
+            with mock.patch.object(
+                re_mod, "download_bytes_conditional", fake_cond
+            ):
+                result = asyncio.run(
+                    re_mod._fetch_url_json_cached("https://tomimi/db", path)
+                )
+            self.assertEqual(calls, [1], "4xx 后不得再落普通 GET 重复请求")
+            self.assertEqual(result, {"enemy_1": {}}, "有旧缓存时 4xx 服务过期数据")
 
 
 if __name__ == "__main__":
