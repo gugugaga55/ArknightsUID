@@ -287,12 +287,21 @@ async def _build_rogue_records_context(
         from ArknightsUID.utils.render import get_image_b64_with_cache
         from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
 
-        # 期 KV 与 ark肉鸽 进度卡同源（PRTS 主题页信息框标题图）
-        url = (await activity_banner_urls([theme_name])).get(theme_name, "")
-        if url:
-            banner = await get_image_b64_with_cache(
-                url, CACHE_PATH / "rogue_theme", quality=82
-            )
+        # 横幅优先复用森空岛自绘图（响应 topics[].pic，森空岛 CDN 托管，
+        # 与 App 期切换页同图）；缺失/下载失败再退 PRTS 主题页标题图
+        if stats.topic_pic.startswith(("http://", "https://")):
+            try:
+                banner = await get_image_b64_with_cache(
+                    stats.topic_pic, CACHE_PATH / "rogue_theme", quality=82
+                )
+            except Exception:
+                banner = ""
+        if not banner:
+            url = (await activity_banner_urls([theme_name])).get(theme_name, "")
+            if url:
+                banner = await get_image_b64_with_cache(
+                    url, CACHE_PATH / "rogue_theme", quality=82
+                )
     except Exception:
         from gsuid_core.logger import logger
 

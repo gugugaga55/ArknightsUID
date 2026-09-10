@@ -274,6 +274,65 @@ class RecordCommandHelperTest(unittest.TestCase):
         missing = set(used) - set(context)
         self.assertFalse(missing, f"模板变量缺 context 键: {missing}")
 
+    def test_banner_prefers_skland_topic_pic(self) -> None:
+        """横幅优先复用森空岛 topics[].pic；失败/缺失回退 PRTS 标题图。"""
+        import asyncio
+
+        from ArknightsUID.arknightsuid_rogue import _build_rogue_records_context
+
+        stats = parse_rogue_records(_records_payload())
+        assert stats is not None
+        stats.topic_pic = "https://zonai.skland.com/pic/rogue_6.png"
+
+        calls: list[str] = []
+
+        async def fake_b64(url, *args, **kwargs):
+            calls.append(url)
+            return "data:image/webp;base64,Skland" if "zonai" in url else ""
+
+        async def fake_banners(*_a, **_k):
+            return {"沉沦者的黑流树海": "https://media.prts.wiki/prts.png"}
+
+        with (
+            mock.patch(
+                "ArknightsUID.utils.render.get_image_b64_with_cache",
+                fake_b64,
+            ),
+            mock.patch(
+                "ArknightsUID.utils.prts.client.activity_banner_urls",
+                fake_banners,
+            ),
+        ):
+            context = asyncio.run(_build_rogue_records_context(stats, "", ""))
+        self.assertEqual(context["banner"], "data:image/webp;base64,Skland")
+        self.assertEqual(calls, ["https://zonai.skland.com/pic/rogue_6.png"])
+
+        # 森空岛图下载失败 → 回退 PRTS
+        calls.clear()
+
+        async def failing_b64(url, *args, **kwargs):
+            calls.append(url)
+            if "zonai" in url:
+                raise RuntimeError("skland pic down")
+            return "data:image/webp;base64,PRTS"
+
+        with (
+            mock.patch(
+                "ArknightsUID.utils.render.get_image_b64_with_cache",
+                failing_b64,
+            ),
+            mock.patch(
+                "ArknightsUID.utils.prts.client.activity_banner_urls",
+                fake_banners,
+            ),
+        ):
+            context = asyncio.run(_build_rogue_records_context(stats, "", ""))
+        self.assertEqual(context["banner"], "data:image/webp;base64,PRTS")
+        self.assertEqual(calls, [
+            "https://zonai.skland.com/pic/rogue_6.png",
+            "https://media.prts.wiki/prts.png",
+        ])
+
 
 class RunDetailTest(unittest.TestCase):
     """ark肉鸽详情：参数解析 / 详情 context / 文本回退。"""
