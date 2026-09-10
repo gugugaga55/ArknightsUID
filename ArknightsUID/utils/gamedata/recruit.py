@@ -26,8 +26,10 @@ RECRUIT_DATA_PATH = GAMEDATA_CACHE_DIR / "recruit.json"
 SENIOR_TAG = "资深干员"
 SENIOR_PLUS_TAG = "高级资深干员"
 
-# 精简缓存 TTL（公招池随版本缓慢变化，7 天刷新足够）
-_RECRUIT_TTL_SECONDS = 7 * 24 * 3600
+# 精简缓存复核间隔（公招池成员属"近永久"类，随版本缓慢变化）。PRTS
+# SMW 查询无 ETag 可 diff，按日复核对齐全量表口径：新干员入池最长
+# 1 天可见（原 7 天）。
+_RECRUIT_TTL_SECONDS = 24 * 3600
 
 # 缓存格式版本：v1 = character_table 推导（稀有度标签错档），v2 = PRTS SMW。
 # 旧格式缓存一律视为失效，强制重建
