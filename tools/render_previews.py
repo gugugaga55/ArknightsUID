@@ -6,21 +6,104 @@
 运行：在 gsuid_core venv 下
     python tools/render_previews.py            # 渲染全部
     python tools/render_previews.py ark_help   # 只渲染指定模板
+    python tools/render_previews.py --offline  # 跳过实时数据分支（PRTS 活动/
+                                                # 公告/公招等），静态占位 →
+                                                # 输出可回归比对（同缓存=同字节）
+    python tools/render_previews.py --now "2026-09-01 12:00"   # 钉基准时钟
+                                                # （倒计时文本确定；epoch 秒亦可）
+
+时钟只钉「当前时刻」；实时数据源的内容（活动列表、公告、卡池）仍随上游
+变化，完全确定性输出需 --offline。
 """
 from __future__ import annotations
 
 import asyncio
+import os
 import sys
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # 让脚本能直接 import ArknightsUID 包
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
+# 初始化互斥：与 pytest 等开发入口串行化 gsuid_core 配置写回窗口
+# （并发启动会在 boltons 排他 .part 上撞车，见 tools/dev_init_lock.py）
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from dev_init_lock import acquire_dev_init_lock  # noqa: E402
+
+acquire_dev_init_lock()
+
 OUT_DIR = Path(__file__).parents[1] / "docs" / "design" / "previews"
 ASSET_DIR = Path(__file__).parents[1] / "docs" / "design" / ".assets"
 
 VERSION = "v0.3.0"
+
+# 预览基准时钟（东八区）：钉死使倒计时类文本（攒抽剩余天数、日历「还剩
+# N 天」）可回归比对；--now / ARK_RENDER_NOW 可覆盖
+_DEFAULT_RENDER_NOW = datetime(
+    2026, 9, 1, 12, 0, tzinfo=timezone(timedelta(hours=8))
+).timestamp()
+
+
+def _parse_now_arg(raw: str) -> float:
+    """epoch 秒 或 'YYYY-MM-DD[ HH:MM]'（东八区）→ 时间戳；非法直接退出。"""
+    raw = raw.strip()
+    try:
+        return float(raw)
+    except ValueError:
+        pass
+    for fmt in ("%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            dt = datetime.strptime(raw, fmt).replace(
+                tzinfo=timezone(timedelta(hours=8))
+            )
+            return dt.timestamp()
+        except ValueError:
+            continue
+    raise SystemExit(
+        f"✗ --now 无法解析：{raw!r}"
+        "（支持 epoch 秒 / 'YYYY-MM-DD HH:MM' / 'YYYY-MM-DD'，东八区）"
+    )
+
+
+def _render_now_ts() -> float:
+    """本次渲染的基准时钟：--now > ARK_RENDER_NOW > 固定默认值。"""
+    for i, a in enumerate(sys.argv):
+        if a == "--now" and i + 1 < len(sys.argv):
+            return _parse_now_arg(sys.argv[i + 1])
+    env = os.environ.get("ARK_RENDER_NOW")
+    if env:
+        return _parse_now_arg(env)
+    return _DEFAULT_RENDER_NOW
+
+
+def _offline() -> bool:
+    """--offline / ARK_RENDER_OFFLINE：跳过实时数据分支，静态占位渲染。"""
+    if "--offline" in sys.argv:
+        return True
+    return os.environ.get("ARK_RENDER_OFFLINE", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+def _template_args() -> list[str]:
+    """argv 里的模板名（剥掉 --offline/--now 及其取值）。"""
+    out: list[str] = []
+    skip_value = False
+    for a in sys.argv[1:]:
+        if skip_value:
+            skip_value = False
+            continue
+        if a == "--now":
+            skip_value = True
+            continue
+        if a.startswith("--"):
+            continue
+        out.append(a)
+    return out
 
 
 class _CharStub:
@@ -73,6 +156,7 @@ def _gacha_plan_preview() -> dict:
         args,
         {"title": "·跨洲远航·", "end": "2026-09-01 04:00", "end_ts": 1e11},
         pity=37,
+        now_ts=_render_now_ts(),
     )
     return build_plan_context(
         summary, "刀客塔不吃香菜", "12****89", ArknightsUID_version
@@ -1523,7 +1607,7 @@ async def _enrich_icons(name: str, context: dict) -> None:
             )
         except Exception as e:
             print(f"⚠️  ark_rogue_ending 主题图拉取失败，按无图降级: {e}")
-    elif name == "ark_wiki_stage.html":
+    elif name == "ark_wiki_stage.html" and not _offline():
         # 真实关卡地图（md5 直链 + 磁盘缓存，与生产同一取图函数）
         from ArknightsUID.arknightsuid_wiki import _get_stage_map_b64
 
@@ -1540,7 +1624,7 @@ async def _enrich_icons(name: str, context: dict) -> None:
         from ArknightsUID.utils.gamedata.charinfo import load_char_index
         from ArknightsUID.utils.player.context import char_avatar_b64
 
-        if name == "ark_recruit.html":
+        if name == "ark_recruit.html" and not _offline():
             # 与生产同源：真实公招数据跑 match_recruit 重建 rows/rest——
             # 静态 mock 曾混入错档/非池干员（孑=4★、星熊=6★、洋灰不在池）；
             # 拉取失败退回静态行，只补头像
@@ -1661,7 +1745,7 @@ async def _enrich_icons(name: str, context: dict) -> None:
         except Exception as e:
             print(f"⚠️  ark_rogue 主题图拉取失败，按无图降级: {e}")
 
-    if name == "ark_activity.html":
+    if name == "ark_activity.html" and not _offline():
         # 实时活动/卡池 + 官方标题图（与生产 show_ark_activities 同源），
         # 失败保留静态占位（无图行，与缺图降级一致）
         try:
@@ -1705,10 +1789,10 @@ async def _enrich_icons(name: str, context: dict) -> None:
         except Exception as e:
             print(f"⚠️  ark_activity 实时数据失败，保留静态占位: {e}")
 
-    if name == "ark_calendar.html":
+    if name == "ark_calendar.html" and not _offline():
         # 实时活动/卡池 + 标题图（与生产 send_calendar 同源），失败保留静态占位
         try:
-            from datetime import datetime, timedelta, timezone
+            from datetime import timedelta, timezone
 
             from ArknightsUID.arknightsuid_wiki import _format_remaining
             from ArknightsUID.utils.prts.client import (
@@ -1719,7 +1803,7 @@ async def _enrich_icons(name: str, context: dict) -> None:
             from ArknightsUID.utils.render import get_image_b64_with_cache
             from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
 
-            now_ts = datetime.now(timezone(timedelta(hours=8))).timestamp()
+            now_ts = _render_now_ts()
             activities = await query_activities()
             pools = await query_gacha_pools()
             banner_urls = await activity_banner_urls(
@@ -1755,7 +1839,7 @@ async def _enrich_icons(name: str, context: dict) -> None:
         except Exception as e:
             print(f"⚠️  ark_calendar 实时数据失败，保留静态占位: {e}")
 
-    if name == "ark_announce.html":
+    if name == "ark_announce.html" and not _offline():
         # 森空岛实时公告列表 + 真实封面/头像（与生产 show_ark_announcements 同源）
         try:
             from ArknightsUID.arknightsuid_push import get_ark_ann_list
@@ -1784,7 +1868,7 @@ async def _enrich_icons(name: str, context: dict) -> None:
         except Exception as e:
             print(f"⚠️  ark_announce 实时列表失败，保留静态占位: {e}")
 
-    if name == "ark_announce_detail.html":
+    if name == "ark_announce_detail.html" and not _offline():
         # 真实公告详情（森空岛 web 免登录，优先挑带配图的一条；
         # 与生产 _show_ann_detail 同源：普通图内嵌、视频封面占位、超长图只计数）
         try:
@@ -1997,7 +2081,7 @@ async def _enrich_icons(name: str, context: dict) -> None:
         except Exception as e:
             print(f"⚠️  ark_rogue_run 藏品图标拉取失败，按无图降级: {e}")
 
-    if name == "ark_recruit_plan.html":
+    if name == "ark_recruit_plan.html" and not _offline():
         # 与生产同源：真实公招数据（PRTS 公开招募池）跑 recommend_combos
         # 重建组合行——手写 mock 曾混入非公招干员（稀音/维什戴尔/逻各斯等
         # 寻访限定从不入公招池），池容与星级口径也对不上；拉取失败退回
@@ -2158,7 +2242,10 @@ async def main() -> int:
 
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    selected = sys.argv[1:] or list(MOCK_CONTEXTS)
+    if _offline():
+        print("⏭ --offline：跳过实时数据分支（活动/公告/公招/地图），使用静态占位")
+
+    selected = _template_args() or list(MOCK_CONTEXTS)
     start = time.time()
     ok = 0
     for key in selected:
