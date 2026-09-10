@@ -86,6 +86,78 @@ class PlayerServiceInvalidUidTest(unittest.TestCase):
         self.assertIsNone(asyncio.run(run()))
 
 
+class PlayerCacheFutureMtimeTest(unittest.TestCase):
+    """时钟回拨后缓存 mtime 落在未来：不得钳成 0 岁当永久新鲜。
+
+    实况症状「ark基建一直老缓存不刷新」：文件在 T 写入后系统时钟被
+    回拨（NTP 修正/WSL 休眠唤醒），mtime 领先墙钟可达数小时，旧实现
+    max(0, now-mtime)=0 → TTL 永判新鲜，所有 player_info 卡持续吐旧数
+    据直到墙钟追上文件时间。复现环：种子未来 mtime 缓存 + mock 适配
+    器，断言强制重取。
+    """
+
+    UID = "540840237"
+
+    def _seed(self, tmp: Path, delta_secs: float) -> None:
+        import gzip
+        import json
+        import os
+        import time
+
+        d = tmp / self.UID
+        d.mkdir(parents=True, exist_ok=True)
+        f = d / "player_info.json.gz"
+        f.write_bytes(
+            gzip.compress(
+                json.dumps({"code": 0, "message": "OK", "data": {"_m": "OLD"}}).encode()
+            )
+        )
+        ts = time.time() + delta_secs
+        os.utime(f, (ts, ts))
+
+    def _read(self, tmp: Path):
+        from ArknightsUID.utils.player import service
+
+        with mock.patch.object(service, "PLAYER_PATH", tmp):
+            age = service._cache_age_seconds(self.UID)
+            envelope = asyncio.run(service.read_cached_player_info(self.UID))
+        return age, envelope
+
+    def test_future_mtime_beyond_tolerance_is_stale(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            self._seed(tmp, 7200.0)
+            age, envelope = self._read(tmp)
+        self.assertIsNone(age, "未来 mtime 应判不可信（None=强制重取）")
+        self.assertIsNone(envelope)
+
+    def test_small_future_skew_within_tolerance_still_fresh(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as td:
+            tmp = Path(td)
+            self._seed(tmp, 5.0)
+            age, envelope = self._read(tmp)
+        self.assertIsNotNone(age, "秒级抖动不应击穿缓存")
+        self.assertEqual(envelope["data"]["_m"], "OLD")
+
+    def test_past_and_fresh_ages_unchanged(self) -> None:
+        import tempfile
+
+        for delta, expect_hit in ((-7200.0, False), (-10.0, True)):
+            with tempfile.TemporaryDirectory() as td:
+                tmp = Path(td)
+                self._seed(tmp, delta)
+                age, envelope = self._read(tmp)
+            if expect_hit:
+                self.assertIsNotNone(age)
+                self.assertEqual(envelope["data"]["_m"], "OLD")
+            else:
+                self.assertIsNone(envelope, "过期缓存必须重取")
+
+
 class GachaCategoryStopTest(unittest.TestCase):
     def test_per_category_threshold(self) -> None:
         """限定池最新记录（t=20）不得截断常驻池的翻页。"""
