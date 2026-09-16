@@ -13,6 +13,7 @@ from gsuid_core.config import core_config, CONFIG_DEFAULT as CORE_CONFIG_DEFAULT
 from gsuid_core.app_life import app as fastapi_app
 from fastapi.staticfiles import StaticFiles
 
+from . import kaomoji_fonts
 from ..path import TEMPLATES_PATH
 from ..config import ArkConfig, CONFIG_DEFAULT
 from ..http import get_client
@@ -97,10 +98,13 @@ _local_font_bytes: list | None = None
 
 
 def _local_cjk_fonts() -> list:
-    """缓存读取系统 Noto Sans CJK + 彩色 Emoji（存在才返回）。
+    """缓存读取系统 Noto Sans CJK + 彩色 Emoji + 颜文字符号字体（存在才返回）。
 
-    CJK 是远程字体失败的兜底；Emoji 字体解决公告正文 📮/✅ 等字符
-    在 takumi 下渲染成豆腐块（playwright 走系统 fontconfig 不受影响）。
+    CJK 是远程字体失败的兜底；Emoji 字体解决公告正文 📮/✅ 等字符、
+    符号字体（下载包 + 系统已装）补齐颜文字区块（꒰ᗜ˶ദ‿✧ 等，见
+    kaomoji_fonts 模块说明）——takumi 不走系统 fontconfig，这两类
+    字体缺失时公告字符渲染成豆腐块（playwright 受影响的是未装字体
+    的系统，如无 DejaVu 的最小容器）。
     """
     global _local_font_bytes
     if _local_font_bytes is None:
@@ -124,6 +128,14 @@ def _local_cjk_fonts() -> list:
                 if candidate.exists():
                     fonts.append(candidate.read_bytes())
                     break
+            except OSError:
+                continue
+        for candidate in (
+            *kaomoji_fonts.pack_font_paths(),
+            *kaomoji_fonts.system_symbol_font_paths(),
+        ):
+            try:
+                fonts.append(candidate.read_bytes())
             except OSError:
                 continue
         _local_font_bytes = fonts
@@ -241,6 +253,16 @@ def _get_local_base_url() -> str:
 
 
 _mount_fonts()
+
+
+def _on_kaomoji_pack_ready() -> None:
+    """字体包落盘后：刷新渲染字体缓存并补挂静态路由（目录此时才出现）。"""
+    global _local_font_bytes
+    _local_font_bytes = None
+    _mount_fonts()
+
+
+kaomoji_fonts.register_on_pack_ready(_on_kaomoji_pack_ready)
 
 
 async def _ensure_browser():
@@ -516,6 +538,12 @@ async def render_html(ark_templates, template_name: str, context: dict) -> bytes
                 context["font_css_url"] = f"{base_url}/ark/fonts/{_FONT_CSS_NAME}"
             else:
                 context["font_css_url"] = _get_font_css_url()
+
+            # 颜文字字体包：@font-face 内联注入（playwright 经静态路由取
+            # 字体文件）；包缺失时顺手调度后台下载，下一张卡生效——
+            # 当前卡降级豆腐块（同现状），不阻塞渲染
+            context["kaomoji_font_css"] = kaomoji_fonts.font_face_css(base_url)
+            kaomoji_fonts.maybe_start_download()
 
             html_content = template.render(**context)
             logger.debug(f"[ARK·渲染] 使用本地字体渲染 HTML: {template_name}")

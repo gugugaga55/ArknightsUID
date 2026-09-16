@@ -79,9 +79,16 @@ body {
     /* CJK 兜底必须写系统 TTC 的真实 face 名（Noto Sans CJK SC）：
        只写 "Noto Sans SC" 匹配不到 NotoSansCJK-Regular.ttc 里的任何 face，
        takumi 下 generic sans-serif 会落到 TTC 首个 face（JP），
-       关/直/与 等字渲染成日文字形（实机踩坑：通关 chip 白字最显眼） */
+       关/直/与 等字渲染成日文字形（实机踩坑：通关 chip 白字最显眼）。
+       末段符号字体族只接住前面字体都没有的字符（꒰ᗜ˶‿✧ 等颜文字
+       区块，浏览器按字形逐族回退）——必须排在 CJK 之后，提前会抢
+       拉丁字形；其中 Noto 五件由 kaomoji_fonts 字体包 @font-face
+       提供，系统装了 Symbola / Segoe UI Symbol 也能被 fontconfig 命中 */
     font-family: "MiSans", "Google Sans Flex", "Noto Sans CJK SC",
-        "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+        "Noto Sans SC", "PingFang SC", "Microsoft YaHei",
+        "Noto Sans Yi", "Noto Sans Canadian Aboriginal",
+        "Noto Sans Malayalam", "Noto Sans Symbols 2", "Noto Sans",
+        "Segoe UI Symbol", "Symbola", "Apple Symbols", sans-serif;
     background: var(--paper);
     color: var(--tx-0);
     font-size: 14px;

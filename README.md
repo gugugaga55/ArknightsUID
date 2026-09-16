@@ -18,6 +18,12 @@ git clone https://github.com/gugugaga55/ArknightsUID.git
 
 Python 依赖（httpx、公招标签截图识别的 rapidocr 等）声明在 `pyproject.toml`，core 启动时会通过 AutoInstallDep（默认开）自动安装；极端环境自动安装失败时，管理员可发送 `ark安装依赖 ocr` 在聊天内补装（多镜像回退，装完即生效）。
 
+**公告颜文字字体（自动，无需配置）**：官方公告正文常含颜文字（实帖样本 `꒰˶>ᗜ<˶꒱`、`ദ്ദി˶>𖥦<)`），这些字符不在 MiSans / Noto CJK / 彩色 Emoji 的覆盖范围，缺字体时会渲染成方框。插件在首次本地渲染时自动下载一套 OFL 符号字体包（Google Noto 五件：Yi / 加拿大原住民音节 / 马拉雅拉姆 / Symbols2 / Noto Sans，约 1.3MB，落插件目录 `ArknightsUID/templates/fonts/kaomoji/`，GitHub + jsdelivr 双镜像回退，失败 1 小时后自动重试）。离线部署可改为给系统手动装字体（装了即用，可免下载）：
+
+- 颜文字 / 符号字体：如 `Symbola`、`Noto Sans Symbols 2`
+- emoji 字体：如 `Noto Color Emoji`（takumi 引擎下公告 📮/✅ 等需要）
+- 汉字字体：如 `Noto Sans CJK SC` / 思源黑体（远程 MiSans CSS 失效时的离线中文兜底）
+
 ## 功能
 
 常用命令支持拼音首字母缩写：`ark每日=arkmr`、`ark理智=arklz`、`ark签到=arkqd`、`ark抽卡记录=arkck`、`ark攒抽=arkzc`、`ark公告=arkgg`、`ark面板=arkmb`、`ark公招=arkgz`、`ark公招推荐=arkgztj`、`ark肉鸽=arkrg`、`ark养成=arkyc`、`ark日历=arkrl`、`ark帮助=arkbz`。

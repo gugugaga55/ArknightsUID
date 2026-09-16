@@ -4,6 +4,8 @@
   包含：字体加载策略 + 设计系统基座内联。
   - 中文 MiSans：jsdelivr CDN（加载失败回退系统黑体）
   - 拉丁/等宽：font_css_url 可配置（ArkConfig FontCssUrl）
+  - 颜文字符号字体：kaomoji_font_css（render_html 注入的内联 @font-face，
+    公告正文 ꒰˶>ᗜ<˶꒱ 一类字符的兜底；包未就绪时为空串自动跳过）
   - ark_base.css 用 jinja include 内联，保证 set_content 渲染不依赖相对路径
 
   注意：本文件会被当作 jinja 模板解析，注释中禁止出现双花括号/百分号标签语法。
@@ -13,6 +15,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/misans@4.1.0/lib/Normal/MiSans-Semibold.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/misans@4.1.0/lib/Normal/MiSans-Bold.min.css">
 <link rel="stylesheet" href="{{ font_css_url }}">
+{% if kaomoji_font_css %}<style>{{ kaomoji_font_css | safe }}</style>{% endif %}
 <style>
     {% include "ark_base.css" %}
 </style>

@@ -15,6 +15,9 @@ uv.lock
 # Runtime data
 data/
 
+# 颜文字符号字体包（运行时自动下载，见 utils/render/kaomoji_fonts.py）
+ArknightsUID/templates/fonts/
+
 # Editor / agent tooling
 .zcode/
 .agents/
