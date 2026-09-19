@@ -17,7 +17,6 @@ from ArknightsUID.utils.card import send_card_or_text
 from ArknightsUID.utils.enduid.adapter import (
     ArkCredential,
     ark_attendance,
-    fetch_player_info,
     hide_uid,
     hide_uid_for,
     resolve_accounts,
@@ -33,7 +32,6 @@ from ArknightsUID.utils.player import (
     build_campaign_context,
     build_char_card_context,
     build_char_stat_context,
-    build_daily_context,
     build_skin_context,
     build_status_context,
     drop_cached_player_info,
@@ -602,6 +600,31 @@ async def subscribe_sanity_push_alias(bot: Bot, ev: Event) -> None:
     await _notify.subscribe_sanity_push(bot, ev)
 
 
+async def _render_status_card(
+    bot: Bot, ev: Event, credential, data, shown: str, text: str
+) -> None:
+    """理智+日常合并卡（ark理智 / ark日常 同卡）：背景图 + 数值面板。
+
+    背景：用户上传 → 用户干员立绘偏好 → 管理员全局 → 随机持有干员立绘
+    → 舰桥场景兜底；头像：查询者 QQ 头像（无来源/失败 → 模板 SVG 兜底）。
+    """
+    context = build_status_context(data, ArknightsUID_version, shown)
+    if context is None:
+        return await _send_text(bot, ev, text)
+    from ArknightsUID.utils.avatar import user_avatar_b64
+    from ArknightsUID.utils.background import resolve_status_bg
+
+    bg, bg_label = await resolve_status_bg(
+        ev.bot_id, ev.user_id, getattr(data, "chars", None)
+    )
+    context["bg"] = bg
+    context["bg_label"] = bg_label
+    context["avatar"] = await user_avatar_b64(
+        ev.bot_id, ev.user_id, getattr(ev, "bot_self_id", "") or ""
+    )
+    return await send_card_or_text(bot, ev, "ark_status.html", context, text)
+
+
 @account_sv.on_command(
     (
         "理智",
@@ -617,22 +640,14 @@ async def show_ark_status(bot: Bot, ev: Event) -> None:
         return await _send_text(bot, ev, loaded)
     credential, data, shown = loaded
 
-    context = build_status_context(data, ArknightsUID_version, shown)
-    if context is not None:
-        # 渲染失败回退文本不能是空串（会发出空消息），用既有格式化器出卡
-        return await send_card_or_text(
-            bot,
-            ev,
-            "ark_status.html",
-            context,
-            _format_player_info(credential, {"data": data.raw}, uid_display=shown),
-        )
-    # 数据不足（缺昵称/理智）回退旧文本格式：用原始响应走既有格式化
-    response = await fetch_player_info(credential)
-    if isinstance(response, str):
-        return await _send_text(bot, ev, response)
-    await _send_text(
-        bot, ev, _format_player_info(credential, response, uid_display=shown)
+    # 渲染失败回退文本不能是空串（会发出空消息），用既有格式化器出卡
+    return await _render_status_card(
+        bot,
+        ev,
+        credential,
+        data,
+        shown,
+        _format_player_info(credential, {"data": data.raw}, uid_display=shown),
     )
 
 
@@ -647,12 +662,12 @@ async def show_ark_status(bot: Bot, ev: Event) -> None:
     block=True,
 )
 async def show_ark_daily(bot: Bot, ev: Event) -> None:
+    """与 ark理智 同卡（理智+日常合并；无理智数据时回退纯文本）。"""
     loaded = await _load_account_query(ev)
     if isinstance(loaded, str):
         return await _send_text(bot, ev, loaded)
     credential, data, shown = loaded
 
-    context = build_daily_context(data, ArknightsUID_version, shown)
     text = (
         f"「明日方舟」日常进度\n"
         f"UID：{shown}\n"
@@ -660,9 +675,7 @@ async def show_ark_daily(bot: Bot, ev: Event) -> None:
         f"周常：{data.weekly_done}/{data.weekly_total}\n"
         f"剿灭合成玉：{data.campaign_current}/{data.campaign_total}"
     )
-    if context is not None:
-        return await send_card_or_text(bot, ev, "ark_daily.html", context, text)
-    await _send_text(bot, ev, text)
+    return await _render_status_card(bot, ev, credential, data, shown, text)
 
 
 @account_sv.on_command(

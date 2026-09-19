@@ -13,7 +13,6 @@ from ArknightsUID.utils.player.context import (
     build_box_context,
     build_campaign_context,
     build_char_stat_context,
-    build_daily_context,
     build_status_context,
     equip_display_name,
     format_remaining,
@@ -53,23 +52,27 @@ class ContextBuilderTest(unittest.TestCase):
         assert data is not None
         self.assertIsNone(build_status_context(data, VERSION))
 
-    def test_daily_context(self) -> None:
+    def test_status_context_merges_routine(self) -> None:
+        """ark日常并入后的合并 context：理智+日常/周常同卡。"""
         data = _data()
         assert data is not None
-        ctx = build_daily_context(data, VERSION)
+        ctx = build_status_context(data, VERSION)
         self.assertIsNotNone(ctx)
         assert ctx is not None
+        self.assertTrue(ctx["has_routine"])
         self.assertEqual(ctx["daily_done"], 3)
         self.assertEqual(ctx["daily_total"], 8)
         self.assertEqual(ctx["weekly_done"], 5)
         self.assertEqual(ctx["campaign_total"], 1800)
 
-    def test_daily_context_requires_routine(self) -> None:
+    def test_status_context_without_routine_hides_block(self) -> None:
         envelope = _envelope()
         del envelope["data"]["routine"]
         data = parse_player_info(envelope)
         assert data is not None
-        self.assertIsNone(build_daily_context(data, VERSION))
+        ctx = build_status_context(data, VERSION)
+        assert ctx is not None
+        self.assertFalse(ctx["has_routine"])
 
     def test_campaign_context(self) -> None:
         data = _data()

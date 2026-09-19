@@ -93,6 +93,33 @@ async def load_skin_index() -> dict[str, dict[str, str]]:
     return index
 
 
+def match_skin(
+    catalog: dict[str, dict[str, str]], char_id: str, query: str
+) -> tuple[str, str, list[str]]:
+    """按干员 + 皮肤名找皮肤：精确名优先，其次唯一包含匹配。
+
+    返回 (skin_id, skin_name, 该干员全部皮肤名)。
+    未命中时 skin_id 为空串，all_names 供调用方列出可选值。
+    """
+    q = (query or "").strip()
+    entries = [
+        (sid, info)
+        for sid, info in catalog.items()
+        if info.get("char_id") == char_id
+    ]
+    all_names = sorted(str(info.get("name") or "") for _, info in entries)
+    if not q:
+        return "", "", all_names
+    for sid, info in entries:
+        if info.get("name") == q:
+            return sid, q, all_names
+    hits = [(sid, info) for sid, info in entries if q in str(info.get("name") or "")]
+    if len(hits) == 1:
+        sid, info = hits[0]
+        return sid, str(info.get("name") or ""), all_names
+    return "", "", all_names
+
+
 def summarize_collection(
     catalog: dict[str, dict[str, str]],
     owned_ids: list[str],
