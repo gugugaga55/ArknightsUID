@@ -617,6 +617,77 @@ class StagePanelRowTest(unittest.TestCase):
         self.assertEqual(rows[0]["count"], "波次")
 
 
+class FloorBuffFoldTest(unittest.TestCase):
+    """每层增益（floorBuff）折算：官方难度模型里敌人属性缩放的主要来源。
+
+    tomimi floorDifficultyMods 同源口径：标量（萨米/萨卡兹 +N%）按
+    (1+N)^层 复合；{atk,hp} 逐层乘数（水月/岁/黑流）按 乘数^层 复合；
+    层数从 1 起（第 1 层就有 1 次方）。此前关卡/敌人面板一律不折算，
+    N15 显示的是 0 层基底值，与游戏内实际严重不符。
+    """
+
+    SCALAR_GRADES = [
+        {"difficulty": 0, "effects": []},
+        {"difficulty": 15, "floorBuff": 0.2, "effects": []},
+    ]
+    DICT_GRADES = [
+        {"difficulty": 0, "floorBuff": {"atk": 1.0, "hp": 1.0}, "effects": []},
+        {"difficulty": 18, "floorBuff": {"atk": 1.2, "hp": 1.3}, "effects": []},
+    ]
+
+    STAGE = {"enemies": [
+        {"id": "enemy_1_boss", "level": 0, "min_count": 1, "max_count": 1},
+    ]}
+
+    def test_stage_rows_scalar_floor(self) -> None:
+        # 萨卡兹 N15 第 2 层：×(1+0.2)^2 = ×1.44
+        rows = stage_panel_rows(
+            self.STAGE, _db(), self.SCALAR_GRADES, 15, floor=2
+        )
+        self.assertEqual(rows[0]["stats"]["hp"], round(80000 * 1.44))
+        self.assertEqual(rows[0]["stats"]["atk"], round(2350 * 1.44))
+        self.assertTrue(rows[0]["has_diff"])
+
+    def test_stage_rows_dict_floor(self) -> None:
+        # 水月 N18 第 1 层：HP×1.3 / 攻×1.2（逐属性乘数）
+        rows = stage_panel_rows(
+            self.STAGE, _db(), self.DICT_GRADES, 18, floor=1
+        )
+        self.assertEqual(rows[0]["stats"]["hp"], round(80000 * 1.3))
+        self.assertEqual(rows[0]["stats"]["atk"], round(2350 * 1.2))
+
+    def test_stage_rows_floor_zero_keeps_base(self) -> None:
+        # floor=0（缺省）：保持旧口径不折算（无难度/未知的兼容路径）
+        rows = stage_panel_rows(
+            self.STAGE, _db(), self.SCALAR_GRADES, 15, floor=0
+        )
+        self.assertEqual(rows[0]["stats"]["hp"], 80000)
+
+    def test_stage_rows_no_difficulty_no_floor(self) -> None:
+        # 难度缺省（基础面板）传了 floor 也不折算——增益来自难度档
+        rows = stage_panel_rows(
+            self.STAGE, _db(), self.SCALAR_GRADES, None, floor=2
+        )
+        self.assertEqual(rows[0]["stats"]["hp"], 80000)
+
+    def test_panel_at_floor_label_and_buffs(self) -> None:
+        row = build_panel_at(_db()["enemy_1_boss"], self.SCALAR_GRADES, 15, floor=2)
+        self.assertEqual(row["stats"]["hp"], round(80000 * 1.44))
+        self.assertTrue(any("第2层" in b for b in row["buffs"]), row["buffs"])
+        self.assertIn("第2层", row["label"])
+
+    def test_diff_panels_floor(self) -> None:
+        rows = build_diff_panels(
+            _db()["enemy_1_boss"], self.SCALAR_GRADES, floor=1
+        )
+        by_grade = {r["grade"]: r for r in rows}
+        # N15 行按第 1 层折算 ×1.2
+        self.assertEqual(by_grade[15]["stats"]["hp"], round(80000 * 1.2))
+        # 缺省 floor=0：floorBuff 档不产生行（无 effects 时旧行为如此）
+        rows0 = build_diff_panels(_db()["enemy_1_boss"], self.SCALAR_GRADES)
+        self.assertNotIn(15, {r["grade"] for r in rows0})
+
+
 class PanelAtStageTest(unittest.TestCase):
     """build_panel_at 关卡限定：块选择 + 紧急来源标注 + 无难度基础面板。"""
 

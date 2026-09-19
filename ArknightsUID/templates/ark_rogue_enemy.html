@@ -100,7 +100,7 @@
         </div>
         {% endif %}
         <div class="prose" style="margin-top: var(--space-3); font-size: 11px;">
-            {{ focus.label }}（≤ 该档效果累积生效）；层数增益未计入，完整交互模拟见 tomimi.dev。
+            {{ focus.label }}（≤ 该档效果累积生效）；每层增益已按标注层数折算，更深层按复合追加，完整交互模拟见 tomimi.dev。
         </div>
         {% elif theme_name and panels %}
         <div class="sect" style="margin-top: var(--space-4);">
@@ -121,7 +121,7 @@
             {% endfor %}
         </div>
         <div class="prose" style="margin-top: var(--space-3); font-size: 11px;">
-            难度效果累积生效；HP/攻/防/抗 列为对应档位面板。层数增益（每层按 floorBuff 复合）未计入，完整交互模拟见 tomimi.dev。
+            难度效果累积生效；HP/攻/防/抗 列为对应档位面板（每层增益已按第1层折算，更深层数值见 tomimi.dev）。
         </div>
         {% else %}
         <div class="prose" style="margin-top: var(--space-4); font-size: 11px;">

@@ -510,7 +510,7 @@ def _format_rogue_enemy(context: dict) -> str:
             note = f"｜{'、'.join(row['notes'])}" if row["notes"] else ""
             lines.append(f"  {row['label']}：{stat}{note}")
         lines.append(
-            "  注：层数增益（每层按 floorBuff 复合）未计入，完整模拟见 tomimi.dev"
+            "  注：数值已按第1层折算每层增益（每深一层按复合追加），完整交互模拟见 tomimi.dev"
         )
     else:
         lines.append(
@@ -639,6 +639,13 @@ async def _build_rogue_enemy_context(
             extra_effects = stage_data.get("elite_mods")
     if difficulty is not None:
         difficulty = max(0, min(difficulty, max_difficulty(grades)))
+    # 每层增益折算层号：关卡命中时用该关最深层，否则按 tomimi 惯例第 1 层
+    focus_floor = 1
+    if stage_hit is not None:
+        stage_floors = sorted(
+            {int(f) for f in (stage_data.get("floors") or []) if str(f).isdigit()}
+        )
+        focus_floor = stage_floors[-1] if stage_floors else 1
     if stage_hit is not None or difficulty is not None:
         focus = build_panel_at(
             entry,
@@ -646,11 +653,12 @@ async def _build_rogue_enemy_context(
             difficulty,
             base_block=base_block,
             extra_effects=extra_effects,
+            floor=focus_floor,
         )
     panels = (
         []
         if focus is not None
-        else build_diff_panels(entry, grades)
+        else build_diff_panels(entry, grades, floor=1)
         if theme_dir
         else []
     )
@@ -785,7 +793,12 @@ async def _build_rogue_stage_context(
             # 难度0 的新手 HP×0.8），保留原难度仅作展示
             difficulty = max(0, difficulty)
 
-    rows = stage_panel_rows(stage_data, db, grades, difficulty, elite)
+    # 每层增益按该关所在层折算（跨层变体取最深层 = 玩家遇到时的最坏值）
+    floor_nums = sorted(
+        {int(f) for f in (stage_data.get("floors") or []) if str(f).isdigit()}
+    )
+    max_floor = floor_nums[-1] if floor_nums else 0
+    rows = stage_panel_rows(stage_data, db, grades, difficulty, elite, floor=max_floor)
     # 头像（并发受限，失败降级空串）
     from ArknightsUID.utils.image import gather_b64
 
@@ -803,7 +816,12 @@ async def _build_rogue_stage_context(
             if note not in elite_chips:
                 elite_chips.append(note)
 
-    floor_note = _floor_buff_note(grades, difficulty) if difficulty is not None else ""
+    floor_note = ""
+    if difficulty is not None:
+        floor_note = _floor_buff_note(grades, difficulty, applied_floor=max_floor)
+        if floor_note and len(floor_nums) > 1:
+            span = "/".join(str(f) for f in floor_nums)
+            floor_note += f"（{span} 层变体按最深层）"
     difficulty_label = (
         f"难度{difficulty}" if difficulty is not None else "未指定难度（基础面板）"
     )
