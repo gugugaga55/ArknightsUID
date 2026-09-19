@@ -26,12 +26,18 @@ async def _fake_banners(*_args, **_kwargs) -> dict:
     return {}
 
 
+async def _fake_image(*_args, **_kwargs) -> str:
+    """官方图/主题图下载打桩（装饰图全部按缺图降级，测试不打网络）。"""
+    return ""
+
+
 def _records_payload() -> dict:
-    """最小同构切片：topics 选中 rogue_6 + history 两项统计 + 两条战绩。"""
+    """最小同构切片：topics 选中 rogue_6 + history 两项统计 + 两条战绩 + 全服数据。"""
     return {
         "topics": [
             {"id": "rogue_5", "isSelected": False, "name": "岁的界园志异", "pic": "p5"},
-            {"id": "rogue_6", "isSelected": True, "name": "沉沦者的黑流树海", "pic": "p6"},
+            {"id": "rogue_6", "isSelected": True, "name": "沉沦者的黑流树海",
+             "pic": "p6", "allOpenTs": 1700000000},
         ],
         "gameUserInfo": {"name": "刀客塔", "level": 120, "isOfficial": True},
         "career": {
@@ -102,6 +108,25 @@ def _records_payload() -> dict:
             "rogue_5_relic_legacy_55": {"name": "钝爪-爆发", "description": "", "usage": ""},
             "rogue_5_relic_return_12": {"name": "教母的信物", "description": "", "usage": ""},
         },
+        "currentTs": 1800000000,
+        "all": {
+            "endings": {"1": 52.31, "2": 30.05, "3": 5.5, "4": 0},
+            "activeTool": [
+                {"id": "tool_1", "name": "应急激活动员"},
+                {"id": "tool_2", "name": "物资调配"},
+                {"garbage"},
+            ],
+            "relic": [
+                {"id": "rogue_5_relic_legacy_55", "name": "钝爪-爆发"},
+                {"id": "rogue_5_relic_return_12", "name": "教母的信物"},
+            ],
+            "character": {
+                "CASTER": {"id": "char_002_amiya", "name": "阿米娅", "rarity": 4,
+                           "profession": "CASTER"},
+                "SNIPER": {"id": "char_1035_wisdel", "name": "维什戴尔", "rarity": 5,
+                           "profession": "SNIPER"},
+            },
+        },
     }
 
 
@@ -149,6 +174,17 @@ class ParseRogueRecordsTest(unittest.TestCase):
         self.assertFalse(fail.success)
         self.assertTrue(fail.is_collect)
         self.assertEqual(fail.last_stage, "浮士德")
+        # 全服数据（all 块；currentTs 1800000000 >= allOpenTs 1700000000）
+        self.assertTrue(stats.all_open)
+        self.assertEqual(
+            stats.all_endings, [(1, 52.31), (2, 30.05), (3, 5.5)]
+        )  # 0% 项剔除
+        self.assertEqual(stats.all_tools, ["应急激活动员", "物资调配"])
+        self.assertEqual(stats.all_relics, ["钝爪-爆发", "教母的信物"])
+        self.assertEqual(
+            [(c.name, c.profession) for c in stats.all_chars],
+            [("阿米娅", "CASTER"), ("维什戴尔", "SNIPER")],
+        )
 
     def test_parse_garbage_returns_none(self) -> None:
         self.assertIsNone(parse_rogue_records(None))
@@ -163,6 +199,40 @@ class ParseRogueRecordsTest(unittest.TestCase):
         self.assertEqual(stats.topic_id, "")
         self.assertEqual(stats.mode_grade, 0)
         self.assertEqual(stats.records, [])
+
+    def test_all_block_not_open(self) -> None:
+        """全服数据开放判定：currentTs < allOpenTs / 无 all 块 → 整块不开放。"""
+        payload = _records_payload()
+        payload["currentTs"] = 1600000000  # 早于 allOpenTs
+        stats = parse_rogue_records(payload)
+        assert stats is not None
+        self.assertFalse(stats.all_open)
+        self.assertEqual(stats.all_endings, [])
+        self.assertEqual(stats.all_chars, [])
+
+        payload["currentTs"] = 1800000000
+        payload.pop("all")
+        stats = parse_rogue_records(payload)
+        assert stats is not None
+        self.assertFalse(stats.all_open)
+
+    def test_all_block_bad_shapes_degrade(self) -> None:
+        """all 块坏数据（character 显式 null / 非 dict）不崩，降级为空。"""
+        payload = _records_payload()
+        payload["all"]["character"] = None
+        stats = parse_rogue_records(payload)
+        assert stats is not None
+        self.assertTrue(stats.all_open)
+        self.assertEqual(stats.all_chars, [])
+        self.assertEqual(stats.all_tools, ["应急激活动员", "物资调配"])
+
+        payload["all"]["character"] = ["not", "a", "dict"]
+        payload["all"]["endings"] = None
+        stats = parse_rogue_records(payload)
+        assert stats is not None
+        self.assertTrue(stats.all_open)
+        self.assertEqual(stats.all_chars, [])
+        self.assertEqual(stats.all_endings, [])
 
     def test_topic_id_mapping(self) -> None:
         # 主题表从傀影起编（rogue_1=傀影 … rogue_6=黑流树海）
@@ -231,6 +301,12 @@ class RecordCommandHelperTest(unittest.TestCase):
         self.assertIn("探索 6 层", text)
         self.assertIn("战斗 12/3/1", text)
         self.assertIn("藏品 24", text)
+        # 全服数据（App「全服数据」页同源）
+        self.assertIn("—— 全服数据 ——", text)
+        self.assertIn("通关结局比例：1个 52.3% / 2个 30.1% / 3个 5.5%", text)
+        self.assertIn("最常用战术道具：应急激活动员、物资调配", text)
+        self.assertIn("最常用收藏品：钝爪-爆发、教母的信物", text)
+        self.assertIn("出场率最高干员：阿米娅（术师）、维什戴尔（狙击）", text)
         # 主题切换提示（非选中期，短名）
         self.assertIn("切换主题：ark肉鸽战绩 界园", text)
 
@@ -253,9 +329,15 @@ class RecordCommandHelperTest(unittest.TestCase):
 
         stats = parse_rogue_records(_records_payload())
         assert stats is not None
-        with mock.patch(
-            "ArknightsUID.utils.prts.client.activity_banner_urls",
-            _fake_banners,
+        with (
+            mock.patch(
+                "ArknightsUID.utils.prts.client.activity_banner_urls",
+                _fake_banners,
+            ),
+            mock.patch(
+                "ArknightsUID.utils.render.get_image_b64_with_cache",
+                _fake_image,
+            ),
         ):
             context = asyncio.run(
                 _build_rogue_records_context(stats, "沉沦者的黑流树海", "12****89")
@@ -264,6 +346,16 @@ class RecordCommandHelperTest(unittest.TestCase):
         self.assertEqual(context["medal_current"], 11)
         self.assertEqual(len(context["records"]), 2)
         self.assertEqual(context["records"][0]["duration"], "用时 52 分钟")
+        # 官方通关/失败标题横幅按胜负分发（无图 = 空串，模板回退字条）
+        self.assertIn("title_banner", context["records"][0])
+        # 全服数据行
+        all_data = context["all_data"]
+        self.assertEqual([e["count"] for e in all_data["endings"]], [1, 2, 3])
+        self.assertEqual(all_data["tools"], ["应急激活动员", "物资调配"])
+        self.assertEqual(
+            [(c["label"], c["char"]["name"]) for c in all_data["chars"]],
+            [("术师", "阿米娅"), ("狙击", "维什戴尔")],
+        )
 
         env = Environment(
             loader=FileSystemLoader(str(TEMPLATES_PATH)),
@@ -274,8 +366,48 @@ class RecordCommandHelperTest(unittest.TestCase):
         missing = set(used) - set(context)
         self.assertFalse(missing, f"模板变量缺 context 键: {missing}")
 
+    def test_fill_record_avatars_covers_all_data_chars(self) -> None:
+        """全服干员头像回填：all_data.chars 内嵌干员也要拿到 avatar。"""
+        import asyncio
+
+        from ArknightsUID.arknightsuid_rogue import (
+            _build_rogue_records_context,
+            _fill_record_avatars,
+        )
+
+        stats = parse_rogue_records(_records_payload())
+        assert stats is not None
+
+        async def fake_avatar(char_id, *args, **kwargs):
+            return f"avatar:{char_id}"
+
+        with (
+            mock.patch(
+                "ArknightsUID.utils.prts.client.activity_banner_urls",
+                _fake_banners,
+            ),
+            mock.patch(
+                "ArknightsUID.utils.render.get_image_b64_with_cache",
+                _fake_image,
+            ),
+            mock.patch(
+                "ArknightsUID.utils.player.context.char_avatar_b64",
+                fake_avatar,
+            ),
+        ):
+            context = asyncio.run(_build_rogue_records_context(stats, "", ""))
+            asyncio.run(_fill_record_avatars(context))
+        chars = context["all_data"]["chars"]
+        self.assertEqual(chars[0]["char"]["avatar"], "avatar:char_002_amiya")
+        self.assertEqual(chars[1]["char"]["avatar"], "avatar:char_1035_wisdel")
+        # 常用干员/战绩阵容头像照旧
+        self.assertEqual(
+            context["fav_chars"][0]["avatar"], "avatar:char_002_amiya"
+        )
+        self.assertTrue(context["records"][0]["chars"][0]["avatar"])
+
     def test_banner_prefers_skland_topic_pic(self) -> None:
-        """横幅优先复用森空岛 topics[].pic；失败/缺失回退 PRTS 标题图。"""
+        """横幅优先复用森空岛 topics[].pic；失败/缺失回退官方 profileBg，再退 PRTS。"""
         import asyncio
 
         from ArknightsUID.arknightsuid_rogue import _build_rogue_records_context
@@ -284,10 +416,7 @@ class RecordCommandHelperTest(unittest.TestCase):
         assert stats is not None
         stats.topic_pic = "https://zonai.skland.com/pic/rogue_6.png"
 
-        calls: list[str] = []
-
         async def fake_b64(url, *args, **kwargs):
-            calls.append(url)
             return "data:image/webp;base64,Skland" if "zonai" in url else ""
 
         async def fake_banners(*_a, **_k):
@@ -305,16 +434,29 @@ class RecordCommandHelperTest(unittest.TestCase):
         ):
             context = asyncio.run(_build_rogue_records_context(stats, "", ""))
         self.assertEqual(context["banner"], "data:image/webp;base64,Skland")
-        self.assertEqual(calls, ["https://zonai.skland.com/pic/rogue_6.png"])
 
-        # 森空岛图下载失败 → 回退 PRTS
-        calls.clear()
+        # 森空岛图下载失败 → 官方 profileBg 兜底（App 生涯页同源图）
+        stats.topic_pic = ""
 
+        async def profile_b64(url, *args, **kwargs):
+            return "data:image/webp;base64,Profile" if "hycdn" in url else ""
+
+        with (
+            mock.patch(
+                "ArknightsUID.utils.render.get_image_b64_with_cache",
+                profile_b64,
+            ),
+            mock.patch(
+                "ArknightsUID.utils.prts.client.activity_banner_urls",
+                fake_banners,
+            ),
+        ):
+            context = asyncio.run(_build_rogue_records_context(stats, "", ""))
+        self.assertEqual(context["banner"], "data:image/webp;base64,Profile")
+
+        # 官方图也全挂 → 回退 PRTS
         async def failing_b64(url, *args, **kwargs):
-            calls.append(url)
-            if "zonai" in url:
-                raise RuntimeError("skland pic down")
-            return "data:image/webp;base64,PRTS"
+            raise RuntimeError("all skland pics down")
 
         with (
             mock.patch(
@@ -327,11 +469,7 @@ class RecordCommandHelperTest(unittest.TestCase):
             ),
         ):
             context = asyncio.run(_build_rogue_records_context(stats, "", ""))
-        self.assertEqual(context["banner"], "data:image/webp;base64,PRTS")
-        self.assertEqual(calls, [
-            "https://zonai.skland.com/pic/rogue_6.png",
-            "https://media.prts.wiki/prts.png",
-        ])
+        self.assertEqual(context["banner"], "")
 
 
 class RunDetailTest(unittest.TestCase):
@@ -401,6 +539,9 @@ class RunDetailTest(unittest.TestCase):
         with (
             mock.patch(
                 "ArknightsUID.utils.prts.client.activity_banner_urls", _fake_banners
+            ),
+            mock.patch(
+                "ArknightsUID.utils.render.get_image_b64_with_cache", _fake_image
             ),
             mock.patch(
                 "ArknightsUID.utils.player.context.char_avatar_b64", _no_fetch

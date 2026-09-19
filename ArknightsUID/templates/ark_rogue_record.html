@@ -19,8 +19,18 @@
         time: str, duration: str,
         zones: int, battles: str, relic_count: int, tags: [str],
         chars: [{name, avatar}]           结算阵容（≤8）
+        title_banner: str                 官方通关/失败标题横幅 b64（可空，
+                                          森空岛战绩页每条战绩卡头图同源）
     }]                                   最近战绩 / 收藏战绩（各 ≤8）
     record_total: int      接口返回的最近战绩总数（截断提示用）
+    all_data: {              全服数据（App「全服数据」页同源；未开放 = 空 dict）
+        endings: [{count: int, pct: float, width: float}]   通关结局比例条
+        tools: [str]          全服最常用战术道具（≤3）
+        relics: [str]         全服最常用收藏品（≤5）
+        chars: [{label: str, char: {name, avatar}}]   分职业出场率最高干员
+    }
+    career_band: str        官方生涯/全服页底图（careerBg b64，可空=浅色版式）
+    career_title: str       官方生涯标题字（profileTitle b64，可空）
     version: str
 -->
 <!DOCTYPE html>
@@ -37,6 +47,9 @@
         border-left-color: var(--yellow);
         background: var(--yellow-dim);
     }
+    /* 带官方横幅的行：胜负由横幅本身体现，行体回到纸底（避免深-黄-深三色交替） */
+    .run--art { background: transparent; }
+    .run--art.run--win { background: transparent; }
     .run:last-child { border-bottom: 0; }
     .run-head {
         display: flex;
@@ -84,6 +97,45 @@
         flex-wrap: wrap;
     }
     .run .sep { color: var(--tx-3); font-weight: 400; }
+    /* 官方战绩标题横幅（森空岛战绩页卡头图同源）：深底右图，左侧压暗叠字 */
+    .run-banner {
+        position: relative;
+        height: 56px;
+        margin: -9px -2px 8px -12px;
+        background-color: var(--ink-block);
+        background-size: cover;
+        background-position: right center;
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+        padding: 0 12px 0 14px;
+        border-bottom: 1px solid var(--hairline);
+    }
+    .run-banner::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(
+            90deg, rgba(8, 10, 14, 0.88) 0%,
+            rgba(8, 10, 14, 0.62) 42%, rgba(8, 10, 14, 0) 78%
+        );
+    }
+    .run-banner > * { position: relative; }
+    .run-banner .run-mode { color: #fff; }
+    .run-banner .run-score { color: var(--yellow); font-size: 12px; font-weight: 700; }
+    .run-banner .run-time { color: rgba(255, 255, 255, 0.66); }
+    /* 深底上的状态标签：填充底 + 浅描边，胜黄败灰白（灰透字在深底不可读） */
+    .run-banner .chip { height: 18px; }
+    .run-banner .chip--ghost {
+        background: rgba(0, 0, 0, 0.5);
+        color: #fff;
+        border-color: rgba(255, 255, 255, 0.42);
+    }
+    .run-banner .chip--blue {
+        background: rgba(0, 0, 0, 0.5);
+        color: #7db8dc;
+        border-color: rgba(125, 184, 220, 0.45);
+    }
     .run-chars {
         margin-top: 6px;
         display: flex;
@@ -103,14 +155,177 @@
         flex-wrap: wrap;
     }
     .career b { color: var(--tx-0); font-weight: 700; }
-    /* 期 KV（与 ark_rogue.html .rogue-kv 同款定高裁切） */
+    /* 官方底图带（App 生涯/全服页同款 careerBg）：深色原画 + 压暗，
+       生涯与全服两个区块分别取竖版原画的不同段（上下裁切） */
+    .band {
+        --band-accent: var(--yellow);
+        position: relative;
+        margin-top: var(--space-4);
+        background-color: var(--ink-block);
+        background-size: cover;
+        background-position: center 22%;
+        border: 1px solid var(--ink-block);
+        padding: 12px 14px 13px;
+    }
+    .band--all {
+        background-position: center 82%;
+        border-top: 2px solid var(--band-accent);
+    }
+    .band::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        /* 压暗留缝：原画轮廓隐约可见（全黑会浪费官方美术的存在感） */
+        background: linear-gradient(
+            180deg, rgba(8, 10, 14, 0.58) 0%, rgba(8, 10, 14, 0.72) 100%
+        );
+    }
+    /* 全服带文字密度更高，稍深一档保读数；与生涯带形成主次 */
+    .band--all::before {
+        background: linear-gradient(
+            180deg, rgba(8, 10, 14, 0.66) 0%, rgba(8, 10, 14, 0.78) 100%
+        );
+    }
+    .band > * { position: relative; }
+    .band-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 8px;
+    }
+    .band-word { display: block; height: 22px; }
+    .band-title {
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: var(--tracking-label);
+        color: #fff;
+    }
+    .band-en {
+        font-family: var(--mono);
+        font-size: 9px;
+        letter-spacing: var(--tracking-micro);
+        color: rgba(255, 255, 255, 0.42);
+    }
+    /* 生涯累计 tiles（深底浅字） */
+    .band-tiles {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 18px;
+        font-family: var(--mono);
+        font-size: 11px;
+        color: rgba(255, 255, 255, 0.72);
+    }
+    .band-tiles b {
+        font-size: 15px;
+        font-weight: 800;
+        color: var(--band-accent);
+        margin-right: 2px;
+    }
+    .band-avatars {
+        margin-top: 9px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex-wrap: wrap;
+    }
+    .band-avatars .aicon { box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.45); }
+    .band-avatars .wall-hint { color: rgba(255, 255, 255, 0.62); }
+    /* 全服数据：比例条（标签列定宽，轨道与读数列对齐）。轨道用主边线
+       灰（panel-2 与纸底同族太虚，读不出"剩余量"） */
+    .allbar {
+        display: flex;
+        align-items: center;
+        gap: var(--space-3);
+    }
+    .allbar + .allbar { margin-top: 6px; }
+    .allbar-label {
+        flex: 0 0 96px;
+        font-family: var(--mono);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: var(--tracking-micro);
+        color: var(--tx-1);
+        white-space: nowrap;
+    }
+    .allbar .bar {
+        flex: 1;
+        height: 10px;
+        background: var(--line);
+        border-color: var(--line);
+    }
+    .allbar-num {
+        flex: 0 0 48px;
+        font-family: var(--mono);
+        font-variant-numeric: tabular-nums;
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--tx-0);
+        text-align: right;
+        white-space: nowrap;
+    }
+    /* 深底带内的比例条 / chips / 干员组配色覆盖 */
+    .band .allbar-label { color: rgba(255, 255, 255, 0.82); }
+    .band .allbar .bar {
+        background: rgba(255, 255, 255, 0.16);
+        border-color: rgba(255, 255, 255, 0.1);
+    }
+    .band .allbar .bar > i { background: var(--band-accent); }
+    .band .allbar-num { color: var(--band-accent); }
+    .band .chip {
+        background: rgba(255, 255, 255, 0.1);
+        border-color: rgba(255, 255, 255, 0.38);
+        color: #fff;
+    }
+    .band .chip--ink {
+        background: var(--band-accent);
+        border-color: transparent;
+        color: var(--ink-block);
+        font-weight: 700;
+    }
+    .band .allchar-label { color: rgba(255, 255, 255, 0.66); }
+    .band .allchar-name { color: var(--band-accent); }
+    .band .allchars { margin-top: var(--space-3); }
+    /* 全服干员：头像 + 职业两行成组（头像与文字的归属不断裂） */
+    .allchar {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+    }
+    .allchar .aicon { flex: 0 0 auto; }
+    .allchar-text {
+        display: flex;
+        flex-direction: column;
+        gap: 1px;
+        font-family: var(--mono);
+        line-height: 1.2;
+    }
+    .allchar-label {
+        font-size: 9px;
+        letter-spacing: var(--tracking-micro);
+        color: var(--tx-3);
+    }
+    .allchar-name {
+        font-size: 11px;
+        font-weight: 700;
+        color: var(--tx-0);
+    }
+    .allchars {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px 16px;
+        margin-top: var(--space-3);
+    }
+    /* 期 KV（与 ark_rogue.html .rogue-kv 同款定高裁切）；底部黄色收边把
+       官方原画锚进版式（深色照片块与纸底的过渡由色带承担）。深色图自定
+       边界，不加发丝框——侧边框会在黄带上沿留 1px 浅色接缝 */
     .rogue-kv {
         display: block;
         width: 100%;
-        height: 108px;
+        height: 88px;
         object-fit: cover;
         object-position: center 30%;
-        border: 1px solid var(--hairline);
+        border: 0;
+        border-bottom: 3px solid var(--yellow);
         margin-top: var(--space-4);
     }
 </style>
@@ -172,6 +387,30 @@
         </div>
         {% endif %}
 
+        {% if career_band and (games or nodes or relics or fav_chars) %}
+        {# 官方生涯带：App「个人生涯」页同款底图（careerBg）+ 官方标题字 #}
+        <div class="band" style="background-image: url('{{ career_band }}'); --band-accent: {{ theme_accent }};">
+            <div class="band-head">
+                {% if career_title %}<img class="band-word" src="{{ career_title }}" alt="个人生涯">{% else %}<span class="band-title">个人生涯</span>{% endif %}
+                <span class="band-en">CAREER</span>
+            </div>
+            <div class="band-tiles">
+                {% if games %}<span><b>{{ games }}</b>探索</span>{% endif %}
+                {% if nodes %}<span><b>{{ nodes }}</b>节点</span>{% endif %}
+                {% if relics %}<span><b>{{ relics }}</b>藏品</span>{% endif %}
+                {% if invest %}<span><b>{{ invest }}</b>投资</span>{% endif %}
+                {% if endings_total %}<span><b>{{ endings_total }}</b>结局</span>{% endif %}
+            </div>
+            {% if fav_chars %}
+            <div class="band-avatars">
+                {% for c in fav_chars %}
+                <span class="aicon aicon--md" title="{{ c.name }}">{% if c.avatar %}<img src="{{ c.avatar }}" alt="{{ c.name }}">{% endif %}</span>
+                {% endfor %}
+                <span class="wall-hint">常用干员 // MOST USED</span>
+            </div>
+            {% endif %}
+        </div>
+        {% else %}
         {% if games or nodes or relics %}
         <div class="career">
             <span>生涯 CAREER</span>
@@ -190,16 +429,21 @@
             <span class="wall-hint">常用干员 // MOST USED</span>
         </div>
         {% endif %}
+        {% endif %}
 
-        {% macro run_block(r) %}
-        <div class="run{% if r.success %} run--win{% endif %}">
-            <div class="run-head">
-                {% if r.success %}<span class="chip chip--yellow" style="height: 18px;">通关</span>{% else %}<span class="chip chip--ghost" style="height: 18px;">失败</span>{% endif %}
-                <span class="run-mode">{% if r.mode %}{{ r.mode }}·{% endif %}N{{ r.mode_grade }}</span>
-                <span class="run-score">得分 {{ r.score }}</span>
-                {% for tag in r.tags %}<span class="chip chip--blue" style="height: 16px; font-size: 9px;">{{ tag }}</span>{% endfor %}
-                <span class="run-time">#{{ r.index }} · {{ r.time }}</span>
-            </div>
+        {% macro run_head_inner(r) %}
+        {% if r.success %}<span class="chip chip--yellow" style="height: 18px;">通关</span>{% else %}<span class="chip chip--ghost" style="height: 18px;">失败</span>{% endif %}
+        <span class="run-mode">{% if r.mode %}{{ r.mode }}·{% endif %}N{{ r.mode_grade }}</span>
+        <span class="run-score">得分 {{ r.score }}</span>
+        {% for tag in r.tags %}<span class="chip chip--blue" style="height: 16px; font-size: 9px;">{{ tag }}</span>{% endfor %}
+        <span class="run-time">#{{ r.index }} · {{ r.time }}</span>
+        {% endmacro %}{% macro run_block(r) %}
+        <div class="run{% if r.success %} run--win{% endif %}{% if r.title_banner %} run--art{% endif %}">
+            {% if r.title_banner %}
+            <div class="run-banner" style="background-image: url('{{ r.title_banner }}')">{{ run_head_inner(r) }}</div>
+            {% else %}
+            <div class="run-head">{{ run_head_inner(r) }}</div>
+            {% endif %}
             <div class="run-sub">
                 {% if r.band %}<span>{{ r.band }}</span>{% endif %}
                 {% if r.ending %}<span class="sep">·</span><span>{{ r.ending }}</span>
@@ -249,6 +493,62 @@
         <div class="rows" style="margin-top: 0; border-top: 0;">
             {% for r in favour_records %}{{ run_block(r) }}{% endfor %}
         </div>
+        {% endif %}
+
+        {% macro all_body() %}
+        {% if all_data.endings %}
+        <div style="margin-top: var(--space-3);">
+            {% for e in all_data.endings %}
+            <div class="allbar">
+                <span class="allbar-label">通关 {{ e.count }} 个结局</span>
+                <div class="bar"><i style="width: {{ e.width }}%;"></i></div>
+                <span class="allbar-num">{{ '%g' | format(e.pct) }}%</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% if all_data.tools %}
+        <div class="chip-flow" style="margin-top: var(--space-4);">
+            <span class="chip chip--ink">最常用战术道具</span>
+            {% for t in all_data.tools %}<span class="chip">{{ t }}</span>{% endfor %}
+        </div>
+        {% endif %}
+        {% if all_data.relics %}
+        <div class="chip-flow" style="margin-top: var(--space-3);">
+            <span class="chip chip--ink">最常用收藏品</span>
+            {% for t in all_data.relics %}<span class="chip">{{ t }}</span>{% endfor %}
+        </div>
+        {% endif %}
+        {% if all_data.chars %}
+        <div class="allchars">
+            {% for c in all_data.chars %}
+            <span class="allchar">
+                <span class="aicon aicon--md" title="{{ c.label }} {{ c.char.name }}">{% if c.char.avatar %}<img src="{{ c.char.avatar }}" alt="{{ c.char.name }}">{% endif %}</span>
+                <span class="allchar-text">
+                    <span class="allchar-label">{{ c.label }}</span>
+                    <span class="allchar-name">{{ c.char.name }}</span>
+                </span>
+            </span>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% endmacro %}{% if all_data %}
+        {% if career_band %}
+        {# 官方全服带：App「全服数据」页同款底图（与生涯页共用 careerBg，取下段裁切） #}
+        <div class="band band--all" style="background-image: url('{{ career_band }}'); --band-accent: {{ theme_accent }};">
+            <div class="band-head">
+                <span class="band-title">全服数据</span>
+                <span class="band-en">SERVER-WIDE</span>
+            </div>
+            {{ all_body() }}
+        </div>
+        {% else %}
+        <div class="sect" style="margin-top: var(--space-4);">
+            <span class="sect-label bk">全服数据</span>
+            <span class="sect-en">SERVER-WIDE</span>
+        </div>
+        {{ all_body() }}
+        {% endif %}
         {% endif %}
 
         <div class="foot">
