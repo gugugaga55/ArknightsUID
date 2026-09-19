@@ -257,11 +257,13 @@ def _run_row(run, index: int) -> dict:
 
 
 async def _fill_record_avatars(context: dict) -> None:
-    """常用干员 + 各战绩阵容头像 b64 内嵌（并发受限，失败空串降级）。"""
+    """常用干员 + 全服干员 + 各战绩阵容头像 b64 内嵌（并发受限，失败空串降级）。"""
     from ArknightsUID.utils.player.context import char_avatar_b64
 
     # (char dict) 打平成任务清单，统一回填 avatar 键
     char_slots: list[dict] = list(context.get("fav_chars") or [])
+    for slot in (context.get("all_data") or {}).get("chars") or []:
+        char_slots.append(slot["char"])
     for row in (context.get("records") or []) + (context.get("favour_records") or []):
         char_slots.extend(row.get("chars") or [])
     if not char_slots:
@@ -276,19 +278,93 @@ async def _fill_record_avatars(context: dict) -> None:
         slot["avatar"] = avatar if isinstance(avatar, str) else ""
 
 
+async def _skland_record_assets(topic_id: str) -> dict[str, str]:
+    """战绩卡的官方装饰图（App「战绩查询」页同源，bbs.hycdn.cn CDN）。
+
+    profileBg 期横幅（topics[].pic 缺失时的兜底）、historyCardTitleSuccess/Fail
+    每条战绩的通关/失败标题横幅、careerBg 生涯/全服页底图（App 两个 Tab
+    共用同一张竖版原画）、profileTitle 生涯页官方标题字。全部失败返回
+    空 dict（模板按无图降级）。
+    """
+    if not topic_id:
+        return {}
+    from ArknightsUID.utils.rogue.skland_assets import skland_asset_b64
+
+    from ArknightsUID.utils.image import gather_b64
+
+    keys = (
+        "profileBg",
+        "historyCardTitleSuccess",
+        "historyCardTitleFail",
+        "careerBg",
+        "profileTitle",
+    )
+    values = await gather_b64(
+        lambda pair: skland_asset_b64(pair[0], pair[1]),  # type: ignore[arg-type,return-value]
+        [(topic_id, key) for key in keys],
+    )
+    return {
+        key: value if isinstance(value, str) else ""
+        for key, value in zip(keys, values)
+    }
+
+
+def _profession_label(code: str) -> str:
+    """职业代码 → 中文（未知代码原样返回）。"""
+    from ArknightsUID.utils.player.parse import PROFESSION_NAMES
+
+    return PROFESSION_NAMES.get(code, code)
+
+
+def _all_data_rows(stats: RogueTopicStats) -> dict:
+    """全服数据 → 战绩卡展示行（未开放/无数据返回空 dict，模板整体跳过）。
+
+    只取各期公共契约（结局比例/战术道具/收藏品/分职业干员）；期专属趣味
+    计数（骰点/烛火/佣兵收入等）结构逐期不同，不进稳定展示。
+    """
+    if not stats.all_open:
+        return {}
+    rows: dict = {
+        # 比例读数统一一位小数（52.31 → 52.3），卡片与文本回退同口径
+        "endings": [
+            {"count": count, "pct": round(pct, 1), "width": min(round(pct, 1), 100.0)}
+            for count, pct in stats.all_endings[:5]
+        ],
+        "tools": stats.all_tools,
+        "relics": stats.all_relics,
+        "chars": [
+            {
+                "label": _profession_label(c.profession) if c.profession else "",
+                "char": {
+                    "name": c.name,
+                    "char_id": c.char_id,
+                    "avatar": "",
+                },
+            }
+            for c in stats.all_chars
+        ],
+    }
+    if not any((rows["endings"], rows["tools"], rows["relics"], rows["chars"])):
+        return {}
+    return rows
+
+
 async def _build_rogue_records_context(
     stats: RogueTopicStats, theme_display: str, shown_uid: str
 ) -> dict:
     """战绩解析结果 → ark_rogue_record.html 渲染上下文。"""
     theme_name = stats.topic_name or theme_display or "集成战略"
+    assets = await _skland_record_assets(stats.topic_id)
+    from ArknightsUID.utils.rogue.skland_assets import skland_topic_accent
     banner = ""
     try:
         from ArknightsUID.utils.prts.client import activity_banner_urls
         from ArknightsUID.utils.render import get_image_b64_with_cache
         from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
 
-        # 横幅优先复用森空岛自绘图（响应 topics[].pic，森空岛 CDN 托管，
-        # 与 App 期切换页同图）；缺失/下载失败再退 PRTS 主题页标题图
+        # 横幅优先复用森空岛自绘图：topics[].pic（期切换页图）→ 官方生涯页
+        # profileBg（assets 里已是下载缓存后的 b64，不再二次下载）；两者都
+        # 缺失/失败再退 PRTS 主题页标题图
         if stats.topic_pic.startswith(("http://", "https://")):
             try:
                 banner = await get_image_b64_with_cache(
@@ -296,6 +372,8 @@ async def _build_rogue_records_context(
                 )
             except Exception:
                 banner = ""
+        if not banner:
+            banner = assets.get("profileBg", "")
         if not banner:
             url = (await activity_banner_urls([theme_name])).get(theme_name, "")
             if url:
@@ -306,6 +384,15 @@ async def _build_rogue_records_context(
         from gsuid_core.logger import logger
 
         logger.debug("[ArknightsUID] 肉鸽战绩主题图获取失败", exc_info=True)
+
+    win_banner = assets.get("historyCardTitleSuccess", "")
+    fail_banner = assets.get("historyCardTitleFail", "")
+
+    def _run_row_wrapped(run, index: int) -> dict:
+        row = _run_row(run, index)
+        # 官方通关/失败标题横幅（App 每条战绩卡头图同源；缺图时模板回退字条）
+        row["title_banner"] = win_banner if run.success else fail_banner
+        return row
 
     return {
         "name": stats.player_name or "博士",
@@ -335,13 +422,20 @@ async def _build_rogue_records_context(
             for c in stats.fav_chars[:_FAV_CHARS_LIMIT]
         ],
         "records": [
-            _run_row(r, i + 1) for i, r in enumerate(stats.records[:_RECORD_CARD_LIMIT])
+            _run_row_wrapped(r, i + 1)
+            for i, r in enumerate(stats.records[:_RECORD_CARD_LIMIT])
         ],
         "favour_records": [
-            _run_row(r, i + 1)
+            _run_row_wrapped(r, i + 1)
             for i, r in enumerate(stats.favour_records[:_RECORD_CARD_LIMIT])
         ],
         "record_total": len(stats.records),
+        "all_data": _all_data_rows(stats),
+        # 官方生涯/全服页底图与标题字（App 两 Tab 共用 careerBg；缺图时
+        # 模板回退浅色终端版式）+ 官方主题强调色（深色带内数字/进度条）
+        "career_band": assets.get("careerBg", ""),
+        "career_title": assets.get("profileTitle", ""),
+        "theme_accent": skland_topic_accent(stats.topic_id),
         "version": ArknightsUID_version,
     }
 
@@ -407,6 +501,26 @@ def _format_rogue_records(
         lines.append("—— 收藏战绩 ——")
         for r in stats.favour_records[:5]:
             lines.append(_line(r))
+    if stats.all_open:
+        lines.append("—— 全服数据 ——")
+        if stats.all_endings:
+            # 读数一位小数（与卡片同口径）
+            ratio = " / ".join(
+                f"{count}个 {round(pct, 1):g}%" for count, pct in stats.all_endings[:5]
+            )
+            lines.append(f"通关结局比例：{ratio}")
+        if stats.all_tools:
+            lines.append("最常用战术道具：" + "、".join(stats.all_tools))
+        if stats.all_relics:
+            lines.append("最常用收藏品：" + "、".join(stats.all_relics))
+        if stats.all_chars:
+            picks = "、".join(
+                f"{c.name}（{_profession_label(c.profession)}）"
+                for c in stats.all_chars
+                if c.name
+            )
+            if picks:
+                lines.append("出场率最高干员：" + picks)
     other = [
         str(t.get("short") or t.get("name"))
         for t in stats.topics
@@ -1184,7 +1298,7 @@ async def _build_run_detail_context(
         return f"第 {run_index} 局超出范围（{kind}战绩共 {len(pool)} 条）。"
     run = pool[run_index - 1]
 
-    # 主题 KV（与战绩卡同源）
+    # 主题 KV（与战绩卡同源：topics[].pic → 官方 profileBg → PRTS）
     theme_name = stats.topic_name or theme_display or "集成战略"
     banner = ""
     try:
@@ -1192,11 +1306,23 @@ async def _build_run_detail_context(
         from ArknightsUID.utils.render import get_image_b64_with_cache
         from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
 
-        url = (await activity_banner_urls([theme_name])).get(theme_name, "")
-        if url:
-            banner = await get_image_b64_with_cache(
-                url, CACHE_PATH / "rogue_theme", quality=82
-            )
+        if stats.topic_pic.startswith(("http://", "https://")):
+            try:
+                banner = await get_image_b64_with_cache(
+                    stats.topic_pic, CACHE_PATH / "rogue_theme", quality=82
+                )
+            except Exception:
+                banner = ""
+        if not banner:
+            from ArknightsUID.utils.rogue.skland_assets import skland_asset_b64
+
+            banner = await skland_asset_b64(stats.topic_id, "profileBg")
+        if not banner:
+            url = (await activity_banner_urls([theme_name])).get(theme_name, "")
+            if url:
+                banner = await get_image_b64_with_cache(
+                    url, CACHE_PATH / "rogue_theme", quality=82
+                )
     except Exception:
         from gsuid_core.logger import logger
 

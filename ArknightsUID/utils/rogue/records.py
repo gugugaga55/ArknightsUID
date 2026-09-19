@@ -1,10 +1,22 @@
 """肉鸽战绩（森空岛 App「战绩查询」页）解析器。
 
 响应结构参考社区 nonebot-plugin-skland 的 RogueData schema（生产实测）：
-data.topics     主题列表（id=rogue_1..rogue_6，isSelected 标记当前期）
+data.topics     主题列表（id=rogue_1..rogue_6，isSelected 标记当前期，
+                allOpenTs 全服数据开放时间戳）
 data.history    当期战绩（mode/modeGrade 最高达成、score 最高分、bpLevel 声望、
                 medal 奖章、chars 常用干员、records 最近战绩、favourRecords 收藏）
+data.career     个人生涯累计（game/node/relic/invest + clearInfo 最高达成）
 data.gameUserInfo  玩家名/等级/头像
+data.all        全服数据（App「全服数据」页，rogue_2 起开放；开放判定 =
+                currentTs >= 选中主题 allOpenTs 且 all 非空）：
+                endings {通关结局数: 玩家比例%}（按值顺序，App 端 Ky 组件
+                逐值渲染「通关 N 个结局」比例条）
+                activeTool [{id,name}] 最常用战术道具 top3
+                relic [{id,name}]     最常用收藏品 top5
+                character {职业: {id,name,rarity,profession}} 分职业出场率最高干员
+                （另有 persuade/dice/candle 等每期专属趣味计数，结构逐期不同，
+                不纳入稳定契约）
+data.currentTs  服务器当前时间戳（秒；allOpenTs 判定用）
 单条战绩（Record）：mode/modeGrade 难度、success 通关、score 得分、band 分队、
 lastStage 止步关卡、endingText 结局、startTs/endTs 起止时间戳（秒，字符串）、
 lastChars 结算阵容。
@@ -136,6 +148,15 @@ class RogueTopicStats:
     records: list[RogueRun] = field(default_factory=list)
     favour_records: list[RogueRun] = field(default_factory=list)
     item_names: dict[str, str] = field(default_factory=dict)  # itemInfo id → 藏品名
+    # 全服数据（App「全服数据」页；rogue_2 起开放，all_open=False 时全空）
+    all_open: bool = False  # currentTs >= allOpenTs 且 all 非空
+    # (通关结局数, 玩家比例%) 按接口值顺序（App 端逐值渲染比例条）
+    all_endings: list[tuple[int, float]] = field(default_factory=list)
+    all_tools: list[str] = field(default_factory=list)  # 最常用战术道具 top3
+    all_relics: list[str] = field(default_factory=list)  # 最常用收藏品 top5
+    all_chars: list[RogueRunChar] = field(
+        default_factory=list
+    )  # 分职业出场率最高干员
 
 
 def _parse_char(item: Any) -> RogueRunChar | None:
@@ -237,6 +258,64 @@ def _parse_run(item: Any) -> RogueRun | None:
     )
 
 
+def _to_float(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _parse_all_block(data: dict, topic_all_open_ts: int) -> dict:
+    """解析全服数据块（data.all + 开放判定）→ RogueTopicStats 的 all_* 字段值。
+
+    开放判定对齐 H5 端（record model getBrief）：currentTs >= 选中主题
+    allOpenTs 且 all 非空，否则视为未开放（App 端 Tab 不可点）。
+    """
+    all_block = data.get("all")
+    if not isinstance(all_block, dict) or not all_block:
+        return {}
+    current_ts = _to_int(data.get("currentTs"))
+    if topic_all_open_ts and current_ts and current_ts < topic_all_open_ts:
+        return {}
+
+    # 通关结局比例：按值顺序逐条（index+1 = 通关结局数），对齐 App Ky 组件
+    endings: list[tuple[int, float]] = []
+    raw_endings = all_block.get("endings")
+    if isinstance(raw_endings, dict):
+        for i, value in enumerate(raw_endings.values()):
+            pct = _to_float(value)
+            if pct > 0:
+                endings.append((i + 1, pct))
+
+    def _names(key: str, limit: int) -> list[str]:
+        out: list[str] = []
+        for item in all_block.get(key) or []:
+            if isinstance(item, dict) and item.get("name"):
+                out.append(str(item["name"]))
+            elif isinstance(item, str) and item:
+                out.append(item)
+            if len(out) >= limit:
+                break
+        return out
+
+    # 分职业出场率最高干员：{职业代码: 干员}，保持接口顺序
+    # （character 键存在但非 dict 时整体跳过——get 默认值只兜缺键，
+    # 拦不住显式 null，先 isinstance 再取 values）
+    raw_chars = all_block.get("character")
+    chars = [
+        c
+        for c in (_parse_char(value) for value in raw_chars.values())
+        if c
+    ] if isinstance(raw_chars, dict) else []
+    return {
+        "all_open": True,
+        "all_endings": endings,
+        "all_tools": _names("activeTool", 3),
+        "all_relics": _names("relic", 5),
+        "all_chars": chars,
+    }
+
+
 def parse_rogue_records(data: Any) -> RogueTopicStats | None:
     """解析战绩端点 data 字段；结构完全缺失（非 dict/无 history）返回 None。"""
     if not isinstance(data, dict) or not data:
@@ -247,6 +326,7 @@ def parse_rogue_records(data: Any) -> RogueTopicStats | None:
 
     stats = RogueTopicStats()
     topics = data.get("topics") or []
+    topic_all_open_ts = 0
     for topic in topics:
         if not isinstance(topic, dict):
             continue
@@ -263,6 +343,7 @@ def parse_rogue_records(data: Any) -> RogueTopicStats | None:
             stats.topic_id = topic_id
             stats.topic_name = _to_str(topic.get("name"))
             stats.topic_pic = _to_str(topic.get("pic"))
+            topic_all_open_ts = _to_int(topic.get("allOpenTs"))
 
     user = data.get("gameUserInfo")
     if isinstance(user, dict):
@@ -307,4 +388,6 @@ def parse_rogue_records(data: Any) -> RogueTopicStats | None:
             for k, v in item_info.items()
             if isinstance(v, dict) and v.get("name")
         }
+    for field_name, value in _parse_all_block(data, topic_all_open_ts).items():
+        setattr(stats, field_name, value)
     return stats
