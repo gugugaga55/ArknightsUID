@@ -207,20 +207,45 @@ def max_difficulty(grades: list[dict]) -> int:
     return max((int(g.get("difficulty", 0)) for g in grades), default=0)
 
 
-def _floor_buff_note(grades: list[dict], difficulty: int) -> str:
-    """≤ difficulty 档的最大每层增益 → 展示文案（层数未知，不折算）。
+def _floor_buff_mods(grades: list[dict], difficulty: int | None, floor: int) -> list[dict]:
+    """每层增益折算为 mods（tomimi floorDifficultyMods 同源）。
 
-    两种数据形态：数字（萨米/萨卡兹 +N%）与 {atk, hp} 逐层乘数
-    （水月/岁/黑流，×1.01 即每层+1%）。
+    官方难度模型里敌人属性随难度缩放的主要来源：标量 floorBuff（萨米/
+    萨卡兹「+N%」）→ ×(1+N)^floor；{atk,hp} 逐层乘数（水月/岁/黑流）
+    → ×乘数^floor。层号从 1 起（第 1 层即 1 次方）。无增益/难度缺省/
+    floor≤0 返回 []（保持基础面板口径）。
     """
+    if difficulty is None or not floor or floor < 0:
+        return []
+    floor_buff: float | dict | None = None
+    for grade in grades:
+        if int(grade.get("difficulty", 0)) > difficulty:
+            continue
+        raw = grade.get("floorBuff")
+        if raw and (floor_buff is None or _buff_size(raw) > _buff_size(floor_buff)):
+            floor_buff = raw
+    if not floor_buff:
+        return []
+    if isinstance(floor_buff, dict):
+        atk = float(floor_buff.get("atk") or 1.0) ** floor
+        hp = float(floor_buff.get("hp") or 1.0) ** floor
+    else:
+        atk = hp = (1.0 + float(floor_buff)) ** floor
+    mods: list[dict] = []
+    if hp != 1.0:
+        mods.append({"key": "hp", "value": hp, "mode": "mul"})
+    if atk != 1.0:
+        mods.append({"key": "atk", "value": atk, "mode": "mul"})
+    return mods
+
+
+def _floor_buff_desc(grades: list[dict], difficulty: int) -> str:
+    """≤ difficulty 档的最大每层增益 → 单层增益描述（不含折算状态）。"""
     floor_buff: float | dict | None = None
     for grade in grades:
         if int(grade.get("difficulty", 0)) <= difficulty:
             raw = grade.get("floorBuff")
-            # 取数值更大的档（档位递增时增益不降，dict 时按 atk 比较）
-            if not raw:
-                continue
-            if floor_buff is None or _buff_size(raw) > _buff_size(floor_buff):
+            if raw and (floor_buff is None or _buff_size(raw) > _buff_size(floor_buff)):
                 floor_buff = raw
     if not floor_buff:
         return ""
@@ -228,10 +253,19 @@ def _floor_buff_note(grades: list[dict], difficulty: int) -> str:
         atk = float(floor_buff.get("atk") or 1.0)
         hp = float(floor_buff.get("hp") or 1.0)
         if atk == hp:
-            return f"每层生命/攻击×{atk:g}（未计入，按层复合）"
-        return f"每层生命×{hp:g}·攻击×{atk:g}（未计入，按层复合）"
-    value = float(floor_buff)
-    return f"每层增益+{value * 100:g}%（未计入，按层复合）"
+            return f"每层生命/攻击×{atk:g}"
+        return f"每层生命×{hp:g}·攻击×{atk:g}"
+    return f"每层增益+{float(floor_buff) * 100:g}%"
+
+
+def _floor_buff_note(grades: list[dict], difficulty: int, applied_floor: int = 0) -> str:
+    """每层增益展示文案；applied_floor>0 表示数值已按该层折算。"""
+    desc = _floor_buff_desc(grades, difficulty)
+    if not desc:
+        return ""
+    if applied_floor > 0:
+        return f"{desc}，已按第{applied_floor}层折算"
+    return f"{desc}（未计入，按层复合）"
 
 
 def _buff_size(raw: Any) -> float:
@@ -250,14 +284,16 @@ def build_panel_at(
     difficulty: int | None,
     *,
     base_block: dict | None = None,
-    extra_effects: list | None = None,
+    extra_effects: list[dict] | None = None,
     extra_label: str = "紧急",
+    floor: int = 0,
 ) -> dict:
     """指定期+难度下的单行精确面板（累积口径与 build_diff_panels 一致）。
 
     与全档表不同：面板 key（生命/攻击/…）折算进数值的同时也进 buffs 列表，
-    让"该难度下这条敌人吃到了什么"一目了然；floorBuff（每层增益）无法在
-    查询时得知层数，以固定文案进 buffs 提示。
+    让"该难度下这条敌人吃到了什么"一目了然。floor 为折算层号（敌人卡
+    无关卡上下文，按 tomimi 惯例传 1；关卡卡传该关出场形态块所在层，
+    跨层关取最深层）；缺省 0 = 层数增益不折算（buffs 里保留提示文案）。
 
     关卡限定查询：base_block 指定出场形态块（关卡 enemies[].level），
     extra_effects 附加该关紧急作战效果（buffs 以「{extra_label}：」前缀标注来源）。
@@ -271,6 +307,7 @@ def build_panel_at(
         mods: list[dict] = []
     else:
         mods = _grade_mods_for_enemy(grades, enemy_key, enemy_types, difficulty)
+        mods.extend(_floor_buff_mods(grades, difficulty, floor))
     extra_mods = _effects_mods_for(extra_effects, enemy_key, enemy_types)
 
     buffs: list[str] = []
@@ -290,10 +327,12 @@ def build_panel_at(
     # 去重面板 key 折算条目（多条同类 mod 保留每条明细，此处只去重文本）
     buffs = list(dict.fromkeys(buffs))
     if difficulty is not None:
-        floor_note = _floor_buff_note(grades, difficulty)
+        floor_note = _floor_buff_note(grades, difficulty, applied_floor=floor)
         if floor_note:
             buffs.append(floor_note)
         label = f"难度{difficulty}"
+        if floor > 0 and _floor_buff_mods(grades, difficulty, floor):
+            label += f"·第{floor}层"
     else:
         label = "基础"
     if noob:
@@ -584,14 +623,18 @@ def stage_panel_rows(
     grades: list[dict],
     difficulty: int | None,
     elite: bool = False,
+    floor: int = 0,
 ) -> list[dict]:
-    """关卡敌人行（含难度/紧急折算后的面板）；库外条目（trap 等）跳过。
+    """关卡敌人行（含难度/紧急/每层增益折算后的面板）；库外条目跳过。
 
     difficulty 为 None 时给基础面板（不折算难度）；elite 时叠加该关
-    紧急作战效果。count：min==max 且 >0 → 固定数，0 → 波次出怪，
-    紧急数量差 → 紧急+N 注记。
+    紧急作战效果；floor 为该关所在层号（关卡卡传 floors 最大值），
+    难度档的每层增益按 (1+N)^floor 复合进生命/攻击（tomimi 同源；
+    缺省 0 = 不折算，兼容无层数上下文的调用）。
+    count：min==max 且 >0 → 固定数，0 → 波次出怪，紧急数量差 → 紧急+N 注记。
     """
     rows: list[dict] = []
+    floor_mods = _floor_buff_mods(grades, difficulty, floor)
     for item in stage.get("enemies") or []:
         key = str(item.get("id") or "")
         entry = db.get(key)
@@ -606,6 +649,7 @@ def stage_panel_rows(
         mods: list[dict] = []
         if difficulty is not None:
             mods.extend(_grade_mods_for_enemy(grades, key, types, difficulty))
+        mods.extend(floor_mods)
         elite_mods: list[dict] = []
         if elite:
             elite_mods = _effects_mods_for(stage.get("elite_mods"), key, types)
@@ -943,12 +987,13 @@ def _stats_with_mods(
 
 
 def build_diff_panels(
-    entry: dict, grades: list[dict], max_rows: int = 10
+    entry: dict, grades: list[dict], max_rows: int = 10, floor: int = 0
 ) -> list[dict]:
     """难度面板行：[{grade, stats: {hp/atk/def/res}, notes: [str]}]。
 
     行 = 新手档(0/1/2) + 有累积变化的高档；数值基于形态 0（基础形态）。
-    非面板字段（如 dmg_res/aspd）以文本 note 保留。
+    非面板字段（如 dmg_res/aspd）以文本 note 保留。floor 为折算层号
+    （敌人卡无关卡上下文，按 tomimi 惯例传 1）；缺省 0 = 不折算。
     """
     stats_blocks = entry.get("stats") or []
     if not stats_blocks:
@@ -958,10 +1003,16 @@ def build_diff_panels(
     enemy_types = list(entry.get("type") or [])
 
     # 有效果的难度档（面板行候选）+ 新手档 0/1/2（HP 削减，均有信息量）
+    # + 有每层增益的档（floor 折算后数值逐档递增，各档都有信息量）
     effect_grades = sorted(
         {int(g.get("difficulty", 0)) for g in grades if g.get("effects")}
     )
-    row_grades = sorted({0, 1, 2} | set(effect_grades))
+    floor_grades = sorted(
+        {int(g.get("difficulty", 0)) for g in grades if g.get("floorBuff")}
+        if floor > 0
+        else set()
+    )
+    row_grades = sorted({0, 1, 2} | set(effect_grades) | set(floor_grades))
     if len(row_grades) > max_rows:
         # 超限时保留新手档 + 最近的高档（靠近满难度最有参考价值）
         head = [g for g in row_grades if g <= 2]
@@ -971,6 +1022,7 @@ def build_diff_panels(
     rows: list[dict] = []
     for grade in row_grades:
         mods = _grade_mods_for_enemy(grades, enemy_key, enemy_types, grade)
+        mods.extend(_floor_buff_mods(grades, grade, floor))
         # 新手档 HP 削减（作为 final 乘数）
         noob = _NOOB_HP_CUT.get(grade)
         stats: dict[str, int] = {}
