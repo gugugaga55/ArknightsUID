@@ -427,21 +427,21 @@ class RemoveLoginMissingTest(unittest.TestCase):
         self.assertEqual(asyncio.run(run()), 0)
 
 
-class DailyCardDivZeroTest(unittest.TestCase):
+class StatusCardDivZeroTest(unittest.TestCase):
     def test_zero_total_renders_without_crash(self) -> None:
         """weekly/campaign total=0（字段缺失）不得让整卡 ZeroDivisionError。"""
-        from ArknightsUID.utils.player.context import build_daily_context
+        from ArknightsUID.utils.player.context import build_status_context
         from ArknightsUID.utils.player.parse import PlayerData
         from ArknightsUID.utils.render import ark_templates
 
         d = PlayerData(
-            name="刀客塔", daily_done=2, daily_total=3,
+            name="刀客塔", ap_max=135, daily_done=2, daily_total=3,
             weekly_total=0, campaign_total=0,
         )
-        ctx = build_daily_context(d, "v0")
+        ctx = build_status_context(d, "v0")
         self.assertIsNotNone(ctx)
-        html = ark_templates.get_template("ark_daily.html").render(
-            font_css_url="x", **ctx
+        html = ark_templates.get_template("ark_status.html").render(
+            font_css_url="x", bg="", bg_label="", **ctx
         )
         self.assertIn("DAILY", html)
 

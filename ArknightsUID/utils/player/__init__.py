@@ -19,7 +19,6 @@ from .context import (
     build_campaign_context,
     build_char_card_context,
     build_char_stat_context,
-    build_daily_context,
     build_skin_context,
     build_status_context,
 )
@@ -54,7 +53,6 @@ __all__ = [
     "build_campaign_context",
     "build_char_card_context",
     "build_char_stat_context",
-    "build_daily_context",
     "build_skin_context",
     "build_status_context",
     "compute_ap_current",

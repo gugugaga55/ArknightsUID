@@ -109,3 +109,154 @@ async def unset_hide_uid(bot: Bot, ev: Event) -> None:
         )
         msg = f"{GAME_TITLE} 设置失败，请稍后重试。"
     await _send_text(bot, ev, msg)
+
+
+# ---------------------------------------------------------------------------
+# 状态卡背景图（ark设置背景 / ark设置全局背景）：EndUID「体力背景」同思路。
+# 附图发送即设；「重置」清除。用户级按 bot+user 存储，全局级仅 superuser
+# 可设（SV pm=1 注册级权限），优先级：用户上传/干员立绘 → 全局 → 随机立绘。
+# 干员立绘：`ark设置背景 阿米娅`（跟随游戏内当前皮肤）或
+# `ark设置背景 阿米娅 报童`（钉死指定时装皮肤），与上传图同槽位后写覆盖。
+# ---------------------------------------------------------------------------
+def _event_image_urls(ev: Event) -> list[str]:
+    """消息里的图片 URL（公招截图同口径：image_list 优先，回退 image）。"""
+    return [
+        url
+        for url in (ev.image_list or ([ev.image] if ev.image else []))
+        if isinstance(url, str) and url.strip()
+    ]
+
+
+async def _save_bg_reply(bot: Bot, ev: Event, path, label: str, op_path=None) -> None:
+    from ArknightsUID.utils.background import delete_bg, save_bg_from_url
+
+    text = (ev.text or "").strip()
+    if text in ("重置", "清除", "删除"):
+        ok = delete_bg(path)
+        if op_path is not None:
+            # 用户槽位：干员立绘偏好与上传图同清
+            ok = delete_bg(op_path) or ok
+        await _send_text(
+            bot,
+            ev,
+            f"{GAME_TITLE} 已清除{label}背景。"
+            if ok
+            else f"{GAME_TITLE} 没有已设置的{label}背景。",
+        )
+        return
+
+    urls = _event_image_urls(ev)
+    if not urls:
+        await _send_text(
+            bot,
+            ev,
+            f"用法：ark设置{label}背景 + 图片（与图片同条消息发送）；"
+            "ark设置背景 阿米娅 可用干员皮肤立绘（追加皮肤名可指定时装）；"
+            f"ark设置{label}背景 重置 可恢复默认。",
+        )
+        return
+    if await save_bg_from_url(urls[0], path):
+        if op_path is not None:
+            # 同槽位后写覆盖：上传图生效时清掉干员立绘偏好
+            delete_bg(op_path)
+        await _send_text(
+            bot, ev, f"{GAME_TITLE} {label}背景已更新（ark理智 / ark日常 生效）。"
+        )
+    else:
+        await _send_text(bot, ev, f"{GAME_TITLE} 背景保存失败（仅支持图片）。")
+
+
+async def _set_operator_bg(bot: Bot, ev: Event, text: str) -> None:
+    """ark设置背景 <干员名> [皮肤名]：把状态卡背景设为干员（皮肤）立绘。"""
+    from ArknightsUID.utils.background import save_op_bg
+    from ArknightsUID.utils.gamedata.charinfo import load_char_index, resolve_query
+    from ArknightsUID.utils.gamedata.skins import load_skin_index, match_skin
+
+    # 皮肤名拆分：先整体当干员名解析（「纯烬艾雅法拉」这类全名优先），
+    # 不中再按最后一个 空格/·/全角空格 拆成 干员 + 皮肤名
+    query, skin_query = text, ""
+    res = await resolve_query(query, bot_id=ev.bot_id, user_id=ev.user_id)
+    if not res.unique:
+        for sep in (" ", "·", "　"):
+            if sep in text:
+                head, tail = text.rsplit(sep, 1)
+                res = await resolve_query(
+                    head.strip(), bot_id=ev.bot_id, user_id=ev.user_id
+                )
+                if res.unique:
+                    query, skin_query = head.strip(), tail.strip()
+                break
+
+    if not res.unique:
+        if res.candidates:
+            await _send_text(bot, ev, f"{GAME_TITLE} {res.ambiguous_message(query)}")
+        elif not res.index_ready:
+            await _send_text(bot, ev, f"{GAME_TITLE} 干员数据未就绪，请稍后重试。")
+        else:
+            await _send_text(bot, ev, f"{GAME_TITLE} 没有找到干员「{query}」。")
+        return
+
+    name = res.name or query
+    skin_id, label = "", name
+    if skin_query:
+        catalog = await load_skin_index()
+        skin_id, skin_name, all_names = match_skin(catalog, res.char_id, skin_query)
+        if not skin_id:
+            options = "、".join(all_names) if all_names else "（该干员没有时装皮肤）"
+            await _send_text(
+                bot,
+                ev,
+                f"{GAME_TITLE} 没有找到{name}的皮肤「{skin_query}」。可选：{options}",
+            )
+            return
+        label = f"{name}·{skin_name}"
+
+    rarity = 0
+    index = await load_char_index()
+    entry = index.get(res.char_id)
+    if entry:
+        rarity = int(entry.get("rarity") or 0)
+
+    save_op_bg(
+        ev.bot_id,
+        ev.user_id,
+        char_id=res.char_id,
+        skin_id=skin_id,
+        name=label,
+        rarity=rarity,
+    )
+    await _send_text(
+        bot,
+        ev,
+        f"{GAME_TITLE} 状态卡背景已设置为 {label}"
+        "（ark理智 / ark日常 生效；ark设置背景 重置 可恢复）。",
+    )
+
+
+@user_config_sv.on_command(("设置背景", "设置状态背景"), block=True)
+async def set_user_background(bot: Bot, ev: Event) -> None:
+    """用户级状态卡背景（仅影响自己）：附图设图片，写干员名设皮肤立绘。"""
+    from ArknightsUID.utils.background import user_bg_path, user_op_bg_path
+
+    text = (ev.text or "").strip()
+    if text and text not in ("重置", "清除", "删除") and not _event_image_urls(ev):
+        await _set_operator_bg(bot, ev, text)
+        return
+    await _save_bg_reply(
+        bot,
+        ev,
+        user_bg_path(ev.bot_id, ev.user_id),
+        "",
+        op_path=user_op_bg_path(ev.bot_id, ev.user_id),
+    )
+
+
+admin_config_sv = SV("ArknightsUID管理员配置", priority=5, pm=1)
+
+
+@admin_config_sv.on_command(("设置全局背景", "设置全局状态背景"), block=True)
+async def set_admin_background(bot: Bot, ev: Event) -> None:
+    """全局默认状态卡背景（superuser；未设个人背景的用户生效）。"""
+    from ArknightsUID.utils.background import admin_bg_path
+
+    await _save_bg_reply(bot, ev, admin_bg_path(ev.bot_id), "全局")

@@ -199,12 +199,18 @@ def _mask_uid(uid_masked: str, raw_uid: str) -> str:
 def build_status_context(
     data: PlayerData, version: str, uid_masked: str = "", now: float | None = None
 ) -> dict[str, Any] | None:
-    """ark_status.html（#2 便签）。需要昵称与理智。"""
+    """ark_status.html（#2 便签 · 理智+日常合并卡）。需要昵称与理智。
+
+    ark理智 / ark日常 同卡输出：理智为主线，日常/周常有任务数据才展示
+    （`has_routine` 控制整块）。
+    """
     if not data.name or data.ap_max <= 0:
         return None
     now = time.time() if now is None else now
     ap_current = effective_ap(data, now)
     full_at = data.ap_complete_recovery_time
+    daily_done = min(data.daily_done, data.daily_total)
+    weekly_done = min(data.weekly_done, data.weekly_total)
     return {
         "name": data.name,
         "level": data.level,
@@ -215,30 +221,32 @@ def build_status_context(
         "ap_full_at": format_dt(full_at, now) or "已回满",
         "ap_recover_in": format_remaining(full_at, now) or "已回满",
         "reg_days": data.register_days(now),
+        # 注册日期（2023年5月12日 形态；无注册时间戳为空串）
+        "register_date": (
+            datetime.fromtimestamp(data.register_ts).strftime("%Y年%-m月%-d日")
+            if data.register_ts > 0
+            else ""
+        ),
         "chars_total": data.chars_total,
         "campaign_current": data.campaign_current,
         "campaign_total": data.campaign_total,
-        "version": version,
-    }
-
-
-def build_daily_context(
-    data: PlayerData, version: str, uid_masked: str = ""
-) -> dict[str, Any] | None:
-    """ark_daily.html（#3 日常/周常）。需要 routine 任务数据。"""
-    if data.daily_total <= 0 and data.weekly_total <= 0:
-        return None
-    return {
-        "name": data.name,
-        "uid": _mask_uid(uid_masked, data.uid),
-        "daily_done": min(data.daily_done, data.daily_total),
+        # 日常/周常（ark日常 并入后的第二主线；无任务数据整块隐藏）
+        "has_routine": data.daily_total > 0 or data.weekly_total > 0,
+        "daily_done": daily_done,
         "daily_total": data.daily_total,
-        "weekly_done": min(data.weekly_done, data.weekly_total),
+        "daily_pct": (
+            round(daily_done * 100 / data.daily_total) if data.daily_total > 0 else 0
+        ),
+        "weekly_done": weekly_done,
         "weekly_total": data.weekly_total,
-        "campaign_current": data.campaign_current,
-        "campaign_total": data.campaign_total,
+        "weekly_pct": (
+            round(weekly_done * 100 / data.weekly_total)
+            if data.weekly_total > 0
+            else 0
+        ),
         "version": version,
     }
+
 
 
 def build_campaign_context(

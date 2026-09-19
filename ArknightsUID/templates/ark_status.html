@@ -1,80 +1,678 @@
 <!--
-  ark_status.html —— 玩家信息 / 理智卡（#2）
-  设计语言：罗德岛终端（见 ark_base.css 头部注释）
-  上下文：
+  ark_status.html —— 玩家状态卡（#2 · 理智+日常合并卡，HUD 横版 · 罗德岛终端浅色语言）
+
+  版式（设计稿 1000×640，经 transform 缩进 560 渲染视口）：
+    L0 背景氛围带（用户上传图 / 舰桥场景；与其他卡同一「满宽 + 顶锚定」口径；
+      干员立绘不作 L0——portrait 源图是 180×360 不透明半身像，整幅放大必糊）
+    L1 墨色细网格 + L2 纸白纱罩（.container 同款配方：上透下实）
+    L3 干员立绘右置（仅干员立绘背景；在纱罩之上保持全彩，左缘 mask 渐隐）
+    L4 HUD：顶 brand 行 / 左列 标题组+数值卡列 / 底部 用户条+mini 数据盒
+    底缘 4px 黄黑寻访斜纹（终端签名语言，与所有 ark_* 卡一致）
+
+  渲染引擎兼容（takumi 实测约束，勿破坏）：
+    · 伪元素背景不画 → 一切装饰用真实元素（角标三角/菱形水印/加号/斜纹条）
+    · SVG 的 stroke=currentColor 不继承 → 图标色值由 jinja 直接写进 stroke
+    · 不依赖 backdrop-filter / drop-shadow（不生效也不致丑，仅作增强）
+    · 宽卡方案：外层 .container 560×358.4 + 内层 .frame 1000×640
+      transform: scale(.56)（playwright 截图锁定 .container，双引擎同尺寸输出）
+    · 截图无透明通道（JPEG），.frame 必须自带不透明底色
+
+  上下文（数据层契约，勿改键名）：
     name: str            昵称
     level: int           等级
     uid: str             已脱敏 UID
+    bg: str              背景 data URI（空串 = 舰桥场景兜底）
+    bg_label: str        来源标签（「自定义」/「全局」= 上传图；干员名 = 立绘；空 = 兜底）
     ap_current: int      当前理智
     ap_max: int          理智上限
-    ap_pct: int          理智百分比 0-100
-    ap_full_at: str      完全恢复时间（如 "08-14 02:33"）
-    ap_recover_in: str   距完全恢复（如 "3h 12m"）
-    reg_days: int        注册天数
+    ap_pct: int          理智百分比 0-100（>=80 临近回满转红，满 = 红「已回满」）
+    ap_full_at: str      完全恢复时间（如 "08-14 02:33"，已满为「已回满」）
+    ap_recover_in: str   距完全恢复（如 "3h 12m"，已满为「已回满」）
+    reg_days: int        注册天数（备用，本卡不展示）
+    register_date: str   注册日期（备用，本卡不展示——底部条只放等级/干员数）
     chars_total: int     持有干员数
     campaign_current: int  剿灭已得合成玉
-    campaign_total: int    剿灭每周上限
+    campaign_total: int    剿灭每周上限（0 隐藏该卡）
+    has_routine: bool    false 隐藏每日/周常两张数值卡
+    daily_done/total/pct, weekly_done/total/pct: int   每日/周常进度
+    avatar: str          查询者 QQ 头像 data URI（可选；空/缺失 → SVG 菱形标）
     version: str
 -->
 <!DOCTYPE html>
 <html lang="zh-CN">
-<head>{% include "ark_head.html" %}</head>
+<head>{% include "ark_head.html" %}
+<!-- 大数字展示字体 Oswald（Endfield HUD 的修长数字语言）；
+     takumi 不认 CSS @import 但会拉 <link> 样式表（已实测）；
+     加载失败回退 JetBrains Mono，布局不塌 -->
+<link rel="stylesheet" href="https://fonts.loli.net/css2?family=Oswald:wght@500;700&display=swap">
+<style>
+    /* ===== 双引擎同尺寸输出：外层 560 视口 ← 内层 1000×640 设计稿 ===== */
+    body { background: var(--paper); }
+    .container {
+        width: 560px;
+        height: 358.4px;
+        padding: 0;
+        /* 背景图/纱罩由 .frame 内的 L0+L2 分层实现，base 的背景链在此摘除 */
+        background: var(--paper);
+    }
+    /* base 的 ::before 水印/::after 幽灵字由真实元素替代（takumi 不画伪元素） */
+    .container::before,
+    .container::after { content: none; }
+    /* base .mast-meta 的工业条码尾饰在横版 HUD 上与立绘相碰，摘除 */
+    .mast-meta::after { content: none; }
+
+    .frame {
+        position: relative;
+        width: 1000px;
+        height: 640px;
+        overflow: hidden;
+        transform: scale(0.56);
+        transform-origin: top left;
+        background: var(--paper);
+    }
+
+    /* ===== L0 背景氛围带（舰桥场景兜底 / 用户上传图） =====
+       与 .container 的 background-size:100% auto / top center 同口径：
+       满宽、自然比例、顶锚定成顶部氛围带，不做 cover 裁切 */
+    .bg-img {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: auto;
+    }
+
+    /* ===== L1 墨色细网格（HUD 底纹，白纱上可见） ===== */
+    .grid-deco {
+        position: absolute;
+        inset: 0;
+        background-image:
+            linear-gradient(rgba(22, 24, 29, 0.035) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(22, 24, 29, 0.035) 1px, transparent 1px);
+        background-size: 50px 50px;
+    }
+
+    /* ===== L2 纸白纱罩（.container 同款上透下实配方，按 640 高横版等比收紧） ===== */
+    .scrim {
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(180deg,
+            rgba(244, 245, 247, 0.42) 0px,
+            rgba(244, 245, 247, 0.70) 90px,
+            rgba(244, 245, 247, 0.92) 180px,
+            rgba(244, 245, 247, 0.985) 260px,
+            var(--paper) 330px);
+    }
+
+    /* ===== L3 干员立绘（仅干员立绘背景时） =====
+       portrait 源图是不透明半身像（自带画底、无 alpha），不是透明 PNG：
+       不能整幅放大当背景（会糊成色块），而是右侧立绘栏——
+       置于纱罩之上保持全彩清晰，左缘 mask 渐隐溶入纸面 */
+    .char-layer {
+        position: absolute;
+        top: 6px;
+        right: 0;
+        height: 100%;
+        width: auto;
+        z-index: 2;
+        -webkit-mask-image: linear-gradient(to right,
+            transparent 0%, black 30%);
+        mask-image: linear-gradient(to right,
+            transparent 0%, black 30%);
+    }
+
+    /* ===== 右侧菱形水印（真实元素替代 base 伪元素；立绘会盖在其上） ===== */
+    .deco-rh {
+        position: absolute;
+        transform: rotate(45deg);
+        border: 1px solid rgba(22, 24, 29, 0.06);
+        z-index: 1;
+    }
+    .deco-rh.r1 { right: -120px; top: 250px; width: 330px; height: 330px; }
+    .deco-rh.r2 { right: -98px; top: 272px; width: 286px; height: 286px;
+        border-color: rgba(224, 168, 0, 0.10); }
+
+    /* HUD 十字标（真实元素，伪元素在 takumi 不画） */
+    .plus {
+        position: absolute;
+        font-family: var(--mono);
+        font-size: 15px;
+        font-weight: 500;
+        color: rgba(22, 24, 29, 0.28);
+        z-index: 3;
+        line-height: 1;
+    }
+    .plus.p1 { right: 236px; top: 88px; }
+    .plus.p2 { right: 42px; bottom: 128px; }
+
+    /* ===== L4 UI 层 ===== */
+    .ui {
+        position: absolute;
+        inset: 0;
+        z-index: 10;
+        padding: 24px 40px 22px;
+        display: flex;
+        flex-direction: column;
+    }
+
+    /* --- 顶 brand 行（base .mast 的横版移植；base 的分隔线/伪元素黄方块摘除，
+           改由真实元素 .mast-rule/.sq 承担——takumi 不画伪元素背景） --- */
+    .mast {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding-bottom: 0;
+        border-bottom: none;
+    }
+    .mast-brand::before { content: none; }
+    .mast-brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 9px;
+        font-family: var(--mono);
+        font-size: 11px;
+        font-weight: 700;
+        letter-spacing: 0.22em;
+        color: var(--tx-0);
+        text-transform: uppercase;
+        white-space: nowrap;
+        /* 立绘/亮色背景伸到顶行时，纸色光晕保可读 */
+        text-shadow: 0 1px 2px rgba(244, 245, 247, 0.9), 0 0 8px rgba(244, 245, 247, 0.7);
+    }
+    .mast-brand .sq {
+        width: 8px;
+        height: 8px;
+        background: var(--yellow);
+        outline: 1px solid var(--ink-block);
+        outline-offset: -1px;
+    }
+    .mast-brand em {
+        font-style: normal;
+        font-weight: 500;
+        color: var(--tx-1);
+        letter-spacing: 0.14em;
+    }
+    .mast-meta {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        font-family: var(--mono);
+        font-size: 10px;
+        letter-spacing: 0.1em;
+        color: var(--tx-1);
+        white-space: nowrap;
+        text-shadow: 0 1px 2px rgba(244, 245, 247, 0.9), 0 0 8px rgba(244, 245, 247, 0.7);
+    }
+    .bgchip {
+        padding: 2px 8px;
+        border: 1px solid var(--line);
+        background: rgba(255, 255, 255, 0.72);
+        color: var(--tx-2);
+        font-size: 9px;
+        letter-spacing: 0.12em;
+    }
+    .mast-rule {
+        margin-top: 12px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+    }
+    .mast-rule .seg {
+        width: 56px;
+        height: 4px;
+        background: repeating-linear-gradient(
+            -45deg, var(--yellow) 0 4px, var(--ink-block) 4px 8px
+        );
+    }
+    .mast-rule .line { flex: 1; height: 1px; background: var(--line); }
+
+    /* --- 左列：标题组 + 数值卡列 --- */
+    .sidebar {
+        width: 472px;
+        margin-top: 16px;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
+    }
+    .header-group {
+        border-left: 7px solid var(--yellow);
+        padding-left: 16px;
+    }
+    .header-title {
+        font-size: 38px;
+        font-weight: 700;
+        line-height: 1.05;
+        letter-spacing: 0.02em;
+        color: var(--tx-0);
+    }
+    .header-title span {
+        font-family: "Oswald", var(--mono);
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        color: var(--tx-2);
+        margin-left: 10px;
+        vertical-align: 6px;
+    }
+    .header-subtitle {
+        margin-top: 6px;
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.18em;
+        color: var(--tx-1);
+    }
+    .header-subtitle b { color: var(--yellow-deep); font-weight: 700; }
+    .badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        width: fit-content;
+        margin-top: 10px;
+        padding: 3px 12px;
+        background: rgba(255, 255, 255, 0.78);
+        border: 1px solid var(--line);
+        font-family: var(--mono);
+        font-variant-numeric: tabular-nums;
+        font-size: 12px;
+        color: var(--tx-1);
+    }
+    .badge .lab { color: var(--tx-3); font-weight: 700; letter-spacing: 0.08em; }
+    /* 临近回满/已回满 = 需要立即消耗，统一警戒红 */
+    .badge.urgent {
+        border-color: rgba(217, 54, 43, 0.55);
+        background: rgba(217, 54, 43, 0.07);
+        color: var(--alert);
+    }
+    .badge.urgent .lab { color: var(--alert); }
+
+    /* 数值卡列：3 张以上 space-between 铺满；1-2 张时居中（稀疏态不留大空洞） */
+    .stats {
+        margin-top: 16px;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        gap: 10px;
+    }
+    .stats.center { justify-content: center; gap: 14px; }
+    .stat {
+        position: relative;
+        padding: 10px 16px 11px 13px;
+        background: rgba(255, 255, 255, 0.88);
+        border: 1px solid var(--line);
+        border-left: 3px solid var(--ac);
+        clip-path: polygon(0 0, 100% 0,
+            100% calc(100% - 12px), calc(100% - 12px) 100%, 0 100%);
+    }
+    /* 右下角切角色标（强调色三角，真实元素） */
+    .stat .cut {
+        position: absolute;
+        right: 0;
+        bottom: 0;
+        width: 12px;
+        height: 12px;
+        background: linear-gradient(135deg, transparent 50%, var(--ac) 50%);
+        opacity: 0.9;
+    }
+    .stat-top {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+    }
+    .stat-info { display: flex; align-items: center; gap: 13px; min-width: 0; }
+    .iconbox {
+        width: 36px;
+        height: 36px;
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+    }
+    .iconbox svg { width: 21px; height: 21px; display: block; }
+    .stat-labels { line-height: 1.15; white-space: nowrap; }
+    .stat-cn { font-size: 16px; font-weight: 700; color: var(--tx-0); }
+    .stat-en {
+        margin-top: 2px;
+        font-family: var(--mono);
+        font-size: 9px;
+        font-weight: 500;
+        letter-spacing: 0.18em;
+        color: var(--tx-3);
+        text-transform: uppercase;
+    }
+    .stat-val { display: flex; align-items: baseline; gap: 5px; flex-shrink: 0; }
+    .stat-cur {
+        font-family: "Oswald", var(--mono);
+        font-size: 32px;
+        font-weight: 700;
+        line-height: 1;
+        letter-spacing: 0.01em;
+        color: var(--tx-0);
+    }
+    .stat-total {
+        font-family: "Oswald", var(--mono);
+        font-variant-numeric: tabular-nums;
+        font-size: 15px;
+        font-weight: 500;
+        color: var(--tx-3);
+    }
+    .track {
+        margin-top: 9px;
+        height: 5px;
+        background: var(--panel-2);
+        border: 1px solid var(--hairline);
+    }
+    .track > i {
+        display: block;
+        height: 100%;
+        background: var(--ac);
+        /* 读数尽头斜切刃口（与面板切角同一母题） */
+        clip-path: polygon(0 0, 100% 0, calc(100% - 4px) 100%, 0 100%);
+    }
+
+    /* --- 底部条：用户卡 + mini 数据盒 --- */
+    .footer {
+        margin-top: 16px;
+        display: flex;
+        align-items: stretch;
+        gap: 12px;
+        height: 58px;
+    }
+    .user-card {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 13px;
+        padding: 0 16px;
+        background: rgba(255, 255, 255, 0.88);
+        border: 1px solid var(--line);
+        border-left: 5px solid var(--yellow);
+        clip-path: polygon(0 0, 100% 0, calc(100% - 10px) 100%, 0 100%);
+    }
+    /* 查询者 QQ 头像（切角墨框，.optile 同母题）；缺头像回退 SVG 菱形标 */
+    .avatar-wrap {
+        width: 36px;
+        height: 36px;
+        flex-shrink: 0;
+        background: var(--ink-block);
+        padding: 1px;
+        clip-path: polygon(8px 0, 100% 0,
+            100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+    }
+    .avatar-wrap img {
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        background: var(--panel-2);
+        clip-path: polygon(8px 0, 100% 0,
+            100% calc(100% - 8px), calc(100% - 8px) 100%, 0 100%, 0 8px);
+    }
+    .user-mark { width: 34px; height: 34px; flex-shrink: 0; }
+    .user-info { min-width: 0; line-height: 1.2; }
+    .user-name {
+        font-size: 19px;
+        font-weight: 700;
+        color: var(--tx-0);
+        max-width: 300px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .user-uid {
+        margin-top: 3px;
+        font-family: var(--mono);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        color: var(--yellow-deep);
+    }
+    .user-uid span { color: var(--tx-3); font-weight: 500; }
+    .minis { display: flex; gap: 12px; flex-shrink: 0; }
+    .mini {
+        position: relative;
+        min-width: 88px;
+        padding: 8px 14px;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        background: rgba(255, 255, 255, 0.88);
+        border: 1px solid var(--line);
+    }
+    /* 左上角黄色直角 tick（真实元素） */
+    .mini .tick {
+        position: absolute;
+        top: -1px;
+        left: -1px;
+        width: 8px;
+        height: 8px;
+        border-top: 2px solid var(--yellow);
+        border-left: 2px solid var(--yellow);
+    }
+    .mini-label {
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.1em;
+        color: var(--tx-3);
+        text-transform: uppercase;
+        white-space: nowrap;
+    }
+    .mini-val {
+        margin-top: 3px;
+        font-family: "Oswald", var(--mono);
+        font-variant-numeric: tabular-nums;
+        font-size: 25px;
+        font-weight: 700;
+        line-height: 1;
+        color: var(--tx-0);
+        white-space: nowrap;
+    }
+
+    /* --- 底缘寻访斜纹（终端签名） --- */
+    .edge {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 4px;
+        z-index: 30;
+        background: repeating-linear-gradient(
+            -45deg, var(--yellow) 0 5px, var(--ink-block) 5px 10px
+        );
+    }
+</style>
+</head>
 <body>
-    <div class="container" data-ghost="AP">
-        <div class="mast">
-            <span class="mast-brand">ArknightsUID <em>// 理智查询 AP MONITOR</em></span>
-            <span class="mast-meta"><span class="idx">02</span>UID {{ uid }}</span>
+{% set is_portrait = bg and bg_label and bg_label not in ("自定义", "全局") %}
+{% set ap_full = ap_current >= ap_max %}
+{# 各卡强调色（takumi 不认 SVG 的 stroke=currentColor，图标描边直接写色值） #}
+{% set ac_ap = "#d9362b" if ap_pct >= 80 else "#e0a800" %}
+{% set ac_daily = "#51a029" if daily_pct >= 100 else "#0098dc" %}
+{% set ac_weekly = "#51a029" if weekly_pct >= 100 else "#8a73c4" %}
+{% if campaign_total %}{% set campaign_pct = (campaign_current * 100 / campaign_total) | round | int %}{% else %}{% set campaign_pct = 0 %}{% endif %}
+{% set ac_campaign = "#51a029" if campaign_pct >= 100 else "#ff8c00" %}
+<div class="container">
+    <div class="frame">
+        {% if is_portrait %}
+        {# 立绘背景：场景带仍用舰桥兜底图（与其他卡一致），立绘作右侧人物栏 #}
+        <img class="bg-img" src="data:image/jpeg;base64,{% include "assets/bg_terminal_day.b64" %}" alt="">
+        {% elif bg %}
+        <img class="bg-img" src="{{ bg }}" alt="">
+        {% else %}
+        <img class="bg-img" src="data:image/jpeg;base64,{% include "assets/bg_terminal_day.b64" %}" alt="">
+        {% endif %}
+        <div class="grid-deco"></div>
+        <div class="scrim"></div>
+        {% if is_portrait %}<img class="char-layer" src="{{ bg }}" alt="">{% endif %}
+        <div class="deco-rh r1"></div>
+        <div class="deco-rh r2"></div>
+        <i class="plus p1">+</i>
+        <i class="plus p2">+</i>
+
+        <div class="ui">
+            <div class="mast">
+                <span class="mast-brand"><i class="sq"></i>ARKNIGHTSUID <em>// 罗德岛终端 RHODES TERMINAL</em></span>
+                <span class="mast-meta">
+                    {% if bg_label %}<span class="bgchip">BG · {{ bg_label }}</span>{% endif %}
+                    <span class="idx">02</span>UID {{ uid }} · VER {{ version }}
+                </span>
+            </div>
+            <div class="mast-rule"><i class="seg"></i><i class="line"></i></div>
+
+            <div class="sidebar">
+                <div class="header-group">
+                    <div class="header-title">博士便签<span>DAILY BRIEF</span></div>
+                    <div class="header-subtitle"><b>每日监控协议</b> // MONITORING PROTOCOL</div>
+                    <div class="badge {% if ap_pct >= 80 %}urgent{% endif %}">
+                        <span class="lab">RECOVERY</span>
+                        {% if ap_full %}已回满{% else %}{{ ap_full_at }} · {{ ap_recover_in }}{% endif %}
+                    </div>
+                </div>
+
+                {# 卡数自适应：1-2 张居中，3-4 张 space-between 铺满 #}
+                {% set ncards = 1 + (2 if has_routine else 0) + (1 if campaign_total else 0) %}
+                <div class="stats{% if ncards <= 2 %} center{% endif %}">
+                    {# 理智（主卡）：>=80% 临近回满转红 #}
+                    <div class="stat" style="--ac: {{ ac_ap }};">
+                        <div class="stat-top">
+                            <div class="stat-info">
+                                <div class="iconbox">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="{{ ac_ap }}" stroke-width="1.6">
+                                        <path d="M12 2.5 L21.5 12 L12 21.5 L2.5 12 Z"/>
+                                        <path d="M12 7.2 L16.8 12 L12 16.8 L7.2 12 Z"/>
+                                    </svg>
+                                </div>
+                                <div class="stat-labels">
+                                    <div class="stat-cn">理智</div>
+                                    <div class="stat-en">SANITY // AP</div>
+                                </div>
+                            </div>
+                            <div class="stat-val">
+                                <span class="stat-cur">{{ ap_current }}</span>
+                                <span class="stat-total">/ {{ ap_max }}</span>
+                            </div>
+                        </div>
+                        <div class="track"><i style="width: {{ ap_pct }}%;"></i></div>
+                        <b class="cut"></b>
+                    </div>
+
+                    {% if has_routine %}
+                    <div class="stat" style="--ac: {{ ac_daily }};">
+                        <div class="stat-top">
+                            <div class="stat-info">
+                                <div class="iconbox">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="{{ ac_daily }}" stroke-width="1.6">
+                                        <rect x="4.5" y="4" width="15" height="17"/>
+                                        <path d="M9 2.8 h6 v3.4 h-6 Z"/>
+                                        <path d="M8.2 13.4 l2.6 2.6 l5 -5.4"/>
+                                    </svg>
+                                </div>
+                                <div class="stat-labels">
+                                    <div class="stat-cn">每日任务</div>
+                                    <div class="stat-en">DAILY // OPS_D</div>
+                                </div>
+                            </div>
+                            <div class="stat-val">
+                                <span class="stat-cur">{{ daily_done }}</span>
+                                <span class="stat-total">/ {{ daily_total }}</span>
+                            </div>
+                        </div>
+                        <div class="track"><i style="width: {{ daily_pct }}%;"></i></div>
+                        <b class="cut"></b>
+                    </div>
+
+                    <div class="stat" style="--ac: {{ ac_weekly }};">
+                        <div class="stat-top">
+                            <div class="stat-info">
+                                <div class="iconbox">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="{{ ac_weekly }}" stroke-width="1.6">
+                                        <rect x="3.5" y="5" width="17" height="16"/>
+                                        <path d="M3.5 9.5 h17"/>
+                                        <path d="M8 3 v3.6 M16 3 v3.6"/>
+                                        <path d="M7.4 13.2 h2.2 M14.4 13.2 h2.2 M7.4 17 h2.2"/>
+                                    </svg>
+                                </div>
+                                <div class="stat-labels">
+                                    <div class="stat-cn">周常任务</div>
+                                    <div class="stat-en">WEEKLY // OPS_W</div>
+                                </div>
+                            </div>
+                            <div class="stat-val">
+                                <span class="stat-cur">{{ weekly_done }}</span>
+                                <span class="stat-total">/ {{ weekly_total }}</span>
+                            </div>
+                        </div>
+                        <div class="track"><i style="width: {{ weekly_pct }}%;"></i></div>
+                        <b class="cut"></b>
+                    </div>
+                    {% endif %}
+
+                    {% if campaign_total %}
+                    <div class="stat" style="--ac: {{ ac_campaign }};">
+                        <div class="stat-top">
+                            <div class="stat-info">
+                                <div class="iconbox">
+                                    <svg viewBox="0 0 24 24" fill="none" stroke="{{ ac_campaign }}" stroke-width="1.6">
+                                        <circle cx="12" cy="12" r="6.4"/>
+                                        <path d="M12 2.6 v4 M12 17.4 v4 M2.6 12 h4 M17.4 12 h4"/>
+                                        <path d="M12 10.6 v2.8 M10.6 12 h2.8"/>
+                                    </svg>
+                                </div>
+                                <div class="stat-labels">
+                                    <div class="stat-cn">剿灭合成玉</div>
+                                    <div class="stat-en">ORUNDUM // ANNIHL</div>
+                                </div>
+                            </div>
+                            <div class="stat-val">
+                                <span class="stat-cur">{{ campaign_current }}</span>
+                                <span class="stat-total">/ {{ campaign_total }}</span>
+                            </div>
+                        </div>
+                        <div class="track"><i style="width: {{ campaign_pct }}%;"></i></div>
+                        <b class="cut"></b>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="footer">
+                <div class="user-card">
+                    {% if avatar %}
+                    <span class="avatar-wrap"><img src="{{ avatar }}" alt=""></span>
+                    {% else %}
+                    <svg class="user-mark" viewBox="0 0 24 24" fill="none" stroke="#16181d" stroke-width="1.5">
+                        <path d="M12 1.8 L22.2 12 L12 22.2 L1.8 12 Z"/>
+                        <path d="M12 6.4 L17.6 12 L12 17.6 L6.4 12 Z" fill="#ffc907" stroke="none"/>
+                        <path d="M8.6 12 h6.8" stroke="#16181d" stroke-width="1.2"/>
+                    </svg>
+                    {% endif %}
+                    <div class="user-info">
+                        <div class="user-name">{{ name }}</div>
+                        <div class="user-uid"><span>UID_</span>{{ uid }}</div>
+                    </div>
+                </div>
+                <div class="minis">
+                    <div class="mini">
+                        <b class="tick"></b>
+                        <div class="mini-label">等级 LV</div>
+                        <div class="mini-val">{{ level }}</div>
+                    </div>
+                    <div class="mini">
+                        <b class="tick"></b>
+                        <div class="mini-label">干员 OPS</div>
+                        <div class="mini-val">{{ chars_total }}</div>
+                    </div>
+                </div>
+            </div>
         </div>
 
-        <div class="titleblock">
-            <div>
-                <div class="eyebrow">{{ name }} · LV.{{ level }} · 博士便签</div>
-                <h1 class="title">博士<em>便签</em></h1>
-                <div class="title-rule"><span class="en">AP STATUS</span></div>
-            </div>
-            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_status.b64" %}" alt="阿米娅">
-        </div>
-
-        <div class="hero">
-            <div class="bignum">{{ ap_current }}<span class="unit"> / {{ ap_max }} AP</span></div>
-            <span class="bar-num">{{ ap_full_at }} 回满</span>
-        </div>
-        <div class="bar bar--lg" style="margin-top: var(--space-3);">
-            <i style="width: {{ ap_pct }}%;"></i>
-            <span class="bar-txt">{{ ap_pct }}%</span>
-        </div>
-
-        <div class="sect">
-            <span class="sect-label bk">档案详情</span>
-            <span class="sect-en">DOSSIER</span>
-        </div>
-        <div class="rows">
-            <div class="row">
-                <span class="row-label">距回满 RECOVER IN</span>
-                <span class="row-value mono">{{ ap_recover_in }}</span>
-            </div>
-            <div class="row">
-                <span class="row-label">注册天数 DAYS</span>
-                <span class="row-value mono">{{ reg_days }}</span>
-            </div>
-            <div class="row">
-                <span class="row-label">持有干员 OPERATORS</span>
-                <span class="row-value mono">{{ chars_total }}</span>
-            </div>
-            <div class="row">
-                <span class="row-label">剿灭合成玉 ORUNDUM</span>
-                <span class="row-value mono">{{ campaign_current }} / {{ campaign_total }}</span>
-            </div>
-        </div>
-
-        <div class="foot">
-            <span class="foot-brand">ArknightsUID · 便签</span>
-            <span class="foot-meta mono">VER {{ version }}</span>
-        </div>
-        <div class="ticker">
-            <span>// AP MONITOR ONLINE</span>
-            <span>// RHODES ISLAND TERMINAL</span>
-        </div>
+        <div class="edge"></div>
     </div>
+</div>
 </body>
 </html>

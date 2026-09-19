@@ -22,7 +22,6 @@ from ArknightsUID.utils.player import (
     build_campaign_context,
     build_char_card_context,
     build_char_stat_context,
-    build_daily_context,
     build_status_context,
     parse_player_info,
 )
@@ -60,8 +59,12 @@ class CardContractTest(unittest.TestCase):
             build_status_context(self.data, VERSION, "123***789", now=1e9 + 3600),
         )
 
-    def test_daily_card_contract(self) -> None:
-        self._assert_card("ark_daily.html", build_daily_context(self.data, VERSION))
+    def test_daily_merges_into_status_card(self) -> None:
+        """ark日常 与 ark理智 同卡：合并 context 渲染 ark_status.html。"""
+        context = build_status_context(self.data, VERSION)
+        assert context is not None
+        self.assertTrue(context["has_routine"])
+        self._assert_card("ark_status.html", context)
 
     def test_campaign_card_contract(self) -> None:
         self._assert_card(
@@ -173,7 +176,7 @@ class CardContractTest(unittest.TestCase):
             # CJK face 必须在 generic 族名之前，否则 generic 先命中（JP face）
             self.assertLess(stack.index(cjk_name), stack.index("sans-serif") if "sans-serif" in stack else stack.index("monospace"))
 
-    def test_daily_card_zero_total_does_not_divide_by_zero(self) -> None:
+    def test_status_card_zero_total_does_not_divide_by_zero(self) -> None:
         envelope = _envelope()
         envelope["data"]["routine"] = {
             "daily": {"current": 0, "total": 1},
@@ -181,8 +184,9 @@ class CardContractTest(unittest.TestCase):
         }
         data = parse_player_info(envelope)
         assert data is not None
-        context = build_daily_context(data, VERSION)
-        self._assert_card("ark_daily.html", context)
+        context = build_status_context(data, VERSION)
+        assert context is not None
+        self._assert_card("ark_status.html", context)
 
 
 class LiveRenderTest(unittest.IsolatedAsyncioTestCase):
