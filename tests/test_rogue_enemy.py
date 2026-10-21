@@ -1,6 +1,8 @@
 """肉鸽敌人 buff 面板测试：乘数语义 / 主题判定 / 面板构建 / 卡片契约。"""
 from __future__ import annotations
 
+import pytest
+
 import sys
 import unittest
 from pathlib import Path
@@ -441,12 +443,12 @@ class CachePolicyTest(unittest.IsolatedAsyncioTestCase):
             # 过期缓存（时间戳 0，早于 TTL）
             return ([{"stale": True}], 0.0)
 
-        async def fail_download(url, timeout=0.0):
-            return None
+        async def fail_download(url, **kwargs):
+            return 0, None, {}
 
         with (
             mock.patch.object(re_mod, "cache_read", new=fake_cache_read),
-            mock.patch.object(re_mod, "download_bytes", new=fail_download),
+            mock.patch.object(re_mod, "download_bytes_conditional", new=fail_download),
         ):
             data = await re_mod._fetch_url_json_cached(
                 "https://example.com/x.json",
@@ -721,6 +723,7 @@ class PanelAtStageTest(unittest.TestCase):
 class SkillCardTest(unittest.IsolatedAsyncioTestCase):
     """第二张图：PRTS 敌人详情卡（技能完整数值）的取数与降级。"""
 
+    @pytest.mark.usefixtures("offline_card_assets")
     async def test_renders_when_prts_page_matches(self) -> None:
         from unittest import mock
 
@@ -791,10 +794,8 @@ class SkillCardTest(unittest.IsolatedAsyncioTestCase):
 class CommandContextTest(unittest.IsolatedAsyncioTestCase):
     async def test_build_context_and_render(self) -> None:
         """命令上下文 ↔ 模板契约（jinja 渲染；图标失败降级）。"""
-        from unittest import mock
 
         from ArknightsUID.arknightsuid_rogue import (
-            _build_rogue_enemy_context,
             _format_rogue_enemy,
         )
         from ArknightsUID.utils.render import ark_templates
@@ -878,7 +879,6 @@ class CommandContextTest(unittest.IsolatedAsyncioTestCase):
         from unittest import mock
 
         from ArknightsUID.arknightsuid_rogue import (
-            _build_rogue_enemy_context,
             _format_rogue_enemy,
         )
         from ArknightsUID.utils.render import ark_templates
@@ -942,12 +942,14 @@ class CommandContextTest(unittest.IsolatedAsyncioTestCase):
         """未识别期的敌人带难度查询 → 提示指定期。"""
         from unittest import mock
 
-        from ArknightsUID.arknightsuid_rogue import _build_rogue_enemy_context
 
         # enemy_3 无 type 标签且不被点名 → 未识别期
         with mock.patch(
             "ArknightsUID.utils.gamedata.rogue_enemy.load_enemy_db",
             new=mock.AsyncMock(return_value=_db()),
+        ), mock.patch(
+            "ArknightsUID.utils.gamedata.rogue_enemy.load_difficulty_mods",
+            new=mock.AsyncMock(return_value={}),
         ):
             result = await _build_rogue_enemy_context("源石虫·α N5")
         self.assertIsInstance(result, str)
@@ -957,7 +959,6 @@ class CommandContextTest(unittest.IsolatedAsyncioTestCase):
         """`敌名 关名 N难度 紧急` → 关卡限定 focus（块选择 + 紧急来源）。"""
         from unittest import mock
 
-        from ArknightsUID.arknightsuid_rogue import _build_rogue_enemy_context
 
         async def fake_diffs():
             return {"sarkaz": _sarkaz_diffs()}
@@ -1022,12 +1023,12 @@ class CommandContextTest(unittest.IsolatedAsyncioTestCase):
         # 关卡限定时不再输出全档表
         self.assertEqual(result["panels"], [])
 
+    @pytest.mark.usefixtures("offline_card_assets")
     async def test_stage_context_and_render(self) -> None:
         """关卡视图：折算行 + 紧急描述 + 模板契约。"""
         from unittest import mock
 
         from ArknightsUID.arknightsuid_rogue import (
-            _build_rogue_stage_context,
             _format_rogue_stage,
         )
         from ArknightsUID.utils.render import ark_templates
@@ -1097,11 +1098,11 @@ class CommandContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("115200", html)
         self.assertIn("ark肉鸽敌人", html)
 
+    @pytest.mark.usefixtures("offline_card_assets")
     async def test_enemy_command_falls_back_to_stage(self) -> None:
         """敌人命令查关卡名：无敌人命中 → 渲染关卡卡。"""
         from unittest import mock
 
-        from ArknightsUID.arknightsuid_rogue import _build_rogue_enemy_context
 
         stage_fixture = dict(StagePanelRowTest.STAGE)
         stage_fixture["floors"] = [2]
@@ -1150,7 +1151,6 @@ class CommandContextTest(unittest.IsolatedAsyncioTestCase):
     async def test_multi_match_returns_hint(self) -> None:
         from unittest import mock
 
-        from ArknightsUID.arknightsuid_rogue import _build_rogue_enemy_context
 
         with mock.patch(
             "ArknightsUID.utils.gamedata.rogue_enemy.load_enemy_db",
@@ -1172,7 +1172,6 @@ class SourceOutageTest(unittest.IsolatedAsyncioTestCase):
     async def test_enemy_query_degrades_to_readable_text(self) -> None:
         from unittest import mock
 
-        from ArknightsUID.arknightsuid_rogue import _build_rogue_enemy_context
 
         with (
             mock.patch(
@@ -1192,7 +1191,6 @@ class SourceOutageTest(unittest.IsolatedAsyncioTestCase):
     async def test_stage_query_degrades_to_readable_text(self) -> None:
         from unittest import mock
 
-        from ArknightsUID.arknightsuid_rogue import _build_rogue_stage_context
 
         with (
             mock.patch(

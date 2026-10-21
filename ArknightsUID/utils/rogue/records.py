@@ -71,10 +71,10 @@ def format_run_ts(value: Any) -> str:
     if not text:
         return ""
     if text.isdigit():
-        from datetime import datetime
+        from ..time_utils import beijing_datetime
 
         try:
-            return datetime.fromtimestamp(int(text)).strftime("%m-%d %H:%M")
+            return beijing_datetime(int(text)).strftime("%m-%d %H:%M")
         except (OverflowError, OSError, ValueError):
             return ""
     return text[:16]

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +55,9 @@ _DATA_TTL = 86400.0
 
 # 数据直链（jsdelivr CDN：content-type 正确、快；raw 直链核心下载器会 5s 超时）
 _TOMIMI_BASE = "https://cdn.jsdelivr.net/gh/tanch-p/tomimi-dev@main/src/lib/data"
+_TOMIMI_RAW_BASE = (
+    "https://raw.githubusercontent.com/tanch-p/tomimi-dev/main/src/lib/data"
+)
 _ICON_BASE = (
     "https://cdn.jsdelivr.net/gh/tanch-p/tomimi-dev@main/static/images/enemy_icons"
 )
@@ -562,29 +566,14 @@ def stages_for_enemy(
 
 
 async def find_stage(name: str) -> dict | None:
-    """关卡名 → {theme, level_id, code, name, variants}；精确匹配。
-
-    ro5/6 存在同期同名分支变体（level_id 带 -b/-c/_dlc1 后缀，实测
-    ro5 有 17 个重名关），此时返回字典序第一个变体，variants 给出
-    同名变体总数（调用方可提示用户）。找不到返回 None（再走
-    search_stages 模糊候选）。
-    """
-    metas = await asyncio.gather(*(_load_stage_meta(t) for t in _THEME_ROGUE_NUM))
-    for theme_dir, meta in zip(_THEME_ROGUE_NUM, metas):
-        hits = [(level_id, m) for level_id, m in meta.items() if m.get("name") == name]
-        if hits:
-            level_id, m = sorted(hits)[0]
-            return {
-                "theme": theme_dir,
-                "level_id": level_id,
-                "code": m.get("code") or "",
-                "name": name,
-                "variants": len(hits),
-            }
+    """只返回精确且唯一的关卡；同名分支由命令层列出候选供选择。"""
+    hits = await search_stages(name, limit=None)
+    if len(hits) == 1 and hits[0]["name"] == name:
+        return hits[0]
     return None
 
 
-async def search_stages(query: str, limit: int = 8) -> list[dict]:
+async def search_stages(query: str, limit: int | None = 8) -> list[dict]:
     """关卡名模糊匹配：唯一前缀/子串 → 候选列表（与敌人匹配同策略）。"""
     q = (query or "").strip()
     if not q:
@@ -594,15 +583,20 @@ async def search_stages(query: str, limit: int = 8) -> list[dict]:
     def _collect(pred) -> list[dict]:
         hits: list[dict] = []
         for theme_dir, meta in zip(_THEME_ROGUE_NUM, all_metas):
-            for level_id, m in meta.items():
+            totals = Counter(m.get("name") for m in meta.values())
+            positions: Counter[str] = Counter()
+            for level_id, m in sorted(meta.items()):
                 name = m.get("name") or ""
                 if name and pred(name):
+                    positions[name] += 1
                     hits.append(
                         {
                             "theme": theme_dir,
                             "level_id": level_id,
                             "code": m.get("code") or "",
                             "name": name,
+                            "variants": totals[name],
+                            "variant_index": positions[name],
                         }
                     )
         return hits
@@ -774,7 +768,7 @@ async def _fetch_url_json_cached(url: str, path: Path) -> Any:
             except Exception:
                 return payload
             await cache_write(
-                path, data, validators={**validators, **new_v, "source_url": url}
+                path, data, validators={**new_v, "source_url": url}
             )
             return data
         if status != 0:
@@ -822,9 +816,9 @@ async def load_enemy_db() -> dict[str, dict]:
         return {}
 
 
-def _diff_file_url(theme_dir: str) -> str:
+def _diff_file_url(theme_dir: str, base: str = _TOMIMI_BASE) -> str:
     # 文件名特例（black 期无期名后缀）收录在注册表行内
-    return f"{_TOMIMI_BASE}/is/{theme_dir}/{diff_file_for(theme_dir)}"
+    return f"{base}/is/{theme_dir}/{diff_file_for(theme_dir)}"
 
 
 async def load_difficulty_mods() -> dict[str, list]:
@@ -836,19 +830,26 @@ async def load_difficulty_mods() -> dict[str, list]:
         try:
             payload, saved_ts = await cache_read(path)
             if payload is None or not is_fresh(saved_ts, _DATA_TTL):
-                raw = await download_bytes(_diff_file_url(theme_dir), timeout=20.0)
-                if raw is not None:
-                    # CDN 200 返回 HTML/截断体时 json.loads 抛异常：
-                    # 保留旧（过期）缓存兜底，不让单期效果整段丢失
+                # CDN 可能缓存新文件的 404；源站取同一 main 分支。
+                for base in (_TOMIMI_BASE, _TOMIMI_RAW_BASE):
+                    raw = await download_bytes(
+                        _diff_file_url(theme_dir, base), timeout=20.0
+                    )
+                    if raw is None:
+                        continue
                     try:
-                        payload = json.loads(raw)
-                    except Exception as exc:
+                        fresh = json.loads(raw)
+                    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
                         logger.warning(
                             f"[ArknightsUID·肉鸽] {theme_dir} 难度表响应非 JSON "
-                            f"({exc.__class__.__name__})，沿用旧缓存"
+                            f"({exc.__class__.__name__})，尝试其他数据源"
                         )
-                    else:
-                        await cache_write(path, payload)
+                        continue
+                    if not isinstance(fresh, list) or not fresh:
+                        continue
+                    payload = fresh
+                    await cache_write(path, payload)
+                    break
             return theme_dir, payload if isinstance(payload, list) else None
         except Exception:
             return theme_dir, None

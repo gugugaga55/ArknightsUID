@@ -269,16 +269,14 @@ async def download_target(target: ResourceTarget, verify: bool = False) -> str:
 
     from ..gamedata.path_safety import cache_names_for_url
 
-    url_last = cache_names_for_url(target.url)[1]  # 批量落盘保持旧键名
+    url_last, legacy_name = cache_names_for_url(target.url)
     if not url_last:
         return "fail"
     raw_path = target.cache_dir / url_last
     webp_path = raw_path.with_suffix(".webp")
-    # 存在性判定（审计 #20 双查）：旧键（bulk 自己写的）或新键
-    # （惰性路径 pic_download_from_url 写的 basename+URL 哈希）任一在即命中
-    new_name = cache_names_for_url(target.url)[0]
-    new_path = target.cache_dir / new_name
-    for existing in (webp_path, raw_path, new_path.with_suffix(".webp"), new_path):
+    # 与惰性下载共用 URL 哈希键；旧文件只作为兼容读取回退。
+    legacy_path = target.cache_dir / legacy_name
+    for existing in (webp_path, raw_path, legacy_path.with_suffix(".webp"), legacy_path):
         if not existing.exists():
             continue
         if not _is_nonempty_file(existing):
