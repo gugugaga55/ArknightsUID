@@ -15,16 +15,6 @@ from pathlib import Path
 # 在未安装完整运行时的环境（如纯插件 CI）中跳过，避免无意义的失败。
 _FASTAPI_AVAILABLE = importlib.util.find_spec("fastapi") is not None
 
-# 该测试还依赖 gsuid_core 的 TEST_DATA_ROOT_ENV 数据目录隔离机制；
-# core 若移除该属性（如 0.10.5），则跳过（避免假失败，而非 getattr 降级后撞 config.json 断言）。
-try:
-    import gsuid_core.data_store as _ds_for_check  # noqa: E402
-
-    _DATA_ROOT_ISOLATION_SUPPORTED = hasattr(_ds_for_check, "TEST_DATA_ROOT_ENV")
-except Exception:
-    _DATA_ROOT_ISOLATION_SUPPORTED = False
-
-
 PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 CORE_ROOT = Path(__file__).resolve().parents[4]
 REAL_DATA_ROOT = CORE_ROOT / "data"
@@ -38,8 +28,14 @@ REQUIRED_MODULES = [
     "ArknightsUID.arknightsuid_bind",
     "ArknightsUID.arknightsuid_notify",
     "ArknightsUID.arknightsuid_rogue",
+    "ArknightsUID.arknightsuid_social",
     "ArknightsUID.arknightsuid_wiki",
     "ArknightsUID.arknightsuid_help",
+    "ArknightsUID.arknightsuid_gacha",
+    "ArknightsUID.arknightsuid_cultivate",
+    "ArknightsUID.arknightsuid_maintenance",
+    "ArknightsUID.arknightsuid_user_config",
+    "ArknightsUID.arknightsuid_push",
     "ArknightsUID.utils.skland.client",
     "ArknightsUID.utils.prts.client",
 ]
@@ -65,6 +61,9 @@ IMPORT_SCRIPT = textwrap.dedent(
         if import_root_text not in sys.path:
             sys.path.insert(0, import_root_text)
 
+    sys.path.insert(0, str(plugin_root / "tests"))
+    from runtime_isolation import isolate_data_root
+    isolate_data_root(data_root)
     import gsuid_core.data_store as data_store
 
     imported = []
@@ -74,6 +73,7 @@ IMPORT_SCRIPT = textwrap.dedent(
 
     import gsuid_core.config as gscore_config
     import gsuid_core.logger as gscore_logger
+    from gsuid_core.utils.database import base_models
     from ArknightsUID.utils.resource import RESOURCE_PATH as resource_paths
     from ArknightsUID.utils.prts import client as prts_client
 
@@ -99,6 +99,7 @@ IMPORT_SCRIPT = textwrap.dedent(
                 "runtime_paths": {
                     "gscore_data_root": str(data_store.gs_data_path),
                     "gscore_res": str(data_store.RES),
+                    "gscore_database": str(base_models.DB_PATH),
                     "gscore_config": str(gscore_config.CONFIG_PATH),
                     "gscore_logs": str(gscore_logger.LOG_PATH),
                     "gscore_data_cache": str(data_store.data_cache_path),
@@ -143,8 +144,8 @@ class RealRuntimeImportSmokeTest(unittest.TestCase):
         self.fail(msg)
 
     @unittest.skipUnless(
-        _FASTAPI_AVAILABLE and _DATA_ROOT_ISOLATION_SUPPORTED,
-        "需要完整 gsuid_core 运行时且支持 TEST_DATA_ROOT_ENV 数据目录隔离",
+        _FASTAPI_AVAILABLE,
+        "需要完整 gsuid_core 运行时",
     )
     def test_required_modules_import_with_real_gscore_runtime(self) -> None:
         with tempfile.TemporaryDirectory(prefix="arknightsuid-gscore-") as tmp:
@@ -164,8 +165,7 @@ class RealRuntimeImportSmokeTest(unittest.TestCase):
                 [sys.executable, "-c", IMPORT_SCRIPT],
                 cwd=PLUGIN_ROOT,
                 env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                capture_output=True,
                 text=True,
                 timeout=30,
                 check=False,
@@ -213,6 +213,54 @@ class RealRuntimeImportSmokeTest(unittest.TestCase):
                     runtime_paths[directory_name].is_dir(),
                     msg=f"{directory_name} was not created as an isolated dir",
                 )
+
+    @unittest.skipUnless(_FASTAPI_AVAILABLE, "需要完整 gsuid_core 运行时")
+    def test_real_nested_loader_registers_services_and_unique_jobs(self) -> None:
+        script = textwrap.dedent('''
+            import json
+            import os
+            import sys
+            from pathlib import Path
+
+            root = Path(os.environ["ARKNIGHTSUID_PLUGIN_ROOT"])
+            sys.path[:0] = [str(root / "tests"), str(root.parent), str(root.parents[1])]
+            from runtime_isolation import isolate_data_root
+            isolate_data_root(Path(os.environ["GSUID_CORE_TEST_DATA_ROOT"]))
+            from gsuid_core.server import GsServer
+            from gsuid_core.sv import SL
+            from gsuid_core.aps import scheduler
+
+            server = GsServer()
+            modules = server.load_dir_plugins(root / "ArknightsUID", "plugins", nest=True)
+            for name, path, kind in modules:
+                server.cached_import(name, path, kind)
+            plugin = SL.plugins["ArknightsUID"]
+            print(json.dumps({
+                "modules": [name for name, _, _ in modules],
+                "jobs": [job.id for job in scheduler.get_jobs()],
+                "prefix": plugin.force_prefix,
+                "empty_prefix": plugin.allow_empty_prefix,
+                "services": [sv.name for sv in SL.detail_lst[plugin]],
+            }))
+        ''')
+        with tempfile.TemporaryDirectory(prefix="arkuid-nest-") as tmp:
+            env = dict(os.environ, ARKNIGHTSUID_PLUGIN_ROOT=str(PLUGIN_ROOT),
+                       GSUID_CORE_TEST_DATA_ROOT=tmp)
+            proc = subprocess.run(
+                [sys.executable, "-c", script], cwd=CORE_ROOT, env=env,
+                capture_output=True, text=True, timeout=30,
+            )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        payload = json.loads(proc.stdout.strip().splitlines()[-1])
+        self.assertEqual(payload["prefix"], ["ark", "方舟", "明日方舟"])
+        self.assertFalse(payload["empty_prefix"])
+        self.assertIn("ArknightsUID抽卡", payload["services"])
+        self.assertIn("ark_sanity_push", payload["jobs"])
+        self.assertEqual(len(payload["jobs"]), len(set(payload["jobs"])))
+        expected = {p.name for p in (PLUGIN_ROOT / "ArknightsUID").iterdir()
+                    if p.is_dir() and (p / "__init__.py").exists()}
+        loaded = {name.rsplit(".", 1)[-1] for name in payload["modules"]}
+        self.assertEqual(loaded, expected | {"ArknightsUID"})
 
 
 if __name__ == "__main__":
