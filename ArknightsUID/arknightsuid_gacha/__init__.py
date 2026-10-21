@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import UTC
 from typing import Any
 
 from gsuid_core.bot import Bot
@@ -48,6 +49,7 @@ from ArknightsUID.utils.hypergryph.gacha import (
 )
 from ArknightsUID.utils.player.context import char_avatar_b64
 from ArknightsUID.utils.prts.client import query_gacha_pools
+from ArknightsUID.utils.time_utils import beijing_datetime
 from ArknightsUID.utils.reply_safety import safe_external_message
 from ArknightsUID.version import ArknightsUID_version
 
@@ -59,7 +61,7 @@ gacha_sv = SV("ArknightsUID抽卡", priority=5)
 
 # 文本回复公共实现在 utils.card.send_text；保留模块级别名供调用点/测试 patch
 from ArknightsUID.utils.card import send_text as _send_text  # noqa: E402
-from datetime import UTC
+
 
 
 _PLAN_USAGE = (
@@ -98,7 +100,10 @@ async def show_gacha_report(bot: Bot, ev: Event) -> None:
     if credential is None:
         return
 
-    records, warning = await sync_gacha_logs(credential)
+    if "全量" in (ev.text or "").split():
+        records, warning = await sync_gacha_logs(credential, full=True)
+    else:
+        records, warning = await sync_gacha_logs(credential)
     if not records:
         return await _send_text(bot, ev, warning or "暂无抽卡记录。")
 
@@ -169,10 +174,13 @@ async def redeem_gift_code(bot: Bot, ev: Event) -> None:
     await _send_text(bot, ev, _gift_reply(response))
 
 
-async def _auto_pity(credential) -> int:
-    """读本地抽卡记录算当前垫刀（不联网拉新，无记录返回 0）。"""
+async def _auto_pity(credential, pool_name: str = "") -> int:
+    """限定规划只累计目标池的本地垫刀；不同限定池不继承。"""
+    if not pool_name:
+        return 0
     try:
         records = await load_local_logs(credential.uid)
+        records = [r for r in records if r.get("pool_name") == pool_name]
         stats = analyze_gacha(records)
         return int(stats.get("pity") or 0)
     except Exception:
@@ -197,9 +205,13 @@ async def _pick_pool(keyword: str) -> tuple[dict | None, str]:
 
     if not keyword:
         return to_dict(pools[0]), ""
-    for pool in pools:
-        if keyword in pool.title:
-            return to_dict(pool), ""
+    matches = [pool for pool in pools if keyword == pool.title]
+    if not matches:
+        matches = [pool for pool in pools if keyword in pool.title]
+    if len(matches) == 1:
+        return to_dict(matches[0]), ""
+    if matches:
+        return None, "卡池关键词不唯一，请补充完整名称：" + "、".join(p.title for p in matches)
     names = "、".join(p.title for p in pools[:5])
     return None, f"未找到包含「{keyword}」的进行中/即将开启卡池。当前：{names}"
 
@@ -237,7 +249,7 @@ async def plan_gacha_draws(bot: Bot, ev: Event) -> None:
     if isinstance(credential, str):
         pity, name, uid_masked = 0, "", ""
     else:
-        pity = await _auto_pity(credential)
+        pity = 0
         name = credential.nickname
         uid_masked = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
     if args.pity is not None:
@@ -246,6 +258,8 @@ async def plan_gacha_draws(bot: Bot, ev: Event) -> None:
     pool, pool_err = await _pick_pool(args.pool_keyword)
     if pool_err:
         return await _send_text(bot, ev, pool_err)
+    if args.pity is None and not isinstance(credential, str) and pool:
+        pity = await _auto_pity(credential, str(pool["title"]))
 
     # 概率 DP 纯 CPU（双UP双限定实测 ~0.4s）：下放线程池避免卡事件循环
     summary = await asyncio.to_thread(build_summary, args, pool, pity)
@@ -269,7 +283,6 @@ async def plan_gacha_draws(bot: Bot, ev: Event) -> None:
 def _annual_report(records: list[dict], year: str) -> str | None:
     """按年汇总：总抽数/六星数/六星率/最长垫刀/月份分布/新干员。"""
     from collections import Counter
-    from datetime import datetime
 
     from ArknightsUID.utils.hypergryph.gacha import (
         _legacy_one_based,
@@ -286,14 +299,12 @@ def _annual_report(records: list[dict], year: str) -> str | None:
         try:
             # 脏数据时间戳可能超范围（毫秒误当秒等），fromtimestamp
             # 会抛 Overflow/ValueError——按未知年份处理（审计 #39）
-            return datetime.fromtimestamp(ts).strftime("%Y")
+            return beijing_datetime(ts).strftime("%Y")
         except (OverflowError, OSError, ValueError):
             return ""
 
-    year_records = sorted(
-        [r for r in records if _year_of(_safe_ts(r)) == year],
-        key=lambda r: (_safe_ts(r), _safe_pos(r)),
-    )
+    ordered = sorted(records, key=lambda r: (_safe_ts(r), _safe_pos(r)))
+    year_records = [r for r in ordered if _year_of(_safe_ts(r)) == year]
     if not year_records:
         return None
 
@@ -306,17 +317,20 @@ def _annual_report(records: list[dict], year: str) -> str | None:
     pity_by_cate: dict[str, int] = {}
     worst_pity = 0
     worst_record: dict | None = None
-    for record in year_records:
+    for record in ordered:
+        record_year = _year_of(_safe_ts(record))
+        if not record_year or record_year > year:
+            continue
         cate = str(record.get("category", ""))
         pity_by_cate[cate] = pity_by_cate.get(cate, 0) + 1
         if _normalize_rarity(record, _legacy) >= 6:
             pity = pity_by_cate[cate]
-            if pity > worst_pity:
+            if record_year == year and pity > worst_pity:
                 worst_pity, worst_record = pity, record
             pity_by_cate[cate] = 0
 
     # year_records 已按 _year_of 过滤（可解析该年），这里统一走 _safe_ts
-    months = Counter(datetime.fromtimestamp(_safe_ts(r)).month for r in year_records)
+    months = Counter(beijing_datetime(_safe_ts(r)).month for r in year_records)
     busiest = max(months.items(), key=lambda kv: kv[1])[0]
 
     lines = [
@@ -341,13 +355,12 @@ def _annual_report(records: list[dict], year: str) -> str | None:
 
 @gacha_sv.on_command(("年度报告", "抽卡年度", "年度"), block=True)
 async def send_annual_report(bot: Bot, ev: Event) -> None:
-    from datetime import datetime
 
     args = (ev.text or "").strip().split()
     year = (
         args[0]
         if args and args[0].isdigit() and len(args[0]) == 4
-        else str(datetime.now().year)
+        else str(beijing_datetime().year)
     )
     uid = extract_uid(ev.text or "")
     credential = await resolve_or_reply(bot, ev, uid, 0)
@@ -370,7 +383,7 @@ async def send_annual_report(bot: Bot, ev: Event) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 寻访模拟（ark十连 / ark单抽）：官方概率 + 十连保底的纯本地娱乐模拟
+# 寻访模拟（ark十连 / ark单抽）：基础概率 + 新池首十抽五星保底
 # ---------------------------------------------------------------------------
 
 
@@ -401,13 +414,13 @@ def _simulate_context(results: list[dict], summary: dict, count: int) -> dict[st
 def _format_sim_text(summary: dict, results: list[dict]) -> str:
     from ArknightsUID.utils.gamedata.gacha_sim import format_pulls_text
 
-    lines = ["「明日方舟」寻访模拟（概率同官方，仅供娱乐）"]
+    lines = ["「明日方舟」新池寻访模拟（基础概率，仅供娱乐）"]
     lines.append(
         f"六星 {summary.get(6, 0)} | 五星 {summary.get(5, 0)} | "
         f"四星 {summary.get(4, 0)} | 三星 {summary.get(3, 0)}"
     )
     lines.append(format_pulls_text(results))
-    lines.append("不区分常驻/限定卡池，不累计真实垫刀；真实记录看 ark抽卡记录。")
+    lines.append("每次十连视为新池首十抽，至少五星；干员范围不对应真实卡池，不累计真实垫刀。")
     return "\n".join(lines)
 
 
