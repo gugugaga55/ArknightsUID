@@ -8,8 +8,9 @@ arknightsuid_wiki.send_crisis_info 仅渲染赛季时间线并提示跳转。
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import Any
+
+from ..time_utils import beijing_datetime
 
 from ._table_cache import ensure_crisis_tables
 
@@ -21,7 +22,7 @@ def _fmt_ts(ts: Any) -> str:
         return "—"
     if value <= 0:
         return "—"
-    return datetime.fromtimestamp(value).strftime("%Y-%m-%d")
+    return beijing_datetime(value).strftime("%Y-%m-%d")
 
 
 def _season_rows(payload: dict | None, version: str) -> list[dict[str, Any]]:

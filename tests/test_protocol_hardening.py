@@ -48,10 +48,10 @@ class ScanPayloadGuardTest(unittest.IsolatedAsyncioTestCase):
         from ArknightsUID.utils.skland import auth as sk_auth
 
         for payload in (None, "x", {"scanId": ""}):
-            async def fake_request(method, url, **kwargs):
+            async def fake_request(method, url, *, payload=payload, **kwargs):
                 return 200, {"status": 0, "msg": "OK", "data": payload}
 
-            with mock.patch.object(auth_mod := sk_auth, "_request", fake_request):
+            with mock.patch.object(sk_auth, "_request", fake_request):
                 self.assertIsNone(await sk_auth.get_scan_id())
                 self.assertIsNone(await sk_auth.get_scan_status("s"))
 

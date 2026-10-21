@@ -34,6 +34,9 @@ HELP_GROUPS = [
                 "eg": "ark登录",
             },
             {"cmd": "ark账号", "desc": "绑定账号列表（标注默认）", "eg": "ark账号"},
+            {"cmd": "ark好友 [序号|UID] [页N] [搜索:关键词]", "desc": "游戏好友与最近在线时间", "eg": "ark好友 页2"},
+            {"cmd": "ark头像分类 / ark头像列表 [页码] [分类:N]", "desc": "森空岛官方头像目录，无需登录", "eg": "ark头像列表 2"},
+            {"cmd": "ark头像 <ID> [分类:N]", "desc": "按目录 ID 查看官方头像图片", "eg": "ark头像 200232"},
             {
                 "cmd": "ark切换 <序号|UID>",
                 "desc": "设置默认查询账号",
@@ -162,8 +165,8 @@ HELP_GROUPS = [
                 "eg": "ark肉鸽敌人 汉科 树海 N15",
             },
             {
-                "cmd": "ark肉鸽关卡 <关名> [N难度] [紧急]",
-                "desc": "肉鸽关卡出怪面板：该难度下全体敌人折算数值 + 紧急作战",
+                "cmd": "ark肉鸽关卡 <关名> [期名] [分支N] [N难度] [紧急]",
+                "desc": "肉鸽关卡出怪面板与地图；同名关卡需选分支，支持难度/紧急",
                 "eg": "ark肉鸽关卡 拆东补西 N15 紧急",
             },
             {
@@ -213,7 +216,7 @@ HELP_GROUPS = [
             },
             {
                 "cmd": "ark十连 / ark单抽",
-                "desc": "寻访模拟（官方概率+保底，娱乐）",
+                "desc": "新池首十抽模拟（基础概率，首十抽至少五星）",
                 "eg": "ark十连",
             },
             {
@@ -289,6 +292,8 @@ HELP_GROUPS = [
         "en": "NEWS",
         "blurb": "活动 / 公告 / 每日抽签",
         "cmds": [
+            {"cmd": "ark活动进度 [活动名]", "desc": "森空岛个人活动关卡通关进度", "eg": "ark活动进度"},
+            {"cmd": "ark活动战绩 [玩法]", "desc": "引航者试炼/保全派驻/生息演算个人摘要", "eg": "ark活动战绩 引航者"},
             {"cmd": "ark活动", "desc": "进行中活动/卡池清单", "eg": "ark活动"},
             {
                 "cmd": "ark公告 [编号]",
@@ -691,9 +696,9 @@ _FORTUNE_TONES = {
 
 @fortune_sv.on_fullmatch(("抽签", "方舟抽签", "运势"), block=True)
 async def send_daily_fortune(bot: Bot, ev: Event) -> None:
-    from datetime import date
+    from ArknightsUID.utils.time_utils import beijing_datetime
 
-    today = date.today().isoformat()
+    today = beijing_datetime().date().isoformat()
     seed = _daily_seed(f"{ev.bot_id}:{ev.user_id}", today)
     fortune = _draw_fortune(seed)
 

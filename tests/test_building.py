@@ -342,12 +342,11 @@ class BuildingContextTest(unittest.IsolatedAsyncioTestCase):
 
         from ArknightsUID.utils.gamedata import charinfo as charinfo_mod
 
-        async def no_index() -> None:
-            return None
+        async def fake_index():
+            return item_index
 
         orig = charinfo_mod.load_item_index
-        if item_index is None:
-            charinfo_mod.load_item_index = no_index
+        charinfo_mod.load_item_index = fake_index
         try:
             with (
                 mock.patch(

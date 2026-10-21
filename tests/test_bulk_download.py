@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+from ArknightsUID.utils.gamedata.path_safety import cache_names_for_url
+
 import io
 import os
 import tempfile
@@ -95,7 +97,7 @@ class DownloadTargetTest(unittest.IsolatedAsyncioTestCase):
             ):
                 status = await bd.download_target(target)
             self.assertEqual(status, "ok")
-            webp = cache / "skchr_ayer_2.webp"
+            webp = (cache / cache_names_for_url(target.url)[0]).with_suffix(".webp")
             self.assertTrue(webp.exists())
             self.assertFalse((cache / "skchr_ayer_2.png").exists())
 
@@ -527,7 +529,7 @@ class DownloadTargetIntegrityTest(unittest.IsolatedAsyncioTestCase):
                 status = await bd.download_target(target)
             self.assertEqual(status, "ok")
             self.assertEqual(dl.await_count, 1, "0 字节残档应触发重下")
-            self.assertTrue((cache / "a.webp").exists())
+            self.assertTrue((cache / cache_names_for_url(target.url)[0]).with_suffix(".webp").exists())
             self.assertFalse((cache / "a.png").exists())
 
     async def test_corrupt_file_skips_without_verify(self) -> None:
@@ -556,7 +558,7 @@ class DownloadTargetIntegrityTest(unittest.IsolatedAsyncioTestCase):
                 status = await bd.download_target(target, verify=True)
             self.assertEqual(status, "ok")
             self.assertFalse(bad.exists(), "坏档应被删除")
-            self.assertTrue((cache / "a.webp").exists())
+            self.assertTrue((cache / cache_names_for_url(target.url)[0]).with_suffix(".webp").exists())
 
     async def test_valid_file_passes_verify_and_skips(self) -> None:
         with tempfile.TemporaryDirectory() as td:

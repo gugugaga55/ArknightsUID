@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from types import SimpleNamespace
 from unittest import mock
 
 from sqlalchemy import select
@@ -44,7 +43,7 @@ def _maker(engine):
     return sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
-async def _all_rows(session) -> dict[str, "object"]:
+async def _all_rows(session) -> dict[str, object]:
     from ArknightsUID.utils.database.models import ArkUser
 
     result = await session.execute(select(ArkUser).order_by(ArkUser.uid))

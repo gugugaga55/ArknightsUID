@@ -105,7 +105,7 @@ class StoreRemoveTest(unittest.IsolatedAsyncioTestCase):
         m_del.assert_awaited_once()
         m_bind.assert_awaited_once()
 
-    async def test_remove_all_deletes_each_bind_then_user(self) -> None:
+    async def test_remove_all_deletes_user_then_each_bind(self) -> None:
         with mock.patch.object(
             ark_store, "list_local_accounts",
             new=mock.AsyncMock(return_value=[_row("111"), _row("222")]),

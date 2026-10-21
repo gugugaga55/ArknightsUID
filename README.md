@@ -13,10 +13,10 @@ git clone https://github.com/gugugaga55/ArknightsUID.git
 
 渲染引擎二选一（详见下文[渲染引擎](#渲染引擎)）：
 
-- **`takumi`（默认）**：无浏览器渲染，`uv pip install pytakumi`（或 `uv pip install -e ".[takumi]"`，聊天里 `ark安装依赖 takumi` 亦可），实测单卡 <0.1s。
+- **`takumi`（默认）**：无浏览器渲染，`uv pip install pytakumi`（或 `uv pip install -e ".[takumi]"`，聊天里 `ark安装依赖 takumi` 亦可）。
 - **`playwright`**：Chromium 截图，takumi 未安装/渲染失败时自动回退，无需配置。
 
-Python 依赖（httpx、公招标签截图识别的 rapidocr 等）声明在 `pyproject.toml`，core 启动时会通过 AutoInstallDep（默认开）自动安装；极端环境自动安装失败时，管理员可发送 `ark安装依赖 ocr` 在聊天内补装（多镜像回退，装完即生效）。
+必需 Python 依赖 httpx 声明在 `pyproject.toml`，core 启动时会通过 AutoInstallDep（默认开）自动安装。公招标签截图识别 rapidocr 为可选依赖，管理员可发送 `ark安装依赖 ocr` 安装（多镜像回退，装完即生效）。
 
 **公告颜文字字体（自动，无需配置）**：官方公告正文常含颜文字（实帖样本 `꒰˶>ᗜ<˶꒱`、`ദ്ദി˶>𖥦<)`），这些字符不在 MiSans / Noto CJK / 彩色 Emoji 的覆盖范围，缺字体时会渲染成方框。插件在首次本地渲染时自动下载一套 OFL 符号字体包（Google Noto 五件：Yi / 加拿大原住民音节 / 马拉雅拉姆 / Symbols2 / Noto Sans，约 1.3MB，落插件目录 `ArknightsUID/templates/fonts/kaomoji/`，GitHub + jsdelivr 双镜像回退，失败 1 小时后自动重试）。离线部署可改为给系统手动装字体（装了即用，可免下载）：
 
@@ -48,6 +48,13 @@ Python 依赖（httpx、公招标签截图识别的 rapidocr 等）声明在 `py
 ### 状态查询
 
 <details><summary>展开/收起</summary>
+
+- `ark好友 [账号序号|UID] [页N] [搜索:关键词]`（别名 `ark好友列表` / `ark游戏好友`）：读取当前绑定角色的游戏好友，显示名称、等级、最近在线时间和可用的森空岛昵称；默认跟随 `ark切换`，每页 10 人。`ark好友 2 页2` 查询第二个账号，`ark好友 搜索:博士` 按名称/好友 UID/森空岛昵称筛选。列表缓存 60 秒，UID 遵循隐藏设置；接口明确返回不完整时会提示，不视为全量。
+- `ark头像分类`：查看森空岛官方头像分类，无需绑定账号。
+- `ark头像列表 [页码] [分类:N]`（别名 `ark头像目录`）：官方头像缩略图目录，默认明日方舟分类，每页 16 个；例如 `ark头像列表 2`、`ark头像列表 页2 分类:3`。目录缓存 1 小时。
+- `ark头像 <ID> [分类:N]`：按目录显示的 ID 查看图片，例如 `ark头像 200232`。
+
+好友数据的字段和显示规则已按原生模型及官方 UI 核对，签名、缓存、命令和错误回执有离线回归；当前开发环境没有绑定账号，好友接口成功响应的包装与服务端分页仍待实号联调。公开头像目录已通过匿名实网读取和渲染验证。详情见 [实现记录](docs/SOCIAL-FEATURES-2026-10-10.md)。
 
 - <details><summary><code>ark账号</code> / <code>ark我的方舟</code>：查看当前可用的明日方舟账号（标注默认账号）</summary>
 
@@ -132,6 +139,8 @@ Python 依赖（httpx、公招标签截图识别的 rapidocr 等）声明在 `py
 
 - <details><summary><code>ark抽卡记录</code> / <code>ark抽卡分析</code>：增量拉取官方寻访记录并出统计卡（总抽数/六星率/五星率/平均/垫刀/最近六星，每个六星条目下挂该段抽取的五星小头像）</summary>
 
+  如果历史同步曾漏页，可执行 `ark抽卡记录 全量`：重新扫描官方仍保留的记录并与本地存档合并。超过单轮 50 页时，之后用普通 `ark抽卡记录` 继续断点补拉；官方已清理且本地未保存的记录无法补回。
+
   <img src="docs/design/previews/ark_gacha_card.jpg" width="55%">
 
   </details>
@@ -141,13 +150,13 @@ Python 依赖（httpx、公招标签截图识别的 rapidocr 等）声明在 `py
   <img src="docs/design/previews/ark_cultivate.jpg" width="55%">
 
   </details>
-- <details><summary><code>ark攒抽 [玉:60000] [石:30] [垫刀:20]</code>：攒抽规划——资源折算抽数 + 限定/井概率（口径同源一图流 gachaCalc，自动垫刀与当前卡池，支持 单/十 券、单UP/双UP、天数推演与目标抽数）</summary>
+- <details><summary><code>ark攒抽 [玉:60000] [石:30] [垫刀:20]</code>：攒抽规划——资源折算抽数 + 限定/井概率（按限定寻访模型估算，默认双UP各35%，仅复用同名目标池的本地垫刀，支持 单/十 券、单UP/双UP、天数推演与目标抽数）</summary>
 
   <img src="docs/design/previews/ark_gacha_plan.jpg" width="55%">
 
   </details>
 - `ark年度 [年份]`: 寻访年度报告——本地记录的年度总抽数/六星率/最长垫刀/最肝月份纯文本总结。
-- <details><summary><code>ark十连</code> / <code>ark单抽</code>：寻访模拟——官方概率（6★2%/5★8%/4★50%/3★40%）+ 十连保底 4★+，纯本地娱乐（不区分卡池、不累计垫刀），出结果卡</summary>
+- <details><summary><code>ark十连</code> / <code>ark单抽</code>：寻访模拟——官方概率（6★2%/5★8%/4★50%/3★40%）+ 新池首十抽保底 5★+，每次十连模拟新池首轮，纯本地娱乐（不区分卡池、不累计垫刀），出结果卡</summary>
 
   <img src="docs/design/previews/ark_gacha_sim.jpg" width="55%">
 
@@ -222,7 +231,9 @@ Python 依赖（httpx、公招标签截图识别的 rapidocr 等）声明在 `py
   <img src="docs/design/previews/ark_rogue_relic.jpg" width="55%">
 
   </details>
-- <details><summary><code>ark肉鸽关卡 &lt;关名&gt; [N难度] [紧急]</code>：肉鸽关卡出怪面板——该难度下全体敌人的折算数值与机制（tomimi.dev 开源数据，支持紧急作战折算，如 <code>ark肉鸽关卡 拆东补西 N15 紧急</code>）</summary>
+- <details><summary><code>ark肉鸽关卡 &lt;关名&gt; [期名] [分支N] [N难度] [紧急]</code>：肉鸽关卡出怪面板——该难度下全体敌人的折算数值与机制（tomimi.dev 开源数据，支持紧急作战折算，如 <code>ark肉鸽关卡 拆东补西 N15 紧急</code>）</summary>
+
+  同名关卡会列出可选分支，例如 `ark肉鸽关卡 止变 界园 分支2`。分支编号按关卡 ID 排序，地图和出怪数据对应同一分支；编号不表示难度或紧急模式。可追加 `N15 紧急`。未指定分支时不再默认展示第一张图。
 
   <img src="docs/design/previews/ark_rogue_stage.jpg" width="55%">
 
@@ -241,6 +252,9 @@ Python 依赖（httpx、公招标签截图识别的 rapidocr 等）声明在 `py
 </details>
 
 ### 活动与推送（PRTS + 森空岛 web + 一图流）
+
+- `ark活动进度 [活动名]`：查询当前绑定账号的普通活动关卡通关数/总数与百分比，活动名可选；复用森空岛玩家接口及缓存。该数据不包含活动领奖、商店或蚀刻章套组明细。
+- `ark活动战绩 [玩法]`：引航者试炼档位/关卡、保全派驻最高进度、生息演算生存与营地摘要。可按玩法名过滤；肉鸽单局详情继续使用 `ark肉鸽战绩` / `ark肉鸽详情`。
 
 <details><summary>展开/收起</summary>
 
@@ -348,10 +362,12 @@ Python 依赖（httpx、公招标签截图识别的 rapidocr 等）声明在 `py
 
 本地 HTML→图片渲染支持两种引擎（配置项 `RenderEngine`，外置渲染不受影响）：
 
-- **`takumi`（默认）**：[pytakumi](https://github.com/KimigaiiWuyi/pytakumi) 无浏览器渲染，进程内完成，无 Chromium 常驻内存，实测单卡 <0.1s（Playwright 同卡约 10s）。安装：`uv pip install pytakumi`（或 `uv pip install -e ".[takumi]"`）。系统存在 Noto Sans CJK 时自动注册为离线字体兜底（远程 MiSans CSS 失效时仍出正常中文）。
+- **`takumi`（默认）**：[pytakumi](https://github.com/KimigaiiWuyi/pytakumi) 无浏览器渲染，进程内完成，无 Chromium 常驻内存。安装：`uv pip install pytakumi`（或 `uv pip install -e ".[takumi]"`）。系统存在 Noto Sans CJK 时自动注册供中文渲染；字体与部分 CSS 效果可能与 Chromium 不同。
 - **`playwright`**：Chromium 截图，作为 takumi 未安装/渲染失败时的自动回退（无需配置）。
 
-两种引擎产物均为 560px 宽 JPEG（与 `.container` 设计宽一致）；模板约定 `body` 无 margin、`.container` 顶格，两引擎输出画面等价。
+卡片设计宽为 560 CSS px；实际 JPEG 宽度由 `RenderScale` 决定：1/2/3 倍对应 560/1120/1680px，默认 2 倍。长卡高度随内容变化；状态卡保持 1000:640 的设计比例，仅有像素取整差异。模板约定 `body` 无 margin、`.container` 顶格。
+
+两种引擎的字体、装饰和部分留白存在差异，不保证画面或高度完全相同。渲染耗时也受内容、倍率及字体/素材加载影响。实际出图、比例验证与已修复问题见 [2026-10-10 渲染审查](docs/RENDER-AUDIT-2026-10-10.md)，附双引擎对照图。
 
 ## 丨其他
 
@@ -368,3 +384,4 @@ Python 依赖（httpx、公招标签截图识别的 rapidocr 等）声明在 `py
 - [Kengxxiao/ArknightsGameData](https://github.com/Kengxxiao/ArknightsGameData) — 游戏数据表镜像
 - [一图流](https://ark.yituliu.cn/) — 攒抽规划折算与保底口径参考
 - [pytakumi](https://github.com/KimigaiiWuyi/pytakumi) — takumi 渲染引擎
+

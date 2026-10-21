@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import pytest
+
 import sys
 import unittest
 from pathlib import Path
@@ -137,8 +139,6 @@ def _fake_uniequip() -> dict:
                 "typeName1": "领袖",
                 "uniEquipDesc": "银灰的模组。",
                 "unlockLevel": 60,
-                "unlockEvolvePhase": 2,
-                "unlockFavors": 50,
                 "itemCost": {  # 真实结构：按模组等级分档
                     "1": [
                         {"id": "A", "count": 4, "type": "MATERIAL"},
@@ -155,6 +155,7 @@ def _fake_uniequip() -> dict:
 
 
 class ModuleInfoTest(unittest.IsolatedAsyncioTestCase):
+    @pytest.mark.usefixtures("offline_card_assets")
     async def test_build_module_context(self) -> None:
         from ArknightsUID.utils.gamedata import modules_info as mi
 
@@ -295,7 +296,6 @@ class AliasTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(_parse_alias_text("只有一个词"))
 
     async def test_apply_user_alias_hit_and_miss(self) -> None:
-        import asyncio
 
         from ArknightsUID.utils import user_alias
 

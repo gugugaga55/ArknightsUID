@@ -6,6 +6,8 @@
 """
 from __future__ import annotations
 
+import pytest
+
 import sys
 import unittest
 from pathlib import Path
@@ -35,6 +37,7 @@ def _is_card(message: object) -> bool:
 
 
 class ModuleCardTest(unittest.IsolatedAsyncioTestCase):
+    @pytest.mark.usefixtures("offline_card_assets")
     async def test_module_command_sends_card(self) -> None:
         import ArknightsUID.utils.gamedata.modules_info as modules_info
         from ArknightsUID.arknightsuid_wiki import send_module_info
