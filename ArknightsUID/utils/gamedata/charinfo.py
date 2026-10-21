@@ -15,6 +15,9 @@ character_table 的 rarity 是 TIER_x（=x 星），与 player_info charInfoMap 
 
 from __future__ import annotations
 
+from ..disk_cache import read_json, write_json
+from ..disk_cache import index_covers_sources as _index_covers_sources
+
 from typing import Any, NamedTuple
 
 from gsuid_core.logger import logger
@@ -25,33 +28,11 @@ from ._table_cache import (
     GAMEDATA_CACHE_DIR,
     ITEM_TABLE_PATH,
     _cache_fresh,
-    _read_sidecar,
-    _write_sidecar,
     ensure_char_table,
 )
 
 CHARINDEX_PATH = GAMEDATA_CACHE_DIR / "charindex.json"
 ITEMINDEX_PATH = GAMEDATA_CACHE_DIR / "itemindex.json"
-
-
-def _index_covers_sources(index_path, *sources) -> bool:
-    """派生索引是否不早于其源表（按写入时间）。
-
-    源表可能被其他入口旁路刷新（如 ark面板 走 ensure_char_table 重下
-    新版表）：旧索引存在、源表也"新鲜"，但内容已落后——只查源表 TTL
-    会继续复用旧索引，新干员/新物品最长 7 天查不到（审计 #39）。
-    """
-    try:
-        index_mtime = index_path.stat().st_mtime
-    except OSError:
-        return False
-    for source in sources:
-        try:
-            if index_mtime < source.stat().st_mtime:
-                return False
-        except OSError:
-            continue
-    return True
 
 
 # 内建社区别名（别名 → 中文名）。只收录广泛公认且无歧义的。
@@ -110,16 +91,16 @@ async def load_char_index() -> dict[str, dict[str, Any]]:
         and await _cache_fresh(CHAR_TABLE_PATH, CHAR_TABLE_TTL)
         and _index_covers_sources(CHARINDEX_PATH, CHAR_TABLE_PATH)
     ):
-        cached = _read_sidecar(CHARINDEX_PATH)
+        cached = await read_json(CHARINDEX_PATH)
         if isinstance(cached, dict) and cached:
             return cached
     char_table = await ensure_char_table()
     if char_table is None:
-        cached = _read_sidecar(CHARINDEX_PATH)
+        cached = await read_json(CHARINDEX_PATH)
         return cached if isinstance(cached, dict) else {}
     index = build_char_index(char_table)
     if index:
-        _write_sidecar(CHARINDEX_PATH, index)
+        await write_json(CHARINDEX_PATH, index)
     return index
 
 
@@ -177,18 +158,18 @@ async def load_item_index() -> dict[str, dict[str, Any]]:
         and await _cache_fresh(ITEM_TABLE_PATH, CHAR_TABLE_TTL)
         and _index_covers_sources(ITEMINDEX_PATH, ITEM_TABLE_PATH)
     ):
-        cached = _read_sidecar(ITEMINDEX_PATH)
+        cached = await read_json(ITEMINDEX_PATH)
         if isinstance(cached, dict) and cached:
             return cached
     from ._table_cache import ensure_item_table
 
     item_table = await ensure_item_table()
     if not isinstance(item_table, dict):
-        cached = _read_sidecar(ITEMINDEX_PATH)
+        cached = await read_json(ITEMINDEX_PATH)
         return cached if isinstance(cached, dict) else {}
     index = build_item_index(item_table)
     if index:
-        _write_sidecar(ITEMINDEX_PATH, index)
+        await write_json(ITEMINDEX_PATH, index)
     return index
 
 

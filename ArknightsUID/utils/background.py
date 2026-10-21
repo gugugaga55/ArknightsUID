@@ -19,7 +19,10 @@ JSON 标记（char_id/skin_id/name/rarity），渲染期解析成 hycdn 立绘�
 
 from __future__ import annotations
 
+import asyncio
 import json
+import os
+from uuid import uuid4
 import random
 from pathlib import Path
 
@@ -111,37 +114,35 @@ async def save_bg_from_url(url: str, path: Path) -> bool:
     """
     if not url.startswith(("http://", "https://")):
         return False
-    try:
-        import httpx
+    from .http import safe_download_bytes
 
-        from .http import get_client
-
-        client: httpx.AsyncClient = await get_client()
-        response = await client.get(url, timeout=20.0, follow_redirects=True)
-        response.raise_for_status()
-        raw = response.content
-    except Exception as exc:
-        logger.warning(f"[ArknightsUID·背景] 下载失败: {exc.__class__.__name__}")
+    raw = await safe_download_bytes(url, timeout=20.0)
+    if raw is None:
         return False
 
     try:
-        import io
-
-        from PIL import Image
-
-        image = Image.open(io.BytesIO(raw))
-        image.load()
-        if image.mode not in ("RGB", "RGBA"):
-            image = image.convert("RGBA")
-        if max(image.size) > _BG_MAX_EDGE:
-            image.thumbnail((_BG_MAX_EDGE, _BG_MAX_EDGE))
-        path.parent.mkdir(parents=True, exist_ok=True)
-        # 上传图多为 JPEG 截图（无透明通道）；保留 RGBA 以支持 PNG 贴图
-        image.save(path, "WEBP", quality=_BG_QUALITY)
+        await asyncio.to_thread(_save_background, raw, path)
         return True
     except Exception as exc:
-        logger.warning(f"[ArknightsUID·背景] 图片解码失败: {exc.__class__.__name__}")
+        logger.warning(f"[ArknightsUID·背景] 图片保存失败: {exc.__class__.__name__}")
         return False
+
+
+def _save_background(raw: bytes, path: Path) -> None:
+    """图片解码/缩放/编码与磁盘写入在工作线程完成，替换成功前保留旧图。"""
+    from io import BytesIO
+    from PIL import Image
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp = path.with_name(f"{path.name}.{uuid4().hex}.tmp")
+    try:
+        with Image.open(BytesIO(raw)) as source:
+            image = source.convert("RGBA" if "A" in source.getbands() or "transparency" in source.info else "RGB")
+            image.thumbnail((_BG_MAX_EDGE, _BG_MAX_EDGE))
+            image.save(temp, "WEBP", quality=_BG_QUALITY)
+        os.replace(temp, path)
+    finally:
+        temp.unlink(missing_ok=True)
 
 
 def delete_bg(path: Path) -> bool:

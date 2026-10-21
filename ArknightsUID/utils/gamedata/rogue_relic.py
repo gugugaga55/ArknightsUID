@@ -12,6 +12,8 @@ iconId/rarity，type=RELIC）。同名藏品跨期复用（钝爪-典训 每期�
 
 from __future__ import annotations
 
+from ..disk_cache import index_covers_sources, read_json, write_json
+
 import base64
 import time
 from pathlib import Path
@@ -22,8 +24,6 @@ from ._table_cache import (
     GAMEDATA_CACHE_DIR,
     ROGUE_TOPIC_TABLE_PATH,
     _cache_fresh,
-    _read_sidecar,
-    _write_sidecar,
     ensure_rogue_topic_table,
 )
 
@@ -102,19 +102,21 @@ async def load_relic_index() -> dict[str, list[dict]]:
     该检查先于 18MB 主题表 ensure：30 天内直接读精简 sidecar，
     不触发全量表下载。失败返回 {}。
     """
-    if RELIC_INDEX_PATH.exists() and await _cache_fresh(
-        ROGUE_TOPIC_TABLE_PATH, 30 * 86400
+    if (
+        RELIC_INDEX_PATH.exists()
+        and await _cache_fresh(ROGUE_TOPIC_TABLE_PATH, 30 * 86400)
+        and index_covers_sources(RELIC_INDEX_PATH, ROGUE_TOPIC_TABLE_PATH)
     ):
-        cached = _read_sidecar(RELIC_INDEX_PATH)
+        cached = await read_json(RELIC_INDEX_PATH)
         if isinstance(cached, dict) and cached:
             return cached
     table = await ensure_rogue_topic_table()
     if table is None:
-        cached = _read_sidecar(RELIC_INDEX_PATH)
+        cached = await read_json(RELIC_INDEX_PATH)
         return cached if isinstance(cached, dict) else {}
     index = build_relic_index(table)
     if index:
-        _write_sidecar(RELIC_INDEX_PATH, index)
+        await write_json(RELIC_INDEX_PATH, index)
     return index
 
 

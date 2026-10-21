@@ -9,16 +9,17 @@ game/player/info 返回 1w+ 行 JSON，直接打森空岛接口既慢又有风�
 
 from __future__ import annotations
 
+import asyncio
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from gsuid_core.logger import logger
 
+from ..async_locks import KeyedLocks
 from ..path import PLAYER_PATH
 from ..player_store import (
     assert_uid_segment,
-    player_json_exists,
     read_player_json,
     resolve_player_path,
     write_player_json,
@@ -35,6 +36,13 @@ _PLAYER_INFO_NAME = "player_info.json"
 # 0 岁，缓存被锁死到墙钟追上文件时刻（实况：ark基建持续吐旧缓存）。
 # 秒级抖动在容差内，避免 NTP 微调击穿缓存造成雪崩。
 _FUTURE_SKEW_TOLERANCE = 60.0
+
+# 锁只在请求/失效期间持有强引用，不随历史访问 UID 累积。
+_player_locks = KeyedLocks()
+
+
+def _lock_for(uid: str) -> asyncio.Lock:
+    return _player_locks.get(uid)
 
 
 def _cache_path(uid: str) -> Path:
@@ -89,47 +97,50 @@ async def fetch_cached_player_info(
     """带磁盘缓存的 player_info 获取。
 
     返回响应信封 dict；adapter 失败时返回中文错误文案（str）。
-    force=True 跳过缓存直接请求（请求成功后仍会回写缓存）。
+    同 UID 并发查询串行检查缓存，避免重复网络拉取；不同 UID 互不阻塞。
+    force=True 在锁内跳过缓存直接请求（请求成功后仍会回写缓存）。
     """
     from ..enduid.adapter import fetch_player_info
 
-    if not force:
-        cached = await read_cached_player_info(credential.uid, ttl)
-        if cached is not None:
-            return cached
+    async with _lock_for(credential.uid):
+        if not force:
+            cached = await read_cached_player_info(credential.uid, ttl)
+            if cached is not None:
+                return cached
 
-    response = await fetch_player_info(credential)
-    if isinstance(response, str):
-        return response
+        response = await fetch_player_info(credential)
+        if isinstance(response, str):
+            return response
 
-    # 信封 code != 0（token 失效等）不落盘，避免坏响应占用 TTL
-    if isinstance(response, dict) and response.get("code") == 0:
-        try:
-            await write_player_json(_cache_path(credential.uid), response)
-        except Exception as exc:
+        # 信封 code != 0（token 失效等）不落盘，避免坏响应占用 TTL
+        if isinstance(response, dict) and response.get("code") == 0:
+            try:
+                await write_player_json(_cache_path(credential.uid), response)
+            except Exception as exc:
+                logger.warning(
+                    f"[ArknightsUID·player] 缓存写入失败 uid={credential.uid}: "
+                    f"{exc.__class__.__name__}: {exc}"
+                )
+        elif isinstance(response, dict):
+            # 排障关键信息：上层只报"解析失败"，真实原因（220 token 失效 /
+            # 10001 设备信息无效 / 10000 签名异常）在这里落日志
             logger.warning(
-                f"[ArknightsUID·player] 缓存写入失败 uid={credential.uid}: "
-                f"{exc.__class__.__name__}: {exc}"
+                "[ArknightsUID·player] player_info 返回异常 "
+                f"uid={credential.uid} code={response.get('code')} "
+                f"message={response.get('message')!r}"
             )
-    elif isinstance(response, dict):
-        # 排障关键信息：上层只报"解析失败"，真实原因（220 token 失效 /
-        # 10001 设备信息无效 / 10000 签名异常）在这里落日志
-        logger.warning(
-            "[ArknightsUID·player] player_info 返回异常 "
-            f"uid={credential.uid} code={response.get('code')} "
-            f"message={response.get('message')!r}"
-        )
-    return response
+        return response
 
 
 async def drop_cached_player_info(uid: str) -> None:
     """清掉本地缓存（签到等会改变状态的命令之后可调用）。"""
-    try:
-        if player_json_exists(_cache_path(uid)):
-            from ..player_store import remove_player_json
+    from ..player_store import remove_player_json
 
-            remove_player_json(_cache_path(uid))
-    except Exception as exc:
-        logger.warning(
-            f"[ArknightsUID·player] 缓存清理失败 uid={uid}: {exc.__class__.__name__}: {exc}"
-        )
+    async with _lock_for(uid):
+        try:
+            # 与旧请求回写互斥：失效完成后，不会被更早发起的请求恢复旧缓存。
+            await asyncio.to_thread(remove_player_json, _cache_path(uid))
+        except Exception as exc:
+            logger.warning(
+                f"[ArknightsUID·player] 缓存清理失败 uid={uid}: {exc.__class__.__name__}"
+            )

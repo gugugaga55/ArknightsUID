@@ -1,6 +1,8 @@
 """缓存与下载层加固回归测试（审计 #14/#16/#17/#18/#19/#21/#22/#30）。"""
 from __future__ import annotations
 
+from ArknightsUID.utils.gamedata.path_safety import cache_names_for_url
+
 import asyncio
 import sys
 import tempfile
@@ -44,7 +46,7 @@ class DownloadTargetMissTest(unittest.IsolatedAsyncioTestCase):
     """审计 #16/.miss 生效 + #17 200 非图片拒写。"""
 
     @staticmethod
-    def _target(tmp: str) -> "object":
+    def _target(tmp: str) -> object:
         from ArknightsUID.utils.resource.bulk_download import ResourceTarget
 
         return ResourceTarget(
@@ -86,7 +88,7 @@ class DownloadTargetMissTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result, "ok")
             # 资源恢复后旧 .miss 被清除（不再压住惰性路径）
             self.assertFalse(marker.exists())
-            self.assertTrue((target.cache_dir / "shot.webp").exists())
+            self.assertTrue((target.cache_dir / cache_names_for_url(target.url)[0]).with_suffix(".webp").exists())
 
     async def test_200_html_rejected_not_cached(self) -> None:
         import ArknightsUID.utils.resource.bulk_download as bd
@@ -101,7 +103,7 @@ class DownloadTargetMissTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result, "fail")
             # 坏内容不得落盘（存在即 skip 的永久坏缓存）
             self.assertFalse((target.cache_dir / "shot.png").exists())
-            self.assertFalse((target.cache_dir / "shot.webp").exists())
+            self.assertFalse((target.cache_dir / cache_names_for_url(target.url)[0]).with_suffix(".webp").exists())
 
 
 class MapNegativeCacheTest(unittest.IsolatedAsyncioTestCase):
@@ -122,7 +124,9 @@ class MapNegativeCacheTest(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch.object(
             http_mod, "download_bytes_status", self._make_status(status_map)
-        ), mock.patch.object(rp, "CACHE_PATH", Path(tmp)):
+        ), mock.patch.object(rp, "CACHE_PATH", Path(tmp)), mock.patch.object(
+            wiki, "resolve_map_file_url", new=mock.AsyncMock(return_value="")
+        ):
             return await wiki._get_stage_map_b64("1-7", "暴君")
 
     async def test_network_failure_writes_no_negative_cache(self) -> None:
@@ -474,12 +478,15 @@ class LazyCacheSelfHealTest(unittest.IsolatedAsyncioTestCase):
 
         async def fake_download(url, path, name, sess=None, tag=None, **kw):
             (Path(path) / name).write_bytes(b"<html>gateway error</html>")
+            return 200
 
         with tempfile.TemporaryDirectory() as tmp, mock.patch(
             "gsuid_core.utils.download_resource.download_file.download",
             new=fake_download,
         ):
-            with self.assertRaises(Exception):
+            from PIL import UnidentifiedImageError
+
+            with self.assertRaises(UnidentifiedImageError):
                 await img_mod.pic_download_from_url(Path(tmp), "https://x/err.png")
             leftovers = [
                 p for p in Path(tmp).iterdir() if not p.name.endswith(".tmp")

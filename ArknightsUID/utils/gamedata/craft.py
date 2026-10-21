@@ -169,7 +169,7 @@ def best_stage_cost(
     """单件期望理智最低的掉落关卡（样本>300）。无数据返回 None。"""
     from ..yituliu import item_drop_stats
 
-    stats = item_drop_stats(item_id, matrix_by_item, stage_meta, top=8)
+    stats = item_drop_stats(item_id, matrix_by_item, stage_meta, top=None)
     if not stats:
         return None
     best = min(stats, key=lambda row: row["ap_expect"])

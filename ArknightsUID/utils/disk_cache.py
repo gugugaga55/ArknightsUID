@@ -48,7 +48,12 @@ def _read_sync(path: Path) -> tuple[Any | None, float]:
 
 
 def _write_sync(path: Path, payload: Any) -> None:
-    """同步原子写：tmp + os.replace。"""
+    """包装缓存沿用同一原子 JSON 写入实现。"""
+    _write_json_sync(path, {"_cache_time": time.time(), "payload": payload})
+
+
+def _write_json_sync(path: Path, payload: Any) -> None:
+    """唯一临时文件 + 原子替换，失败不破坏旧 JSON。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     # tmp 名必须每次唯一：同进程内并发写同一路径（to_thread 并行）时，
     # 只按 pid 命名会让两个线程共用同一 tmp，互相截断/删除对方半成品
@@ -56,7 +61,7 @@ def _write_sync(path: Path, payload: Any) -> None:
     try:
         tmp_path.write_text(
             json.dumps(
-                {"_cache_time": time.time(), "payload": payload},
+                payload,
                 ensure_ascii=False,
             ),
             encoding="utf-8",
@@ -69,6 +74,26 @@ def _write_sync(path: Path, payload: Any) -> None:
                 tmp_path.unlink()
             except OSError:
                 pass
+
+
+def _read_json_sync(path: Path) -> Any | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+async def read_json(path: Path) -> Any | None:
+    """异步读取纯 JSON（派生索引格式）；缺失/损坏返回 None。"""
+    return await asyncio.to_thread(_read_json_sync, path)
+
+
+async def write_json(path: Path, payload: Any) -> None:
+    """异步原子写入纯 JSON；缓存写失败不影响本次业务结果。"""
+    try:
+        await asyncio.to_thread(_write_json_sync, path, payload)
+    except (OSError, TypeError, ValueError) as exc:
+        logger.debug(f"[ArknightsUID·缓存] 写入失败 {path.name}: {exc.__class__.__name__}")
 
 
 def _saved_ts_sync(path: Path) -> float:
@@ -128,11 +153,14 @@ async def cache_write(path: Path, payload: Any, validators: dict | None = None) 
     """
     try:
         await asyncio.to_thread(_write_sync, path, payload)
+        sidecar = _validators_path(path)
         if validators is not None:
-            sidecar = _validators_path(path)
             await asyncio.to_thread(
                 _write_validators_sync, sidecar, validators
             )
+        else:
+            # 新 payload 无校验器时，旧 ETag 不再描述当前缓存。
+            await asyncio.to_thread(sidecar.unlink, missing_ok=True)
     except Exception as exc:
         logger.debug(
             f"[ArknightsUID·缓存] 写入失败 {path.name}: {exc.__class__.__name__}"
@@ -144,21 +172,7 @@ def _validators_path(path: Path) -> Path:
 
 
 def _write_validators_sync(sidecar: Path, validators: dict) -> None:
-    sidecar.parent.mkdir(parents=True, exist_ok=True)
-    tmp = sidecar.with_name(
-        f"{sidecar.name}.tmp{os.getpid()}.{uuid4().hex[:8]}"
-    )
-    try:
-        tmp.write_text(
-            json.dumps(validators, ensure_ascii=False), encoding="utf-8"
-        )
-        os.replace(tmp, sidecar)
-    finally:
-        if tmp.exists():
-            try:
-                tmp.unlink()
-            except OSError:
-                pass
+    _write_json_sync(sidecar, validators)
 
 
 def _read_validators_sync(path: Path) -> dict:
@@ -187,3 +201,23 @@ async def cache_read_validators(path: Path) -> dict:
 def is_fresh(saved_ts: float, ttl: float) -> bool:
     """TTL 判定（saved_ts=0 视为不新鲜）。"""
     return saved_ts > 0 and time.time() - saved_ts <= ttl
+
+
+def index_covers_sources(index_path: Path, *sources: Path) -> bool:
+    """派生索引是否不早于其源表（按写入时间）。
+
+    源表可能被其他入口旁路刷新（如 ark面板 走 ensure_char_table 重下
+    新版表）：旧索引存在、源表也"新鲜"，但内容已落后——只查源表 TTL
+    会继续复用旧索引，新干员/新物品最长 7 天查不到（审计 #39）。
+    """
+    try:
+        index_mtime = index_path.stat().st_mtime
+    except OSError:
+        return False
+    for source in sources:
+        try:
+            if index_mtime < source.stat().st_mtime:
+                return False
+        except OSError:
+            continue
+    return True
