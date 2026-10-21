@@ -7,22 +7,30 @@ rootdir=gsuid_core 下收集时会把 plugins/ 目录顶到 sys.path 前端，�
 这里在收集测试模块之前就以正确路径把内层包导入并缓存，
 后续所有 `import ArknightsUID.xxx` 直接命中缓存，不受路径顺序影响。
 """
+
+import atexit
 import os
+import tempfile
 import sys
 from pathlib import Path
 
 from cryptography.fernet import Fernet
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-# 与 render_previews 等开发工具互斥：首个 ArknightsUID/gsuid_core 配置导入
-# 会写回 core_config.json（boltons 排他 .part），并发入口会撞车（见
-# tools/dev_init_lock.py）。持有到进程退出，覆盖测试期所有惰性插件导入。
-sys.path.insert(0, str(ROOT / "tools"))
-from dev_init_lock import acquire_dev_init_lock  # noqa: E402
+# 在任何插件/配置/数据库导入前隔离运行时数据，测试不依赖线上缓存。
+sys.path.insert(0, str(ROOT / "tests"))
+from runtime_isolation import block_external_network, isolate_data_root  # noqa: E402
 
-acquire_dev_init_lock()
+_collection_network_guard = pytest.MonkeyPatch()
+_collection_requests = block_external_network(_collection_network_guard)
+atexit.register(_collection_network_guard.undo)
+
+_test_data = tempfile.TemporaryDirectory(prefix="arknightsuid-pytest-")
+atexit.register(_test_data.cleanup)
+isolate_data_root(Path(_test_data.name))
 
 sys.modules.pop("ArknightsUID", None)
 
@@ -42,3 +50,39 @@ os.environ.setdefault("ARK_UID_ENC_KEY", Fernet.generate_key().decode())
 from ArknightsUID.utils.config import ArkConfig  # noqa: E402
 
 ArkConfig.get_config("HideUid").data = True
+
+
+def pytest_collection_finish(session):
+    if _collection_requests:
+        raise pytest.UsageError(f"测试收集阶段尝试联网：{_collection_requests}")
+
+
+@pytest.fixture(autouse=True)
+def no_external_http(monkeypatch):
+    """即使业务捕获异常，离线回归的未模拟联网也必须失败。"""
+    requests = block_external_network(monkeypatch)
+    yield
+    assert not requests, f"请在业务边界模拟外部 HTTP：{requests}"
+
+
+@pytest.fixture
+def offline_card_assets(monkeypatch):
+    """模板契约测试使用空素材和名称表；数据及下载由专门测试覆盖。"""
+    from unittest.mock import AsyncMock
+
+    from ArknightsUID import arknightsuid_wiki as wiki
+    from ArknightsUID.utils import render
+    from ArknightsUID.utils.prts import client as prts
+    from ArknightsUID.utils.gamedata import _table_cache, charinfo, rogue_enemy, rogue_relic
+
+    for module, names, result in (
+        (render, ("get_image_b64_with_cache",), ""),
+        (wiki, ("_skill_icon_b64", "_operator_portrait_b64", "_get_stage_map_b64"), ""),
+        (charinfo, ("load_skill_names",), {}),
+        (_table_cache, ("ensure_uniequip_table",), {}),
+        (prts, ("rogue_map_file_urls",), []),
+        (rogue_enemy, ("enemy_icon_b64",), ""),
+        (rogue_relic, ("relic_icon_b64",), ""),
+    ):
+        for name in names:
+            monkeypatch.setattr(module, name, AsyncMock(return_value=result))
