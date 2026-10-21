@@ -36,6 +36,7 @@ import ArknightsUID.arknightsuid_help  # noqa: F401
 import ArknightsUID.arknightsuid_notify  # noqa: F401
 import ArknightsUID.arknightsuid_push  # noqa: F401
 import ArknightsUID.arknightsuid_rogue  # noqa: F401
+import ArknightsUID.arknightsuid_social  # noqa: F401
 import ArknightsUID.arknightsuid_user_config  # noqa: F401
 import ArknightsUID.arknightsuid_wiki  # noqa: F401
 

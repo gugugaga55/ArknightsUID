@@ -7,9 +7,9 @@
 
 要点：
 - 仅 bot 主人可增删（gsuid_core 的 masters 配置，即 user_pm=0；
-  群管理员无此权限）。所有人都能用别名触发命令。
-- 别名持久化在 ArkCommandAlias 表；模块加载时惰性重放注册（首条消息
-  或管理命令触发时），热重载后模块重导入自动重放。
+  群管理员无此权限）。别名沿用目标 SV 的权限、开关与黑白名单。
+- 别名持久化在 ArkCommandAlias 表；启动及热重载后重放注册，首条消息
+  或管理命令触发时兜底重试。
 - 内置别名（招募=公招推荐）不落库：删除时写 tombstone（target=""），
   重启不复活；列表里标注来源。
 """
@@ -19,6 +19,7 @@ from __future__ import annotations
 from gsuid_core.bot import Bot
 from gsuid_core.logger import logger
 from gsuid_core.models import Event
+from gsuid_core.server import on_core_start, on_core_start_before
 from gsuid_core.sv import SV
 
 # 触发器表深耦合面（gsuid_core 内部结构）：改名/挪动时别名功能整体降级，
@@ -144,11 +145,28 @@ async def forward_command(bot: Bot, ev: Event) -> None:
             "（可能被禁用或改名），请主人用 ark删除指令别名 清理。",
         )
         return
+    from gsuid_core.handler import _sv_authorized
+
+    target_sv = next(
+        (
+            service
+            for service in SL.lst.values()
+            if any(
+                candidate is trigger
+                for candidate in service.TL.get("command", {}).values()
+            )
+        ),
+        None,
+    )
+    if target_sv is None or not _sv_authorized(target_sv, ev, ev.user_pm):
+        return
     # 直接调用目标 handler：ev.text 已剥掉 前缀+别名，与原命令的
     # 参数视角一致（"ark招募 术师 输出" ≡ "ark公招推荐 术师 输出"）
     await trigger.func(bot, ev)
 
 
+@on_core_start(priority=10)
+@on_core_start_before(priority=10)
 async def ensure_aliases_installed() -> None:
     """从 DB 重放别名注册（幂等；DB 未就绪时保持未安装，下条消息重试）。"""
     global _installed, _alias_map
@@ -241,7 +259,7 @@ async def list_command_aliases(bot: Bot, ev: Event) -> None:
             bot, ev, "当前没有启用的指令别名。主人可用 ark指令别名 别名=命令 添加。"
         )
         return
-    lines = ["「明日方舟」指令别名（所有人可用，主人管理）："]
+    lines = ["「明日方舟」指令别名（沿用目标权限，主人管理）："]
     prefixes = "/".join(sorted(_plugin_prefixes()))
     for alias, target in sorted(_alias_map.items()):
         builtin = (alias, target) in _BUILTIN_ALIASES.items()
@@ -306,13 +324,3 @@ async def manage_command_alias(bot: Bot, ev: Event) -> None:
 @alias_sv.on_message()
 async def _install_on_first_message(bot: Bot, ev: Event) -> None:
     await ensure_aliases_installed()
-
-
-# 插件加载尾段尝试提前注册（模块导入顺序在 wiki 等模块之前时，转发器
-# 不依赖目标存在，可安全先注册；DB 未就绪由 on_message 兜底重试）
-try:
-    import asyncio as _asyncio
-
-    _asyncio.get_running_loop().create_task(ensure_aliases_installed())
-except RuntimeError:
-    pass  # 无事件循环（如单测 import）：交给 on_message 兜底
