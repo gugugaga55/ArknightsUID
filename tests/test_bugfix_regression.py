@@ -324,9 +324,12 @@ class FindStageVariantsTest(unittest.TestCase):
 
         with mock.patch.object(rogue_enemy, "_load_stage_meta", fake_load):
             stage = asyncio.run(rogue_enemy.find_stage("迷惘"))
-        self.assertIsNotNone(stage)
-        self.assertEqual(stage["variants"], 2)
-        self.assertEqual(stage["level_id"], "level_rogue5_sv-10")
+            candidates = asyncio.run(rogue_enemy.search_stages("迷惘"))
+        self.assertIsNone(stage)
+        self.assertEqual([c["variants"] for c in candidates], [2, 2])
+        self.assertEqual([c["variant_index"] for c in candidates], [1, 2])
+        self.assertEqual([c["level_id"] for c in candidates],
+                         ["level_rogue5_sv-10", "level_rogue5_sv-10-b"])
 
 
 class AnnTimezoneTest(unittest.TestCase):

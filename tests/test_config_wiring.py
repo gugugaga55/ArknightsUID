@@ -8,16 +8,44 @@
 from __future__ import annotations
 
 import unittest
+from copy import deepcopy
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest import mock
 
-from ArknightsUID.utils.config import ArkConfig
+from ArknightsUID.utils.config import ArkConfig, CONFIG_DEFAULT
 from ArknightsUID.utils.enduid import adapter as enduid_adapter
 import ArknightsUID.arknightsuid_user_config as user_config_mod
 
 
 def _cfg(data):
     return SimpleNamespace(data=data)
+
+
+class ConfigPersistenceTest(unittest.TestCase):
+    def test_core_string_config_roundtrip_preserves_plugin_values(self) -> None:
+        from gsuid_core.utils.plugins_config import gs_config
+
+        with (
+            TemporaryDirectory() as directory,
+            mock.patch.object(gs_config, "all_config_list", dict(gs_config.all_config_list)),
+        ):
+            name = "ArknightsUIDPersistenceAudit"
+            path = Path(directory) / "config.json"
+            config = gs_config.StringConfig(name, path, deepcopy(CONFIG_DEFAULT))
+            values = {
+                "HideUid": False,
+                "RenderScale": 3,
+                "LocalProxyUrl": "http://127.0.0.1:7890",
+                "SignTime": ["10", "15"],
+            }
+            for key, value in values.items():
+                self.assertTrue(config.set_config(key, value))
+            gs_config.all_config_list.pop(name)
+            restored = gs_config.StringConfig(name, path, deepcopy(CONFIG_DEFAULT))
+            for key, value in values.items():
+                self.assertEqual(restored.get_config(key).data, value)
 
 
 class HideUidSemanticsTest(unittest.TestCase):
@@ -164,12 +192,10 @@ class ProxyClientTest(unittest.IsolatedAsyncioTestCase):
             )
             await client.aclose()
         finally:
-            http_mod._client = None
-            if original is not None and not original.is_closed:
-                await original.aclose()
+            # 只管理本用例创建的客户端，不跨事件循环关闭其他用例的连接。
+            http_mod._client = original
 
     async def test_client_no_proxy_when_config_empty(self) -> None:
-        import httpx
 
         import ArknightsUID.utils.http as http_mod
 
@@ -183,9 +209,8 @@ class ProxyClientTest(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(client.is_closed)
             await client.aclose()
         finally:
-            http_mod._client = None
-            if original is not None and not original.is_closed:
-                await original.aclose()
+            # 只管理本用例创建的客户端，不跨事件循环关闭其他用例的连接。
+            http_mod._client = original
 
 
 class UserConfigCommandTest(unittest.IsolatedAsyncioTestCase):

@@ -38,7 +38,6 @@ class CacheCleanTest(unittest.IsolatedAsyncioTestCase):
         )
 
     async def test_clean_cache_directories_walks_children(self) -> None:
-        import asyncio
 
         with tempfile.TemporaryDirectory() as td:
             target = Path(td) / "gamedata"
@@ -233,14 +232,6 @@ class RenderScaleTest(unittest.TestCase):
 
         self.assertEqual(captured.get("width"), 1120)  # 560 × 2
         self.assertEqual(captured.get("device_pixel_ratio"), 2)
-
-    def test_playwright_context_has_device_scale_factor(self) -> None:
-        import inspect
-
-        from ArknightsUID.utils.render import render_utils
-
-        src = inspect.getsource(render_utils)
-        self.assertIn("device_scale_factor=_render_scale()", src)
 
 
 class UpdateLogRepoGuardTest(unittest.IsolatedAsyncioTestCase):

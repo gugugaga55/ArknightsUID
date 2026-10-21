@@ -152,7 +152,9 @@ async def delete_invalid_creds(bot: Bot, ev: Event) -> None:
 @refresh_sv.on_fullmatch(("刷新", "刷新数据", "更新数据"), block=True)
 async def refresh_gamedata_cache(bot: Bot, ev: Event) -> None:
     from ArknightsUID.utils.path import CACHE_BASE
+    from ArknightsUID.utils.gamedata._table_cache import clear_table_memory_cache
 
+    clear_table_memory_cache()
     gamedata_dir = CACHE_BASE / "gamedata"
     removed = 0
     if gamedata_dir.exists():

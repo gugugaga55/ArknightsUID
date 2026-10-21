@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Any
 
 from gsuid_core.logger import logger
@@ -41,7 +41,7 @@ from . import client as skland_client
 
 # 公告时间戳按北京时区渲染日期（宿主多为 UTC 容器，本地时区会把
 # 北京 00:00-08:00 发布的公告显示成前一天）；无夏令时，固定 +8 即可
-_TZ_BJ = timezone(timedelta(hours=8))
+from ..time_utils import BEIJING_TZ as _TZ_BJ
 
 WEB_BASE = "https://zonai.skland.com"
 WEB_REFRESH_PATH = "/web/v1/auth/refresh"

@@ -4,7 +4,7 @@ import asyncio
 import re
 import time
 import unicodedata
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 
 from gsuid_core.bot import Bot
@@ -12,6 +12,7 @@ from gsuid_core.logger import logger
 from gsuid_core.models import Event
 from gsuid_core.sv import SV
 
+from ArknightsUID.utils.time_utils import BEIJING_TZ, beijing_datetime
 from ArknightsUID.version import ArknightsUID_version
 
 from ArknightsUID.utils.prts.client import (
@@ -1072,7 +1073,7 @@ async def _get_stage_map_b64(code: str, name: str, stage_id: str = "") -> str:
     from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
 
     cache = CACHE_PATH / "wiki" / "map"
-    miss = cache / ("nomap_" + _hashlib.md5(f"{code}_{name}".encode()).hexdigest()[:12])
+    miss = cache / ("nomap_" + _hashlib.md5(f"{code}_{name}_{stage_id}".encode()).hexdigest()[:12])
     if miss.exists() and time.time() - miss.stat().st_mtime < _MAP_MISS_TTL:
         return ""
 
@@ -1106,10 +1107,10 @@ async def _get_stage_map_b64(code: str, name: str, stage_id: str = "") -> str:
             return ""  # 网络失败/5xx：不写负缓存
         # 200：落盘复用 bulk 的校验规则（非图片内容拒绝，防污染），
         # 随后走缓存读取路径出 b64（含烘焙/格式分支，零重复下载）
-        from ArknightsUID.utils.gamedata.path_safety import safe_url_basename
+        from ArknightsUID.utils.gamedata.path_safety import cache_names_for_url
         from ArknightsUID.utils.resource.bulk_download import _save_image_sync
 
-        url_last = safe_url_basename(url)
+        url_last = cache_names_for_url(url)[0]
         if not url_last:
             return ""
         try:
@@ -1923,6 +1924,7 @@ async def send_recruit_recommend(bot: Bot, ev: Event) -> None:
         rows.append(
             {
                 "tags": " + ".join(combo["tags"]),
+                "duration": combo["duration"],
                 "tier": combo["tier"],
                 "tier_name": combo["tier_name"],
                 "min_rarity": combo["min_rarity"],
@@ -1949,12 +1951,12 @@ async def send_recruit_recommend(bot: Bot, ev: Event) -> None:
     for row in rows:
         names = "、".join(row["names"])
         lines.append(
-            f"[{row['tier_name']}] {row['tags']}（保底{row['min_rarity']}★，"
+            f"[{row['tier_name']}] {row['tags']}（招募 {row['duration']}，保底{row['min_rarity']}★，"
             f"池{row['pool_count']}人）：{names}"
         )
     lines.append(
         "勾选高资/资深标签并拉满 9 小时：标签不划、必得 6★/5★；"
-        "池与标签口径 PRTS 公开招募页同步。"
+        "其他组合按 9 小时，支援机械按 3:50，新手按 7:30；非稀有标签仍可能划掉。"
     )
     await _render_or_text(bot, ev, "ark_recruit_plan.html", context, "\n".join(lines))
 
@@ -2019,9 +2021,9 @@ async def send_recruit_query(bot: Bot, ev: Event) -> None:
 @wiki_sv.on_command(("日历", "calendar", "rl"), block=True)
 async def send_calendar(bot: Bot, ev: Event) -> None:
     """活动日历：当前版本/维护 + 进行中活动/卡池（SMW 与 PRTS 首页同源）。"""
-    beijing = timezone(timedelta(hours=8))
-    now_ts = datetime.now(beijing).timestamp()
-    now_str = datetime.now(beijing).strftime("%Y-%m-%d %H:%M")
+    now = beijing_datetime()
+    now_ts = now.timestamp()
+    now_str = now.strftime("%Y-%m-%d %H:%M")
 
     activities = await query_activities()
     pools = await query_gacha_pools()
@@ -2041,12 +2043,12 @@ async def send_calendar(bot: Bot, ev: Event) -> None:
     try:
         fmt = "%Y-%m-%d %H:%M"
         start_ts = (
-            datetime.strptime(maint_start, fmt).replace(tzinfo=beijing).timestamp()
+            datetime.strptime(maint_start, fmt).replace(tzinfo=BEIJING_TZ).timestamp()
             if maint_start
             else 0.0
         )
         end_ts = (
-            datetime.strptime(maint_end, fmt).replace(tzinfo=beijing).timestamp()
+            datetime.strptime(maint_end, fmt).replace(tzinfo=BEIJING_TZ).timestamp()
             if maint_end
             else 0.0
         )

@@ -32,5 +32,9 @@ tools/smoke_result.json
 tools/rogue_dump.json
 tools/building_preview.png
 
+# 仓库根示例渲染图（本地产物，不入库）
+ark_状态卡_示例.png
+ark_rogue_record_示例.png
+
 # 内部规划文档（本地保留，不入库）
 docs/ROADMAP.md

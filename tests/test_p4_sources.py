@@ -417,21 +417,17 @@ class YituliuCacheTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, payload)
 
     async def test_fetch_returns_stale_cache_on_network_fail(self) -> None:
-        import httpx
 
         payload = [_record("C-2", "过期缓存", 3.0)]
         self._module._STAGE_CACHE.write_text(
             json.dumps({"_cache_time": time.time() - 99999, "payload": payload}),
             encoding="utf-8",
         )
-        # 网络必然失败（不可路由地址），应回退过期缓存
-        self._module.STAGE_INFO_URL = "http://127.0.0.1:1/stage/info"
-        try:
+        from unittest import mock
+
+        with mock.patch.object(self._module, "_download_json", return_value=None) as fetch:
             result = await self._module.fetch_stage_info(force=True)
-        finally:
-            self._module.STAGE_INFO_URL = (
-                "https://backend.yituliu.cn/stage/info"
-            )
+        fetch.assert_awaited_once_with(self._module.STAGE_INFO_URL)
         self.assertEqual(result, payload)
 
 

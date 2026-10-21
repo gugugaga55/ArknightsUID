@@ -255,7 +255,8 @@ class GachaCursorTest(unittest.IsolatedAsyncioTestCase):
         ):
             records, warning = await gacha_svc.sync_gacha_logs(Credential())
 
-        self.assertEqual(warning, "")
+        self.assertIn("游标", warning)
+        self.assertIn("未完整", warning)
         self.assertEqual(len(records), 1)
         # 游标失效后立刻停止：只请求了第一页
         self.assertEqual(calls, [("cat", None, None)])

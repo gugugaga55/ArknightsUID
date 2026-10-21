@@ -6,6 +6,8 @@ _render_or_text 惰性 import 每次从源模块取属性，patch 源模块才�
 """
 from __future__ import annotations
 
+import pytest
+
 import unittest
 from unittest import mock
 
@@ -171,6 +173,7 @@ class SkillFxSharedTest(unittest.TestCase):
 
 
 class TalentDisplayTest(unittest.IsolatedAsyncioTestCase):
+    @pytest.mark.usefixtures("offline_card_assets")
     async def test_context_includes_stages_and_potential(self) -> None:
         op = OperatorInfo(
             title="测试",
@@ -276,6 +279,7 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context["source_url"], "https://prts.wiki/w/龙门币")
         self.assertTrue(context["version"])
 
+    @pytest.mark.usefixtures("offline_card_assets")
     async def test_build_operator_context_extracts_operator_fields(self) -> None:
         op = OperatorInfo(
             title="银灰",
@@ -297,6 +301,7 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(context["branch"], "领主")
         self.assertTrue(context["version"])
 
+    @pytest.mark.usefixtures("offline_card_assets")
     async def test_build_operator_context_includes_skills_and_talents(self) -> None:
         op = OperatorInfo(
             title="测试",
@@ -443,6 +448,7 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("当前 专3：", text)
         self.assertEqual(text.count("专3：效果+100%"), 1)
 
+    @pytest.mark.usefixtures("offline_card_assets")
     async def test_build_operator_context_with_owner(self) -> None:
         op = OperatorInfo(
             title="测试",
@@ -459,6 +465,7 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(skill["current"]["meta"], "消耗10")
         self.assertEqual(skill["final"]["level"], "专3")
 
+    @pytest.mark.usefixtures("offline_card_assets")
     async def test_build_operator_context_without_owner_has_final_only(self) -> None:
         op = OperatorInfo(
             title="测试",
@@ -472,6 +479,7 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(skill["current"])
         self.assertEqual(skill["final"]["level"], "专3")
 
+    @pytest.mark.usefixtures("offline_card_assets")
     async def test_render_contract(self) -> None:
         """ark_wiki_operator.html 与 builder context 的 schema 契约（jinja 全量渲染）。"""
         op = OperatorInfo(
@@ -551,6 +559,7 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("专3：D32钢 ×6、糖聚块 ×5", text)
         self.assertIn("来源：https://prts.wiki/w/测试", text)
 
+    @pytest.mark.usefixtures("offline_card_assets")
     async def test_build_operator_context_includes_panel_modules_potentials(self) -> None:
         op = OperatorInfo(
             title="测试",
@@ -760,6 +769,7 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("ab--skill", html_render)
         self.assertIn("ab-param", html_render)
 
+    @pytest.mark.usefixtures("offline_card_assets")
     async def test_stage_condition_blocks_assembly(self) -> None:
         """作战条件统一区块：突袭 / 环境条件 / 全息指标（基础+附加）/ CC 预留。"""
         from ArknightsUID.utils.prts.client import HoloIndicator
@@ -837,6 +847,7 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         self.assertIn("矩阵指标：4 条", text)
         self.assertIn("危机合约关卡", text)
 
+    @pytest.mark.usefixtures("offline_card_assets")
     async def test_build_stage_context_without_map_file(self) -> None:
         """地图文件不存在/解析失败：map_image 留空，其余字段不受影响。"""
         stage = StageInfo(
@@ -889,7 +900,7 @@ class WikiBuildContextTest(unittest.IsolatedAsyncioTestCase):
         )
         import hashlib as _hl
 
-        digest = _hl.md5("1-7_暴君_地图.png".encode("utf-8")).hexdigest()
+        digest = _hl.md5("1-7_暴君_地图.png".encode()).hexdigest()
         md5_url = f"https://media.prts.wiki/{digest[0]}/{digest[:2]}/1-7_%E6%9A%B4%E5%90%9B_%E5%9C%B0%E5%9B%BE.png"
 
         import tempfile

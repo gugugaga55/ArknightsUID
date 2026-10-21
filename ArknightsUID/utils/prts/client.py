@@ -6,7 +6,7 @@ import json
 import time
 import html
 import hashlib
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from pathlib import Path
 from dataclasses import field, dataclass
 from typing import Any
@@ -1820,7 +1820,7 @@ async def query_operator(query: str) -> OperatorInfo | None:
 
 # === 活动日历（SMW ask + Gameinfo LST）===
 
-_BEIJING_TZ = timezone(timedelta(hours=8))
+from ..time_utils import BEIJING_TZ as _BEIJING_TZ
 _SMW_RAW_DATE_RE = re.compile(r"^1/(\d+)/(\d+)/(\d+)/(\d+)/(\d+)/(\d+)/\d+$")
 # SMW ask/printout 提取与 LST section 解析
 _LST_SECTION_RE = re.compile(
@@ -1933,7 +1933,7 @@ async def query_activities(
 async def query_gacha_pools(
     limit: int = 10, now_ts: float | None = None
 ) -> list[ActivityInfo]:
-    """进行中/未来的限定卡池（SMW：Category:国服寻访）。now_ts 仅供测试注入。
+    """进行中/未来卡池（SMW：Category:国服寻访，不区分池型）。now_ts 仅供测试注入。
 
     SMW 结果键即卡池横幅的文件页（`文件:联合行动23.jpg`）——文件名经
     map_file_url（md5 散列路径）直接换出 media 直链，无需再查 imageinfo。
