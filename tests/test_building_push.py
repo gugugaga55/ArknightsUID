@@ -270,5 +270,5 @@ class CheckBuildingPushWiringTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(subscribe.sent, [])
         # 无事件：不推送，状态仅记录全 False 标志（不触发任何提醒）
         state = notify_mod._load_building_state()["bot|user|555"]
-        self.assertFalse(any((state.get(k) for k in ("labor", "trading", "tired"))))
+        self.assertFalse(any(state.get(k) for k in ("labor", "trading", "tired")))
         self.assertNotIn("recruit_seen", state)

@@ -17,7 +17,6 @@ from ArknightsUID.arknightsuid_notify import (
 )
 from ArknightsUID.arknightsuid_notify import (
     _load_train_state,
-    _save_train_state,
     _TRAIN_STATE_PATH,
     evaluate_training_warn,
 )

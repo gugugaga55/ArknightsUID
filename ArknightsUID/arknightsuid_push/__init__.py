@@ -30,6 +30,7 @@ from ArknightsUID.utils.card import send_card_or_text
 from ArknightsUID.utils.config import ArkConfig
 from ArknightsUID.utils.gamedata.charinfo import load_item_index
 from ArknightsUID.utils.gamedata.itemicon import item_icon_b64
+from ArknightsUID.utils.image import data_uri_bytes
 from ArknightsUID.utils.path import MAIN_PATH
 from ArknightsUID.utils.prts.client import (
     query_activities,
@@ -282,13 +283,6 @@ def format_ann_push_message(fresh: list[dict[str, str]]) -> str:
     return "\n".join(lines)
 
 
-def _data_uri_bytes(data_uri: str) -> bytes:
-    """data:image/xxx;base64,… → 原始 bytes（供消息段用）。"""
-    import base64
-
-    return base64.b64decode(data_uri.split(",", 1)[1])
-
-
 async def _safe_ann_detail(ann_id: str) -> dict | None:
     """公告详情拉取（推送链路用）：任何异常/空结果静默降级为 None。"""
     if not ann_id:
@@ -335,7 +329,7 @@ async def _build_ann_push_segments(
         b64 = await _announce_image_b64(ann.get("cover", ""), quality=80)
         if b64.startswith("data:image/"):
             try:
-                segments[ann_id] = [MessageSegment.image(_data_uri_bytes(b64))]
+                segments[ann_id] = [MessageSegment.image(data_uri_bytes(b64))]
                 continue
             except Exception as exc:
                 logger.debug(
