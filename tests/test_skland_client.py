@@ -58,7 +58,7 @@ class FakeAsyncClient:
         self.args = args
         self.kwargs = kwargs
 
-    async def __aenter__(self) -> "FakeAsyncClient":
+    async def __aenter__(self) -> FakeAsyncClient:
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:

@@ -73,6 +73,7 @@ CULTIVATE_PLAYER_URL = f"{MAIN_URL}api/{API_VERSION}/game/cultivate/player"
 # 期号换算的唯一事实源见 utils/gamedata/rogue_registry.py），
 # 空串由服务端返回默认期（响应 topics[].isSelected 标记当前期）
 ARK_ROGUE_URL = f"{MAIN_URL}api/{API_VERSION}/game/arknights/rogue"
+GAME_FRIEND_LIST_URL = f"{MAIN_URL}api/{API_VERSION}/game/friend/list"
 
 # 明日方舟在 Skland 的"游戏 ID"实际是 channelMasterId（官服渠道 ID）。
 # 这个值跟 EndUID 的 ENDFIELD_GAME_ID=3 并存于同一套森空岛账号体系。
@@ -528,6 +529,26 @@ async def get_player_info(credential: ArkCredential) -> dict[str, Any] | None:
         uid=credential.uid,
         game_id=ARKNIGHTS_CHANNEL_OFFICIAL,
         params={"uid": credential.uid, "gameId": ARKNIGHTS_CHANNEL_OFFICIAL},
+    )
+
+
+async def get_game_friends(credential: ArkCredential) -> dict[str, Any] | None:
+    """读取当前角色的游戏好友；复用 token 刷新及签名，不发送修改请求。"""
+    app_version = "2.2.0"
+    app_code = "200200057"
+    user_agent = (
+        f"Skland/{app_version} (com.hypergryph.skland; build:{app_code}; "
+        "Android 32; ) Okhttp/4.11.0"
+    )
+    return await _signed_request(
+        credential,
+        url=GAME_FRIEND_LIST_URL,
+        params={"uid": credential.uid},
+        platform=SKLAND_APP_PLATFORM,
+        vname=app_version,
+        user_agent=user_agent,
+        use_device_id=True,
+        extra_headers={**get_skland_app_headers(user_agent), "vCode": app_code},
     )
 
 

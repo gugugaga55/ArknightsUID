@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <div class="container" data-ghost="{{ 'CONTACTS' if kind == 'friends' else 'AVATARS' }}">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// {{ '好友档案 CONTACTS' if kind == 'friends' else '官方头像 AVATARS' }}</em></span>
+            <span class="mast-meta">{{ page }} / {{ pages }}</span>
+        </div>
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">{{ name }}{% if kind == 'friends' %} · UID {{ uid }}{% endif %}</div>
+                <h1 class="title">{{ '好友' if kind == 'friends' else '头像' }}<em>目录</em></h1>
+                <div class="title-rule"><span class="en">{{ 'GAME CONTACT DIRECTORY' if kind == 'friends' else 'SKLAND OFFICIAL COLLECTION' }}</span></div>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include 'assets/sticker_accounts.b64' %}" alt="">
+        </div>
+        <div class="sect">
+            <span class="sect-label bk">{{ ('匹配好友' if keyword else '好友记录') if kind == 'friends' else '素材目录' }} · {{ total }}</span>
+            <span class="sect-en">PAGE {{ page }} / {{ pages }}</span>
+        </div>
+        {% if kind == 'friends' %}
+        <div class="rows">
+            {% for row in rows %}
+            <div class="row" style="align-items: center; padding: 12px 0; gap: 12px;">
+                {% if row.avatar %}<img src="{{ row.avatar }}" alt="" style="width: 48px; height: 48px; object-fit: cover; border: 1px solid var(--line);">{% endif %}
+                <div style="flex: 1; min-width: 0;">
+                    <div class="row-value" style="font-size: 15px;">{{ row.name }} <span class="chip chip--yellow">Lv{{ row.level }}</span></div>
+                    <div class="mono u-mute" style="font-size: 10px; margin-top: 5px;">UID {{ row.uid }} · 最近在线 {{ row.last_online }}</div>
+                    <div class="u-mute" style="font-size: 11px; margin-top: 4px;">森空岛 · {{ row.skland_nickname }}</div>
+                </div>
+            </div>
+            {% else %}<div class="prose">{{ '未返回好友记录。' if note else ('未找到匹配的好友。' if keyword else '当前账号暂无游戏好友。') }}</div>{% endfor %}
+        </div>
+        {% else %}
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px;">
+            {% for row in rows %}
+            <div style="background: var(--panel); border: 1px solid var(--line); padding: 10px 5px; text-align: center;">
+                {% if row.avatar %}<img src="{{ row.avatar }}" alt="" style="width: 88px; height: 88px; object-fit: contain;">{% else %}<div style="height: 88px; display: flex; align-items: center; justify-content: center; color: var(--tx-3);">暂无预览</div>{% endif %}
+                <div class="mono" style="font-size: 11px; margin-top: 8px; font-weight: 700;">{{ row.id }}</div>
+            </div>
+            {% else %}<div class="prose">该分类暂无头像。</div>{% endfor %}
+        </div>
+        {% endif %}
+        {% if note %}<div class="prose" style="border-left: 3px solid var(--yellow); padding-left: 10px; margin-top: 12px;">{{ note }}</div>{% endif %}
+        <div class="prose" style="font-size: 11px; margin-top: 12px;">{{ hint }}</div>
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 森空岛</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker"><span>// RHODES ISLAND DIRECTORY</span><span>// SKLAND</span></div>
+    </div>
+</body>
+</html>

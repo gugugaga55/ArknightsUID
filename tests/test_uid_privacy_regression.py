@@ -97,7 +97,7 @@ class GachaUidMaskTest(unittest.IsolatedAsyncioTestCase):
             gacha_mod, "_auto_pity", new=mock.AsyncMock(return_value=0),
         ), mock.patch.object(
             gacha_mod, "_pick_pool",
-            new=mock.AsyncMock(return_value=({"name": "池"}, "")),
+            new=mock.AsyncMock(return_value=({"title": "池"}, "")),
         ), mock.patch.object(
             gacha_mod, "build_summary",
             new=mock.Mock(return_value={"notes": []}),
