@@ -14,11 +14,13 @@ rarity 口径：PRTS SMW 稀有度存 0-5，展示 +1（0=1★ … 5=6★）。
 
 from __future__ import annotations
 
+from ..disk_cache import read_json, write_json
+
 import time
 from pathlib import Path
 from typing import Any
 
-from ._table_cache import GAMEDATA_CACHE_DIR, _read_sidecar, _write_sidecar
+from ._table_cache import GAMEDATA_CACHE_DIR
 
 RECRUIT_DATA_PATH = GAMEDATA_CACHE_DIR / "recruit.json"
 
@@ -103,17 +105,20 @@ async def _fetch_pool() -> list[dict[str, Any]]:
     # 已加守卫（审计 #26g），此处漏改会让 .items() 直接崩掉
     # ark公招/公招推荐 整条命令（审计 #39）
     payload = data if isinstance(data, dict) else {}
+    if payload.get("query-continue-offset") is not None:
+        return []
     query = payload.get("query") if isinstance(payload.get("query"), dict) else {}
     results = query.get("results")
     results = results if isinstance(results, dict) else {}
-    return entries_from_smw(results)
+    entries = entries_from_smw(results)
+    return entries if len(entries) == len(results) else []
 
 
 async def load_recruit_data() -> list[dict[str, Any]]:
     """加载公招干员数据。新鲜精简缓存优先；过期则拉 PRTS 重建，
     拉取失败用过期缓存兜底；都没有则返回空列表。
     """
-    cached = _read_cache()
+    cached = await _read_cache()
     if cached and _sidecar_fresh(RECRUIT_DATA_PATH, _RECRUIT_TTL_SECONDS):
         return cached
     entries = await _fetch_pool()
@@ -128,14 +133,14 @@ async def load_recruit_data() -> list[dict[str, Any]]:
                 entry["id"] = name2id.get(entry["name"], "")
         except Exception:
             pass
-        _write_sidecar(RECRUIT_DATA_PATH, {"v": _CACHE_VERSION, "entries": entries})
+        await write_json(RECRUIT_DATA_PATH, {"v": _CACHE_VERSION, "entries": entries})
         return entries
     return cached or []
 
 
-def _read_cache() -> list[dict[str, Any]]:
+async def _read_cache() -> list[dict[str, Any]]:
     """读精简缓存（仅接受当前版本格式；v1 旧档视为无缓存）。"""
-    payload = _read_sidecar(RECRUIT_DATA_PATH)
+    payload = await read_json(RECRUIT_DATA_PATH)
     if isinstance(payload, dict) and payload.get("v") == _CACHE_VERSION:
         entries = payload.get("entries")
         if isinstance(entries, list):
@@ -163,6 +168,9 @@ def _match_prepared(
     senior_plus_selected: bool,
 ) -> list[dict[str, Any]]:
     """match_recruit 的预计算内核（同一语义，免去 per-combo 的 set 重建）。"""
+    if senior_plus_selected:
+        # 同时勾选资深/高级资深时，规则以最高稀有度标签为准。
+        qset = qset - {SENIOR_TAG}
     matched = [
         entry
         for entry, entry_tags, rarity in prepared
@@ -266,9 +274,18 @@ def recommend_combos(
     combos: list[dict[str, Any]] = []
     for size in range(1, min(max_select, len(known)) + 1):
         for combo in combinations(known, size):
+            if SENIOR_PLUS_TAG in combo and SENIOR_TAG in combo:
+                continue  # 高资已决定稀有度，不推荐浪费一格标签的重复组合。
             matches = _match_prepared(
                 frozenset(combo), prepared, SENIOR_PLUS_TAG in combo
             )
+            if "支援机械" in combo:
+                duration, minimum, maximum = "3:50", 1, 4
+            elif "新手" in combo:
+                duration, minimum, maximum = "7:30", 2, 5
+            else:
+                duration, minimum, maximum = "9:00", 3, 6
+            matches = [m for m in matches if minimum <= int(m["rarity"]) <= maximum]
             if not matches:
                 continue
             rarities = [int(e.get("rarity") or 0) for e in matches]
@@ -276,6 +293,7 @@ def recommend_combos(
             combos.append(
                 {
                     "tags": list(combo),
+                    "duration": duration,
                     "tier": tier,
                     "tier_name": tier_name,
                     "min_rarity": min(rarities),
