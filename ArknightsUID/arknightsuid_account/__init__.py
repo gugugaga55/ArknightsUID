@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime
 from typing import Any
 
 from gsuid_core.bot import Bot
@@ -13,6 +12,7 @@ from ArknightsUID.utils.account_switch import (
     get_default_uid,
     set_default_uid,
 )
+from ArknightsUID.utils.time_utils import beijing_datetime
 from ArknightsUID.utils.card import send_card_or_text
 from ArknightsUID.utils.enduid.adapter import (
     ArkCredential,
@@ -64,6 +64,33 @@ from ArknightsUID.utils.card import send_text as _send_text  # noqa: E402
 
 # 凭据解析 + 失败即回复的统一入口（原各处四行样板）
 from ArknightsUID.utils.card import resolve_or_reply  # noqa: E402
+
+
+@account_sv.on_command("活动进度", block=True)
+async def send_activity_progress(bot: Bot, ev: Event) -> None:
+    await _send_personal_activity(bot, ev, records=False)
+
+
+@account_sv.on_command("活动战绩", block=True)
+async def send_activity_records(bot: Bot, ev: Event) -> None:
+    await _send_personal_activity(bot, ev, records=True)
+
+
+async def _send_personal_activity(bot: Bot, ev: Event, *, records: bool) -> None:
+    credential = await resolve_or_reply(bot, ev)
+    if credential is None:
+        return
+    response = await fetch_cached_player_info(credential)
+    if isinstance(response, str):
+        await _send_text(bot, ev, _safe_external_message(response))
+        return
+    if not isinstance(response, dict) or response.get("code") != 0 or not isinstance(response.get("data"), dict):
+        await _send_text(bot, ev, "森空岛个人活动数据获取失败，请稍后重试。")
+        return
+    from ArknightsUID.utils.player.activity import format_activity_progress, format_activity_records
+
+    formatter = format_activity_records if records else format_activity_progress
+    await _send_text(bot, ev, formatter(response["data"], (ev.text or "").strip()))
 
 
 def _clip(text: Any, limit: int) -> str:
@@ -151,7 +178,7 @@ def _format_api_error(action: str, response: dict[str, Any]) -> str | None:
 def _format_timestamp(value: Any) -> str:
     if not isinstance(value, (int, float)) or value <= 0:
         return ""
-    return datetime.fromtimestamp(value).strftime("%Y-%m-%d %H:%M")
+    return beijing_datetime(value).strftime("%Y-%m-%d %H:%M")
 
 
 def _format_player_info(
@@ -436,7 +463,7 @@ def _format_campaign(
     if data.campaign_total > 0:
         lines.append(f"本周合成玉：{data.campaign_current}/{data.campaign_total}")
     for zone, kills in sorted(data.campaign_records.items(), key=lambda kv: -kv[1])[:6]:
-        lines.append(f"{zone}：击杀 {kills}")
+        lines.append(f"{data.campaign_name(zone)}：击杀 {kills}")
     if len(lines) <= 2:
         lines.append("未识别到剿灭详细字段（等待数据补全）。")
     return "\n".join(lines)
