@@ -330,7 +330,7 @@ class GachaAnalyzeTest(unittest.TestCase):
         assert ctx is not None
         self.assertEqual(ctx["name"], "博士")
         self.assertEqual(ctx["uid"], "123***789")
-        self.assertEqual(ctx["pity_max"], 80)
+        self.assertEqual(ctx["pity_max"], 99)
         self.assertEqual(ctx["total"], 2)
 
     def test_format_gacha_text_includes_warning(self) -> None:
@@ -552,6 +552,62 @@ class SyncIntegrityTest(unittest.IsolatedAsyncioTestCase):
         # 无锁时两协程基于同一份空本地日志各写各的，先写者被覆盖
         self.assertEqual(names, {"并发1", "并发2"}, f"并发同步丢记录: {names}")
 
+    async def test_pagination_echoes_raw_cursor_through_http_params(self) -> None:
+        """分页必须原样回传上游毫秒游标；本地统计仍使用秒。"""
+        from unittest import mock
+
+        first = _raw(1_700_000_000_123, 0, "第一页", 3)
+        second = _raw(1_699_999_999_456, 1, "第二页", 4)
+        calls = []
+
+        async def request(method, url, **kwargs):
+            params = kwargs["params"]
+            calls.append(params)
+            if url == hg.GACHA_CATE_API:
+                return 200, {"code": 0, "data": [{"id": 1}]}, []
+            if "gachaTs" not in params:
+                data = {"list": [first], "hasMore": True}
+            else:
+                self.assertEqual(params["gachaTs"], first["gachaTs"])
+                self.assertEqual(params["pos"], 0)
+                data = {"list": [second], "hasMore": False}
+            return 200, {"code": 0, "data": data}, []
+
+        with mock.patch.object(hg, "_request", request):
+            records, warning = await gacha_svc.sync_gacha_logs(_cred())
+        self.assertEqual(warning, "")
+        self.assertEqual([r["name"] for r in records], ["第一页", "第二页"])
+        self.assertEqual(records[0]["gacha_ts"], 1_700_000_000)
+        self.assertEqual(len(calls), 3)
+
+    async def test_full_sync_repairs_gaps_without_deleting_local_history(self) -> None:
+        await gacha_svc.save_local_logs(
+            "123456789", [_rec(1_700_000_100, 1, 5, "已有最新"),
+                          _rec(1_600_000_000, 1, 3, "官方已清理的旧记录")],
+        )
+        pages = iter([
+            {"list": [_raw(1_700_000_000_123, 0, "缺口1", 3)], "hasMore": True},
+            {"list": [_raw(1_699_999_999_456, 1, "缺口2", 4)], "hasMore": False},
+        ])
+        self._patch(lambda: next(pages))
+        records, warning = await gacha_svc.sync_gacha_logs(_cred(), full=True)
+        self.assertEqual(warning, "")
+        self.assertEqual({r["name"] for r in records},
+                         {"已有最新", "缺口1", "缺口2", "官方已清理的旧记录"})
+
+    async def test_legacy_seconds_floor_restarts_backfill(self) -> None:
+        await gacha_svc.save_local_logs("123456789", [_rec(1_700_000_100, 1, 5, "已有")])
+        await gacha_svc._save_sync_floors("123456789", {"1": {"ts": 1_700_000_000, "pos": 0}})
+        pages = iter([
+            {"list": [_raw(1_700_000_000_123, 0, "补拉1", 3)], "hasMore": True},
+            {"list": [_raw(1_699_999_999_456, 1, "补拉2", 4)], "hasMore": False},
+        ])
+        self._patch(lambda: next(pages))
+        records, warning = await gacha_svc.sync_gacha_logs(_cred())
+        self.assertEqual(warning, "")
+        self.assertEqual(len(records), 3)
+        self.assertEqual(await gacha_svc._load_sync_floors("123456789"), {})
+
     async def test_fuse_exhaustion_continues_next_round(self) -> None:
         """审计 #39：保险丝（50 页）耗尽不再被当"完整"——段内无断层的
         记录像常入库并留续拉游标；下轮从游标继续翻到底后清除游标。
@@ -569,7 +625,7 @@ class SyncIntegrityTest(unittest.IsolatedAsyncioTestCase):
         pages_data[-1]["hasMore"] = False
         # 游标（上页末条 ts）→ 下一页索引
         next_by_cursor = {
-            gacha_svc._norm_ts(page["list"][-1]["gachaTs"]): i + 1
+            page["list"][-1]["gachaTs"]: i + 1
             for i, page in enumerate(pages_data)
         }
 
@@ -661,3 +717,21 @@ class SyncIntegrityTest(unittest.IsolatedAsyncioTestCase):
         path = gacha_svc._logs_path("123456789")
         path.write_text(_json.dumps([None, "bad record"]), encoding="utf-8")
         self.assertEqual(await gacha_svc.load_local_logs("123456789"), [])
+
+
+class FullSyncCommandTest(unittest.IsolatedAsyncioTestCase):
+    async def test_full_keyword_reaches_sync_service(self) -> None:
+        from types import SimpleNamespace
+        from unittest import mock
+
+        from ArknightsUID import arknightsuid_gacha as command
+
+        credential = _cred()
+        event = SimpleNamespace(text="全量", user_id="u", bot_id="b")
+        with (
+            mock.patch.object(command, "resolve_or_reply", return_value=credential),
+            mock.patch.object(command, "sync_gacha_logs", return_value=([], "暂无")) as sync,
+            mock.patch.object(command, "_send_text", new=mock.AsyncMock()),
+        ):
+            await command.show_gacha_report(None, event)
+        sync.assert_awaited_once_with(credential, full=True)
