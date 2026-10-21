@@ -1,8 +1,11 @@
 """全模板渲染回归：业务卡用预览假数据走真实渲染管线出图。
 
 与 tools/render_previews.py 同源（MOCK_CONTEXTS）——新增业务模板必须
-同步补预览假数据，否则覆盖守恒断言失败。Playwright 不可用时渲染用例
-整体跳过（覆盖断言不依赖渲染引擎，始终执行）。
+同步补预览假数据，否则覆盖守恒断言失败。引擎不可用时仅跳过对应用例
+（覆盖断言不依赖渲染引擎，始终执行）。
+渲染用例固定本地 Playwright 或 Takumi / 2x 并离线，完整解码图片；
+Playwright 尺寸须匹配实际 DOM 容器与 DPR，Takumi 禁止静默回退；
+不以文件字节数代替比例或可读性检查。
 
 运行：在 gsuid_core venv 下 `python -m pytest tests/test_preview_render.py -v`
 """
@@ -11,9 +14,15 @@ from __future__ import annotations
 import importlib.util
 import os
 import sys
+import tempfile
 import unittest
+from contextlib import ExitStack
+from io import BytesIO
+from math import ceil
 from pathlib import Path
 from unittest import mock
+
+from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
 
@@ -27,7 +36,8 @@ def _load_preview_module():
     tool_path = Path(__file__).parents[1] / "tools" / "render_previews.py"
     spec = importlib.util.spec_from_file_location("ark_render_previews", tool_path)
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    with mock.patch.dict(os.environ, {"ARK_RENDER_OFFLINE": "1"}):
+        spec.loader.exec_module(module)
     return module
 
 
@@ -48,24 +58,142 @@ class PreviewCoverageTest(unittest.TestCase):
 
 
 class PreviewRenderRegressionTest(unittest.IsolatedAsyncioTestCase):
-    """真实渲染管线全量出图（Playwright 页池 + .container 截图）。"""
+    """两引擎离线全量出图；完整解码并核对尺寸与真实引擎路径。"""
 
     async def test_all_business_templates_render(self) -> None:
-        from ArknightsUID.utils.render.render_utils import PLAYWRIGHT_AVAILABLE
+        from ArknightsUID.utils.render import render_utils
 
-        if not PLAYWRIGHT_AVAILABLE:
+        if not render_utils.PLAYWRIGHT_AVAILABLE:
             self.skipTest("Playwright 不可用，跳过渲染回归")
 
-        from ArknightsUID.utils.render import ark_templates, render_html
+        from ArknightsUID.utils.config import ArkConfig
+        from ArknightsUID.utils.render import ark_templates
+
+        acquire_page = render_utils._acquire_page
+        release_page = render_utils._release_page
+        geometry = []
+
+        async def acquire_offline_page():
+            page, generation = await acquire_page()
+            if page is not None:
+                await page.context.set_offline(True)
+            return page, generation
+
+        async def record_geometry(page, generation):
+            try:
+                geometry.append(
+                    (
+                        await page.locator(".container").bounding_box(),
+                        await page.evaluate("window.devicePixelRatio"),
+                    )
+                )
+            finally:
+                await release_page(page, generation)
 
         module = _load_preview_module()
-        for name, context in module.MOCK_CONTEXTS.items():
-            with self.subTest(template=name):
-                img = await render_html(ark_templates, name, dict(context))
-                self.assertIsNotNone(img, f"{name} 渲染返回空")
-                self.assertGreater(
-                    len(img), 10_000, f"{name} 出图异常偏小，疑似空卡/坏卡"
+        with ExitStack() as stack:
+            for key, value in (
+                ("RemoteRenderEnable", False),
+                ("RenderEngine", "playwright"),
+                ("RenderScale", 2),
+            ):
+                stack.enter_context(
+                    mock.patch.object(ArkConfig.get_config(key), "data", value)
                 )
+            stack.enter_context(
+                mock.patch.object(render_utils, "_acquire_page", acquire_offline_page)
+            )
+            stack.enter_context(
+                mock.patch.object(render_utils, "_release_page", record_geometry)
+            )
+            takumi = stack.enter_context(
+                mock.patch.object(render_utils, "_render_local_takumi", mock.AsyncMock())
+            )
+            stack.enter_context(
+                mock.patch.object(render_utils.kaomoji_fonts, "maybe_start_download")
+            )
+            for name, context in module.MOCK_CONTEXTS.items():
+                with self.subTest(template=name):
+                    geometry.clear()
+                    img = await render_utils.render_html(
+                        ark_templates, name, dict(context)
+                    )
+                    self.assertIsInstance(img, bytes, f"{name} 渲染返回空")
+                    self.assertEqual(len(geometry), 1, f"{name} 未走浏览器截图")
+                    bounds, scale = geometry[0]
+                    self.assertIsNotNone(bounds)
+                    self.assertEqual(scale, 2)
+                    self.assertAlmostEqual(bounds["width"], 560, delta=0.5)
+                    with Image.open(BytesIO(img)) as image:
+                        image.load()
+                        self.assertEqual(image.format, "JPEG")
+                        self.assertEqual(image.width, 1120)
+                        self.assertGreater(image.height, 0)
+                        self.assertAlmostEqual(
+                            image.height,
+                            ceil(bounds["height"]) * scale,
+                            delta=1,
+                            msg=f"{name} 截图高度与容器/DPR 不一致",
+                        )
+            takumi.assert_not_awaited()
+
+    async def test_all_business_templates_render_with_takumi(self) -> None:
+        from ArknightsUID.utils.config import ArkConfig
+        from ArknightsUID.utils.render import ark_templates, render_utils
+
+        if render_utils._takumi_module() is None:
+            self.skipTest("pytakumi 未安装，跳过真实 Takumi 全模板回归")
+
+        module = _load_preview_module()
+        with ExitStack() as stack:
+            for key, value in (
+                ("RemoteRenderEnable", False),
+                ("RenderEngine", "takumi"),
+                ("RenderScale", 2),
+            ):
+                stack.enter_context(
+                    mock.patch.object(ArkConfig.get_config(key), "data", value)
+                )
+            takumi = stack.enter_context(
+                mock.patch.object(
+                    render_utils,
+                    "_render_local_takumi",
+                    wraps=render_utils._render_local_takumi,
+                )
+            )
+            acquire = stack.enter_context(
+                mock.patch.object(
+                    render_utils,
+                    "_acquire_page",
+                    new=mock.AsyncMock(
+                        side_effect=AssertionError("Takumi 不应静默回退 Playwright")
+                    ),
+                )
+            )
+            stack.enter_context(
+                mock.patch.object(render_utils.kaomoji_fonts, "maybe_start_download")
+            )
+            for name, context in module.MOCK_CONTEXTS.items():
+                with self.subTest(template=name):
+                    takumi.reset_mock()
+                    img = await render_utils.render_html(
+                        ark_templates, name, dict(context)
+                    )
+                    takumi.assert_awaited_once()
+                    acquire.assert_not_awaited()
+                    self.assertIsInstance(img, bytes, f"{name} 渲染返回空")
+                    with Image.open(BytesIO(img)) as image:
+                        image.load()
+                        self.assertEqual(image.format, "JPEG")
+                        self.assertEqual(image.width, 1120)
+                        self.assertGreater(image.height, 0)
+                        self.assertTrue(
+                            any(
+                                low < high
+                                for low, high in image.convert("RGB").getextrema()
+                            ),
+                            f"{name} 渲染产物为纯色空图",
+                        )
 
 
 class RenderClockAndOfflineTest(unittest.TestCase):
@@ -121,6 +249,33 @@ class RenderClockAndOfflineTest(unittest.TestCase):
             self.assertFalse(module._offline())
         with mock.patch("sys.argv", ["render_previews.py", "--offline"]):
             self.assertTrue(module._offline())
+
+    def test_offline_asset_cache_miss_does_not_download(self) -> None:
+        module = _load_preview_module()
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(module, "ASSET_DIR", Path(directory) / "missing"),
+            mock.patch("sys.argv", ["render_previews.py", "--offline"]),
+            mock.patch("urllib.request.urlretrieve") as download,
+        ):
+            self.assertEqual(module.asset_b64("avatar_amiya"), "")
+            download.assert_not_called()
+            self.assertFalse(module.ASSET_DIR.exists())
+
+    def test_offline_asset_cache_hit_is_still_inlined(self) -> None:
+        module = _load_preview_module()
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            mock.patch.object(module, "ASSET_DIR", Path(directory)),
+            mock.patch("sys.argv", ["render_previews.py", "--offline"]),
+            mock.patch("urllib.request.urlretrieve") as download,
+        ):
+            output = BytesIO()
+            Image.new("RGB", (2, 3)).save(output, format="PNG")
+            (module.ASSET_DIR / "avatar_amiya.png").write_bytes(output.getvalue())
+            result = module.asset_b64("avatar_amiya")
+            self.assertTrue(result.startswith("data:image/png;base64,"))
+            download.assert_not_called()
 
     def test_template_args_strips_flags(self) -> None:
         module = _load_preview_module()

@@ -213,6 +213,7 @@ _BROWSER_IDLE_TTL = 3600
 _page_pool: asyncio.Queue = asyncio.Queue()
 _pool_lock = asyncio.Lock()
 _pool_ctx = None
+_pool_scale = None
 _pool_generation = 0  # Incremented on browser restart to invalidate stale pages
 
 _FONT_CSS_NAME = "fonts.css"
@@ -355,13 +356,23 @@ _pool_lock = asyncio.Lock()
 
 async def _acquire_page():
     """Get a reusable page from the pool, or create a new one."""
-    global _pool_ctx, _active_renders
+    global _pool_ctx, _pool_scale, _pool_generation, _active_renders
 
     browser = await _ensure_browser()
     if browser is None:
         return None, -1
 
     async with _pool_lock:
+        scale = _render_scale()
+        if _pool_ctx is not None and _pool_scale != scale:
+            old_context = _pool_ctx
+            _pool_ctx = None
+            _pool_generation += 1
+            while not _page_pool.empty():
+                pooled_page, _ = _page_pool.get_nowait()
+                await pooled_page.close()
+            if not old_context.pages:
+                await old_context.close()
         gen = _pool_generation
 
         # Try to reuse a pooled page
@@ -398,26 +409,27 @@ async def _acquire_page():
             _pool_ctx = await browser.new_context(
                 viewport={"width": 1200, "height": 1000},
                 # 截图物理分辨率 = CSS 尺寸 × 倍率（RenderScale，默认 2x 防手机端发糊）
-                device_scale_factor=_render_scale(),
+                device_scale_factor=scale,
             )
+            _pool_scale = scale
 
-    try:
-        page = await _pool_ctx.new_page()
-    except Exception:
-        # 属性探测失灵/竞态窗口里的已关 context：重建一次再试；仍失败
-        # 由 render_html 的外层兜底走文本降级
-        async with _pool_lock:
+        try:
+            page = await _pool_ctx.new_page()
+        except Exception:
+            # 属性探测失灵/竞态窗口里的已关 context：重建一次再试；仍失败
+            # 由 render_html 的外层兜底走文本降级
             try:
                 await _pool_ctx.close()
             except Exception:
                 pass
             _pool_ctx = await browser.new_context(
                 viewport={"width": 1200, "height": 1000},
-                device_scale_factor=_render_scale(),
+                device_scale_factor=scale,
             )
-        page = await _pool_ctx.new_page()
-    _active_renders += 1
-    return page, _pool_generation
+            _pool_scale = scale
+            page = await _pool_ctx.new_page()
+        _active_renders += 1
+        return page, gen
 
 
 async def _release_page(page, gen: int):
@@ -432,7 +444,10 @@ async def _release_page(page, gen: int):
         await _page_pool.put((page, gen))
     else:
         try:
+            context = page.context
             await page.close()
+            if context is not _pool_ctx and not context.pages:
+                await context.close()
         except Exception:
             pass
 
@@ -710,7 +725,8 @@ async def get_image_b64_with_cache(
             if cover_size is not None:
                 tw, th = cover_size
                 scale = max(tw / img.width, th / img.height)
-                new_w, new_h = int(img.width * scale), int(img.height * scale)
+                new_w = max(tw, int(img.width * scale))
+                new_h = max(th, int(img.height * scale))
                 img = img.resize((new_w, new_h), Image.LANCZOS)
                 left = (new_w - tw) // 2
                 # 竖长图（公告封面常见）取顶部切片：居中裁只会截到中段

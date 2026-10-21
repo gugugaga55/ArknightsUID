@@ -124,13 +124,15 @@ HYCDN_ASSETS = {
 
 
 def asset_b64(key: str) -> str:
-    """下载（带缓存）hycdn 资产并转 base64 data URL，失败返回空串。"""
+    """hycdn 资产转 data URL；离线仅读缓存，缺失或下载失败返回空串。"""
     import base64
     import urllib.request
 
-    ASSET_DIR.mkdir(parents=True, exist_ok=True)
     cache = ASSET_DIR / f"{key}.png"
     if not cache.exists():
+        if _offline():
+            return ""
+        ASSET_DIR.mkdir(parents=True, exist_ok=True)
         try:
             urllib.request.urlretrieve(HYCDN_ASSETS[key], cache)
         except Exception as e:
@@ -296,6 +298,24 @@ def _building_preview() -> dict:
 
 
 MOCK_CONTEXTS = {
+    "ark_social.html": {
+        "kind": "friends",
+        "name": "演示博士",
+        "uid": "12***89",
+        "total": 2,
+        "page": 1,
+        "pages": 1,
+        "keyword": False,
+        "rows": [
+            {"name": "演示好友", "uid": "90***01", "level": 120,
+             "avatar": "", "last_online": "2026-09-01 12:00", "skland_nickname": "演示昵称"},
+            {"name": "演示好友二", "uid": "90***02", "level": 118,
+             "avatar": "", "last_online": "未提供", "skland_nickname": "未授权"},
+        ],
+        "note": "",
+        "hint": "翻页：ark好友 [相同账号参数] 页N；筛选：搜索:关键词",
+        "version": VERSION,
+    },
     "ark_help.html": {
         "version": VERSION,
         "groups": [
