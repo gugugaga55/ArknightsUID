@@ -9,12 +9,13 @@ playwright 可用时额外做一次真实出图（bytes 校验）；不可用时
 """
 from __future__ import annotations
 
+import pytest
+
 import re
 import unittest
 
 from test_player_parse import _envelope
 
-from ArknightsUID.utils.gamedata import charinfo
 from ArknightsUID.utils.hypergryph import gacha as gacha_svc
 from ArknightsUID.utils.path import TEMPLATES_PATH
 from ArknightsUID.utils.player import (
@@ -79,6 +80,7 @@ class CardContractTest(unittest.TestCase):
     def test_box_card_contract(self) -> None:
         self._assert_card("ark_box_analysis.html", build_box_context(self.data, VERSION))
 
+    @pytest.mark.usefixtures("offline_card_assets")
     def test_char_card_contract_without_network(self) -> None:
         # 图标/技能名走惰性下载，测试环境网络失败时降级为空串仍可出卡
         import asyncio
@@ -89,6 +91,7 @@ class CardContractTest(unittest.TestCase):
         self.assertEqual(context["name"], "阿米娅(术师)")
         self.assertEqual(context["rarity"], 5)
 
+    @pytest.mark.usefixtures("offline_card_assets")
     def test_char_card_contract_with_skill_effects(self) -> None:
         """PRTS 技能效果增强：当前级/满级描述 + 初动/消耗/持续进 context 并渲染上卡。"""
         import asyncio
