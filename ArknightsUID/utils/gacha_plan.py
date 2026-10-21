@@ -1,29 +1,28 @@
 """抽卡规划（攒抽计算器）核心计算，无网络 IO。
 
-口径来源（ark.yituliu.cn/tools/gachaCalc 前端逻辑逆向确认，
-bundle main-DPBXoxQ6.js 的预计算概率表 lEe/sEe 与 gacha-calc-test chunk
-的资源换算函数 x()）：
+概率规则见 https://prts.wiki/w/寻访规则；资源折算参考一图流 gachaCalc。
 
 1. 资源换算：抽数 = 合成玉/600 + 源石×0.3 + 单抽券 + 十连券×10
    （源石 1 颗换 180 玉，180/600 = 0.3 抽）
-2. 六星概率：基础 2%/抽；50 抽后每抽线性 +2.5%（官方公示，封顶 100%）
-3. UP 占比：单 UP 限定池六星里限定占 70%；双 UP 池各 35%
+2. 六星概率：基础 2%/抽；50 抽后每抽线性 +2%（官方公示，封顶 100%）
+3. UP 占比模型：默认双 UP 限定池各 35%；手动单 UP 模型占 70%
    （lEe 表首抽 0.007 = 2%×35% 逆向印证）
 4. 非 UP 六星同样重置递增垫刀 → 概率用严格状态 DP，非朴素连乘
 5. 300 抽井：定向兑换保底，累计表在 300 处置 1（与一图流一致）
 
-本模块的 build_up_table 与一图流 lEe（双UP单限定）/sEe（双UP双限定）
-两张 301 项表逐点校验（tests/test_gacha_plan.py）。
+概率规则核对 PRTS《寻访规则》。一图流旧表只用于前 50 抽恒定区的
+参考对照，不能用黑盒表的宽容差代替递增区规则验证。
 """
 
 from __future__ import annotations
 
 import math
+from functools import lru_cache
 from dataclasses import dataclass, field
 
 # === 官方公示常量 ===
 SIX_BASE = 0.02  # 六星基础概率
-SIX_INC = 0.025  # 50 抽后每抽递增
+SIX_INC = 0.02  # 50 抽后每抽递增
 PITY_START = 50  # 递增起始抽数
 WELL_PULLS = 300  # 井（定向兑换）抽数
 ORUNDUM_PER_DRAW = 600  # 600 合成玉 = 1 抽
@@ -73,13 +72,14 @@ def build_up_table(
     陪跑 share = 六星里非 UP 部分，双 UP 池为 30%，由 sEe 表逆向验证）。
 
     table[n] = 从 start_pity 垫刀出发再抽 n 抽达成目标的概率；
-    table[0]=0，table[max_pulls]=1（井保底，与一图流表尾置 1 一致）。
+    table[0]=0；指定一个 UP 的限定模型仅在 300 抽及以后计入兑换保底。
+    多目标组合计算仅计实际抽取概率，不假定一份兑换能同时满足全部目标。
 
     状态机：dp[u][o][k] = 已拿到 u 个限定 / o 个陪跑、连续 k 抽未出六星的
     概率。每抽以 six_rate(k) 出六星，按 share 拆成 UP / 陪跑 / 池内其它
     六星（其它同样重置垫刀，不影响目标计数）；未出六星则 k+1。
     """
-    if targets < 1 or want_off < 0 or start_pity < 0:
+    if targets < 1 or want_off < 0 or start_pity < 0 or max_pulls < 0:
         raise ValueError("invalid args")
     if off_share is None:
         off_share = max(0.0, 1.0 - up_share) if want_off else 0.0
@@ -87,7 +87,11 @@ def build_up_table(
         if want_off and abs(up_share - UP_SHARE_DOUBLE) < 1e-9:
             off_share = 1.0 - 2 * UP_SHARE_DOUBLE
 
-    size = max_pulls + 2
+    # 98 垫刀时下一抽必得六星，之后所有状态等价，无需按抽数扩大数组。
+    max_pity = PITY_START - 1 + math.ceil((1.0 - SIX_BASE) / SIX_INC)
+    start_pity = min(start_pity, max_pity)
+    size = min(max_pity + 1, start_pity + max_pulls + 1)
+    rates = [six_rate(k) for k in range(size)]
     # dp[(u, o)][k]：已拿到 u 个限定（0..targets）、o 个陪跑（0..want_off）、
     # 连续 k 抽未出六星；u/o 任一未达标即活跃（双达标即吸收进 done）
     dp: dict[tuple[int, int], list[float]] = {
@@ -99,45 +103,53 @@ def build_up_table(
     dp[(0, 0)][min(start_pity, size - 1)] = 1.0
     other_share = max(0.0, 1.0 - up_share - off_share)
 
-    def place(u: int, o: int, k: int, mass: float) -> None:
-        if u >= targets and o >= want_off:
-            nonlocal done
-            done += mass
-        else:
-            nxt[(u, o)][k] += mass
-
     table: list[float] = [0.0]
     done = 0.0
     for _ in range(max_pulls):
         nxt = {key: [0.0] * size for key in dp}
         for (u, o), row in dp.items():
+            waiting = nxt[(u, o)]
+            six_mass = 0.0
             for k, mass in enumerate(row):
                 if mass <= 0.0:
                     continue
-                p6 = six_rate(k)
-                place(min(u + 1, targets), o, 0, mass * p6 * up_share)
-                place(u, min(o + 1, want_off), 0, mass * p6 * off_share)
-                # 出池内其它六星：重置垫刀，计数不变
-                nxt[(u, o)][0] += mass * p6 * other_share
-                # 未出六星
-                kk = min(k + 1, size - 1)
-                nxt[(u, o)][kk] += mass * (1.0 - p6)
+                hit = mass * rates[k]
+                six_mass += hit
+                waiting[min(k + 1, size - 1)] += mass - hit
+            # 六星总会重置垫刀，可先合并概率质量，再分别分配目标/陪跑。
+            for next_u, next_o, share in (
+                (min(u + 1, targets), o, up_share),
+                (u, min(o + 1, want_off), off_share),
+                (u, o, other_share),
+            ):
+                mass = six_mass * share
+                if next_u >= targets and next_o >= want_off:
+                    done += mass
+                else:
+                    nxt[(next_u, next_o)][0] += mass
         dp = nxt
         table.append(done)
-    table[-1] = 1.0
+    if targets == 1 and want_off == 0:
+        table[WELL_PULLS:] = [1.0] * max(0, len(table) - WELL_PULLS)
     return table
+
+
+@lru_cache(maxsize=64)
+def _planning_table(up_share: float, start_pity: int) -> tuple[float, ...]:
+    """只缓存命令使用的 300 抽单目标表；不可变且有界，不缓存玩家身份。"""
+    return tuple(build_up_table(up_share, start_pity=start_pity))
 
 
 def chance_within(
     draws: int,
     *,
-    up_share: float = UP_SHARE_SINGLE,
+    up_share: float = UP_SHARE_DOUBLE,
     start_pity: int = 0,
 ) -> float:
     """从 start_pity 垫刀出发，draws 抽内拿到指定 UP 限定的概率（0-1）。"""
     if draws <= 0:
         return 0.0
-    table = build_up_table(up_share, start_pity=start_pity)
+    table = _planning_table(up_share, min(start_pity, 98))
     n = min(draws, WELL_PULLS)
     return table[n]
 
@@ -155,7 +167,7 @@ class PlanArgs:
     ten_tickets: float = 0.0
     pity: int | None = None  # None = 自动读本地记录
     pool_keyword: str = ""  # 空 = 自动取下一个结束的卡池
-    up_mode: str = "单UP"  # 单UP(70%) / 双UP(各35%)
+    up_mode: str = "双UP"  # 单UP(70%) / 双UP(各35%)
     days: int | None = None  # None = 按卡池结束时间算
     target_draws: int | None = None  # 目标抽数（缺省 300 井）
     errors: list[str] = field(default_factory=list)
@@ -227,8 +239,11 @@ def parse_plan_args(text: str) -> PlanArgs:
         if name == "pool_keyword":
             args.pool_keyword = value
         elif name == "up_mode":
-            mode = "双UP" if "双" in value else "单UP"
-            args.up_mode = mode
+            mode = value.upper()
+            if mode not in ("单UP", "双UP"):
+                args.errors.append("类型需要 单UP 或 双UP")
+            else:
+                args.up_mode = mode
         else:
             try:
                 number = float(value)
@@ -273,8 +288,8 @@ class PlanSummary:
     originium: float = 0.0
     single_tickets: float = 0.0
     ten_tickets: float = 0.0
-    up_mode: str = "单UP"
-    up_share: float = UP_SHARE_SINGLE
+    up_mode: str = "双UP"
+    up_share: float = UP_SHARE_DOUBLE
     target_draws: int = WELL_PULLS
     # 概率视角（现有库存抽数下 / 再补档位抽数）
     chance_now: float = 0.0
@@ -315,7 +330,7 @@ def build_summary(
         ten_tickets=args.ten_tickets,
         up_mode=args.up_mode,
         up_share=up_share_for(args.up_mode),
-        target_draws=args.target_draws or WELL_PULLS,
+        target_draws=args.target_draws if args.target_draws is not None else WELL_PULLS,
     )
     if args.pity is not None:
         summary.pity_source = "手动指定"
@@ -336,7 +351,7 @@ def build_summary(
     if summary.days_left > 0 and summary.well_gap > 0:
         summary.daily_needed = summary.well_gap / summary.days_left
 
-    table = build_up_table(summary.up_share, start_pity=summary.pity)
+    table = _planning_table(summary.up_share, min(summary.pity, 98))
     have = int(summary.current_draws)
     summary.chance_now = table[min(have, WELL_PULLS)]
     summary.chance_50 = table[min(have + 50, WELL_PULLS)]
@@ -348,6 +363,7 @@ def build_summary(
     summary.notes.append(
         f"井计数按本池抽数累计（不继承垫刀），目标 {summary.target_draws} 抽"
     )
+    summary.notes.append("概率按限定寻访模型估算；自动卡池仅提供名称和截止时间，不代表已识别该池规则")
     summary.notes.append(
         f"UP 占比按{summary.up_mode}口径"
         f"（{'各 35%' if summary.up_share == UP_SHARE_DOUBLE else '70%'}），"
@@ -400,8 +416,9 @@ def build_plan_context(
         "chance_100": _fmt_pct(summary.chance_100),
         "chance_150": _fmt_pct(summary.chance_150),
         "well_gap": summary.well_gap,
-        "well_pct": min(
-            100, int(summary.current_draws * 100 / max(1, summary.target_draws))
+        "well_pct": (
+            min(100, int(summary.current_draws * 100 / summary.target_draws))
+            if summary.target_draws > 0 else 100
         ),
         "daily_needed": f"{summary.daily_needed:.1f}",
         "notes": summary.notes,
@@ -422,15 +439,18 @@ def format_plan_text(summary: PlanSummary, name: str, uid_masked: str) -> str:
         f"→ 再补 50 抽 {ctx['chance_50']}% ／ 100 抽 {ctx['chance_100']}%"
         f" ／ 150 抽 {ctx['chance_150']}%"
     )
+    gap_label = "井缺口" if summary.target_draws == WELL_PULLS else "目标缺口"
+    target_label = "井线" if summary.target_draws == WELL_PULLS else "目标"
     if summary.well_gap > 0:
         daily = (
             f"，每天需攒 {ctx['daily_needed']} 抽" if summary.daily_needed > 0 else ""
         )
         lines.append(
-            f"井缺口：{summary.target_draws} - {ctx['current_draws']}"
+            f"{gap_label}：{summary.target_draws} - {ctx['current_draws']}"
             f" = {summary.well_gap} 抽{daily}"
         )
     else:
-        lines.append(f"已攒够 {summary.target_draws} 抽井线 ✅")
+        lines.append(f"已攒够 {summary.target_draws} 抽{target_label} ✅")
     lines.append(f"（{summary.up_mode}口径，UP 占六星 {ctx['up_share_pct']}%）")
+    lines.extend(summary.notes)
     return "\n".join(lines)

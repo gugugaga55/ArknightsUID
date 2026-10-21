@@ -1,9 +1,9 @@
-"""寻访模拟（ark十连 / ark单抽）：官方概率 + 十连保底的纯本地抽卡模拟。
+"""寻访模拟（ark十连 / ark单抽）：基础概率 + 新池首十抽五星保底的纯本地抽卡模拟。
 
 概率口径（官方寻访规则，客观游戏事实）：
 - 单抽稀有度：3★ 40% / 4★ 50% / 5★ 8% / 6★ 2%
-- 十连保底：每十次寻访必得一名四星及以上干员——前 9 抽全 3★ 时，
-  第 10 抽强制从 4★+ 池（4:50 / 5:8 / 6:2 归一化）抽取
+- 每次模拟视为新卡池的首轮：前 10 抽至少一名 5★+。
+  前 9 抽未得 5★+ 时，最后一抽的 3/4★ 结果提升为 5★；6★ 仍按基础概率。
 - 寻访池最低 3★（1-2★ 干员不在池内）
 
 干员池：干员索引（character_table 精简缓存）按稀有度分组随机；
@@ -23,22 +23,13 @@ RARITY_WEIGHTS: tuple[tuple[int, int], ...] = (
     (5, 8),
     (6, 2),
 )
-FOUR_STAR_GUARANTEE = 4  # 十连保底线（4★ 及以上）
+FIRST_TEN_GUARANTEE = 5  # 新池前十抽至少一名五星及以上
 POOL_RARITIES = (3, 4, 5, 6)
 
 
 def roll_rarity(rng: random.Random) -> int:
     """按官方权重抽稀有度。"""
     rarities, weights = zip(*RARITY_WEIGHTS)
-    return rng.choices(rarities, weights=weights, k=1)[0]
-
-
-def roll_rarity_at_least(rng: random.Random, floor: int) -> int:
-    """保底池：只从 >= floor 的稀有度抽（权重归一化）。"""
-    candidates = [
-        (rarity, weight) for rarity, weight in RARITY_WEIGHTS if rarity >= floor
-    ]
-    rarities, weights = zip(*candidates)
     return rng.choices(rarities, weights=weights, k=1)[0]
 
 
@@ -69,7 +60,7 @@ def simulate_pulls(
     rng: random.Random,
     guarantee: bool = True,
 ) -> list[dict[str, Any]]:
-    """模拟 count 连抽（count<=10）；十连保底按前 9 抽判定。
+    """模拟 count 连抽（count<=10）；首十抽五星保底按前 9 抽判定。
 
     返回逐抽结果 [{rarity, char_id, name, profession}]，
     最后一抽带 guarantee=True 标记（若保底触发）。
@@ -82,19 +73,20 @@ def simulate_pulls(
             guarantee
             and is_last
             and count == 10
-            and all(r["rarity"] < FOUR_STAR_GUARANTEE for r in results)
+            and all(r["rarity"] < FIRST_TEN_GUARANTEE for r in results)
         )
-        rarity = (
-            roll_rarity_at_least(rng, FOUR_STAR_GUARANTEE)
-            if need_guarantee
-            else roll_rarity(rng)
-        )
+        rarity = roll_rarity(rng)
+        forced = need_guarantee and rarity < FIRST_TEN_GUARANTEE
+        if forced:
+            rarity = FIRST_TEN_GUARANTEE
         pool = pools.get(rarity) or []
         if not pool:
             # 稀有度池缺失（索引异常）时降级到任意非空池，保证模拟可出结果
-            for fallback in (pools.get(r) or [] for r in POOL_RARITIES):
-                if fallback:
-                    pool = fallback
+            for fallback_rarity in POOL_RARITIES:
+                if pools.get(fallback_rarity):
+                    rarity = fallback_rarity
+                    pool = pools[rarity]
+                    forced = False
                     break
         if not pool:
             results.append(
@@ -108,7 +100,7 @@ def simulate_pulls(
                 "char_id": char["char_id"],
                 "name": char["name"],
                 "profession": char["profession"],
-                "guarantee": bool(need_guarantee),
+                "guarantee": bool(forced),
             }
         )
     return results
