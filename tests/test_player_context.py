@@ -152,8 +152,8 @@ class ContextBuilderTest(unittest.TestCase):
         self.assertEqual(format_remaining(8300, now=1000), "2h 01m")  # 7300s
 
     def test_equip_display_name(self) -> None:
-        self.assertEqual(equip_display_name("uniequip_002_amiya"), "X1 模组")
-        self.assertEqual(equip_display_name("uniequip_003_amiya"), "Y2 模组")
+        self.assertEqual(equip_display_name("uniequip_002_amiya"), "uniequip_002_amiya")
+        self.assertEqual(equip_display_name("uniequip_003_amiya"), "uniequip_003_amiya")
         self.assertEqual(equip_display_name("weird_id"), "weird_id")
         self.assertEqual(equip_display_name(""), "模组")
 

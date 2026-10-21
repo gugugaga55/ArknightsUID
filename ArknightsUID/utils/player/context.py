@@ -10,11 +10,13 @@ from __future__ import annotations
 
 import time
 import re
-from datetime import datetime
 from typing import Any
 from urllib.parse import quote
 
 from gsuid_core.logger import logger
+
+from ..dict_utils import path
+from ..time_utils import beijing_datetime
 
 from .building import (
     MORALE_LOW_THRESHOLD,
@@ -57,7 +59,7 @@ _HYCDN = "https://web.hycdn.cn/arknights/game/assets"
 def format_dt(ts: int, now: float | None = None) -> str:
     if ts <= 0:
         return ""
-    return datetime.fromtimestamp(ts).strftime("%m-%d %H:%M")
+    return beijing_datetime(ts).strftime("%m-%d %H:%M")
 
 
 def format_remaining(ts: int, now: float | None = None) -> str:
@@ -211,6 +213,7 @@ def build_status_context(
     full_at = data.ap_complete_recovery_time
     daily_done = min(data.daily_done, data.daily_total)
     weekly_done = min(data.weekly_done, data.weekly_total)
+    registered = beijing_datetime(data.register_ts) if data.register_ts > 0 else None
     return {
         "name": data.name,
         "level": data.level,
@@ -223,8 +226,8 @@ def build_status_context(
         "reg_days": data.register_days(now),
         # 注册日期（2023年5月12日 形态；无注册时间戳为空串）
         "register_date": (
-            datetime.fromtimestamp(data.register_ts).strftime("%Y年%-m月%-d日")
-            if data.register_ts > 0
+            f"{registered.year}年{registered.month}月{registered.day}日"
+            if registered is not None
             else ""
         ),
         "chars_total": data.chars_total,
@@ -261,7 +264,11 @@ def build_campaign_context(
         else 0
     )
     stages = [
-        {"name": zone_key, "progress": kills, "total": CAMPAIGN_STAGE_KILL_CAP}
+        {
+            "name": data.campaign_name(zone_key),
+            "progress": kills,
+            "total": CAMPAIGN_STAGE_KILL_CAP,
+        }
         for zone_key, kills in sorted(
             data.campaign_records.items(), key=lambda kv: -kv[1]
         )[:6]
@@ -367,20 +374,9 @@ def build_box_context(
     }
 
 
-def equip_display_name(equip_id: str) -> str:
-    """模组展示名：uniequip_002_silverash → "X2 模组" 风格退化展示。
-
-    player_info 的 equipmentInfoMap 字段语义未完全确认（真实 dump 截断），
-    先用 id 顺序位做 X/Y 猜测 + 原始 id 兜底，后续联调后替换为表内名称。
-    """
-    if not equip_id:
-        return "模组"
-    parts = equip_id.split("_")
-    if len(parts) >= 3 and parts[1].isdigit():
-        # 偶数序号 → X 型，奇数 → Y 型（干员模组通用规律）
-        slot = int(parts[1])
-        return f"{'X' if slot % 2 == 0 else 'Y'}{max(1, (slot + 1) // 2)} 模组"
-    return equip_id
+def equip_display_name(equip_id: str, metadata: dict | None = None) -> str:
+    """优先使用游戏表中的模组名；缺少元数据时显示 ID，不猜类型或等级。"""
+    return str(path(metadata, "uniEquipName") or equip_id or "模组")
 
 
 def _mastery_target(
@@ -725,7 +721,7 @@ async def build_training_context(
     )
     finish_at = ""
     if remaining > 0:
-        finish_at = datetime.fromtimestamp(time.time() + remaining).strftime(
+        finish_at = beijing_datetime(time.time() + remaining).strftime(
             "%m-%d %H:%M"
         )
     if not trainee_id or remaining < 0:
@@ -846,9 +842,16 @@ async def build_char_card_context(
                 "final_meta": final.get("meta", ""),
             }
         )
+    equip_table = None
+    if any(eq.equip_id for eq in entry.equips):
+        from ..gamedata._table_cache import ensure_uniequip_table
+
+        equip_table = await ensure_uniequip_table()
     equips = [
         {
-            "name": equip_display_name(eq.equip_id),
+            "name": equip_display_name(
+                eq.equip_id, path(equip_table, "equipDict", eq.equip_id)
+            ),
             "stage": eq.level,
             "icon": equip_icon_by_id.get(eq.equip_id, ""),
         }

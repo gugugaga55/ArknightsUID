@@ -8,6 +8,7 @@ from __future__ import annotations
 import unittest
 
 from ArknightsUID.utils.player.parse import (
+    PlayerData,
     compute_ap_current,
     effective_ap,
     parse_player_info,
@@ -230,7 +231,7 @@ class ApZeroSemanticsTest(unittest.TestCase):
     """审计 #29：理智 0 与字段缺失必须区分，0 不再被当满理智。"""
 
     @staticmethod
-    def _data(ap: dict) -> "PlayerData":
+    def _data(ap: dict) -> PlayerData | None:
         return parse_player_info({"data": {"status": {"name": "D", "uid": "1",
                                                       "ap": ap}}})
 

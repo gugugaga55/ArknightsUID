@@ -205,6 +205,9 @@ class PlayerData:
     def chars_total(self) -> int:
         return self.char_cnt if self.char_cnt > 0 else len(self.chars)
 
+    def campaign_name(self, campaign_id: str) -> str:
+        return str(path(self.raw, "campaignInfoMap", campaign_id, "name") or campaign_id)
+
     def register_days(self, now: float | None = None) -> int:
         if self.register_ts <= 0:
             return 0
@@ -321,7 +324,16 @@ def parse_player_info(response: Any) -> PlayerData | None:
             )
 
     records = campaign.get("records")
-    if not isinstance(records, dict):
+    if isinstance(records, list):
+        # 第一方 player/info 按 campaignId + maxKills 的记录列表返回。
+        records = {
+            str(record["campaignId"]): record["maxKills"]
+            for record in records
+            if isinstance(record, dict)
+            and record.get("campaignId")
+            and record.get("maxKills") is not None
+        }
+    elif not isinstance(records, dict):
         records = {}
 
     recruit_slots: list[RecruitSlot] = []
