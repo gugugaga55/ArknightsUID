@@ -89,7 +89,7 @@
         {% endif %}
 
         <div class="prose" style="margin-top: var(--space-3); font-size: 11px;">
-            {% if variant_note %}{{ variant_note }}。<br>{% endif %}{% if floor_note %}{{ floor_note }}。<br>{% endif %}查具体敌人面板与技能：ark肉鸽敌人 &lt;敌名&gt; {{ name }}{% if difficulty is not none %} N{{ difficulty }}{% endif %}{% if elite %} 紧急{% endif %}。
+            {% if variant_note %}{{ variant_note }}。<br>{% endif %}{% if floor_note %}{{ floor_note }}。<br>{% endif %}查具体敌人面板与技能：ark肉鸽敌人 &lt;敌名&gt; {{ name }}{% if variant_index|default(0) %} 分支{{ variant_index }}{% endif %}{% if difficulty is not none %} N{{ difficulty }}{% endif %}{% if elite %} 紧急{% endif %}。
         </div>
 
         <div class="foot">

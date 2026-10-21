@@ -76,6 +76,9 @@ class TakumiRuntimeInstallTest(unittest.TestCase):
 @unittest.skipIf(not _takumi_available(), "pytakumi 不可用，跳过 takumi 用例")
 class TakumiDirectRenderTest(unittest.TestCase):
     def test_render_via_takumi_returns_jpeg(self) -> None:
+        import io
+
+        from PIL import Image
         from ArknightsUID.utils.render.render_utils import _render_via_takumi
 
         html = (
@@ -87,6 +90,12 @@ class TakumiDirectRenderTest(unittest.TestCase):
         data = _render_via_takumi(html)
         self.assertTrue(data.startswith(_JPEG_MAGIC))
         self.assertGreater(len(data), 2000)
+        image = Image.open(io.BytesIO(data))
+        image.load()
+        from ArknightsUID.utils.render.render_utils import _render_scale
+
+        self.assertEqual(image.width, int(560 * _render_scale()))
+        self.assertGreater(image.height, 0)
 
     def test_local_cjk_fonts_cached(self) -> None:
         from ArknightsUID.utils.render.render_utils import _local_cjk_fonts
@@ -101,7 +110,7 @@ class TakumiDirectRenderTest(unittest.TestCase):
 class TakumiPipelineTest(unittest.IsolatedAsyncioTestCase):
     async def test_render_html_dispatches_to_takumi(self) -> None:
         """render_html 默认引擎 takumi：出图且为 JPEG。"""
-        from ArknightsUID.utils.render import ark_templates, render_html
+        from ArknightsUID.utils.render import ark_templates, render_html, render_utils
 
         context = {
             "font_css_url": "about:blank",
@@ -112,7 +121,13 @@ class TakumiPipelineTest(unittest.IsolatedAsyncioTestCase):
             "timestamp": str(int(time.time())),
             "version": "test",
         }
-        img = await render_html(ark_templates, "ark_ping.html", context)
+        with mock.patch.object(
+            render_utils,
+            "_acquire_page",
+            new=mock.AsyncMock(side_effect=AssertionError("Takumi 不应静默回退")),
+        ) as acquire:
+            img = await render_html(ark_templates, "ark_ping.html", context)
+        acquire.assert_not_awaited()
         self.assertIsNotNone(img)
         assert img is not None
         self.assertTrue(img.startswith(_JPEG_MAGIC))
@@ -133,15 +148,42 @@ class TakumiPipelineTest(unittest.IsolatedAsyncioTestCase):
             "timestamp": str(int(time.time())),
             "version": "test",
         }
-        with mock.patch.object(
-            render_utils,
-            "_render_via_takumi",
-            side_effect=RuntimeError("模拟 takumi 故障"),
+        acquire_page = render_utils._acquire_page
+
+        async def acquire_offline_page():
+            page, generation = await acquire_page()
+            if page is not None:
+                await page.context.set_offline(True)
+            return page, generation
+
+        with (
+            mock.patch.object(
+                render_utils,
+                "_render_via_takumi",
+                side_effect=RuntimeError("模拟 takumi 故障"),
+            ),
+            mock.patch.object(render_utils, "_acquire_page", acquire_offline_page),
+            mock.patch.object(render_utils.kaomoji_fonts, "maybe_start_download"),
         ):
-            img = await render_utils.render_html(ark_templates, "ark_ping.html", context)
+            try:
+                img = await render_utils.render_html(
+                    ark_templates, "ark_ping.html", context
+                )
+            finally:
+                if render_utils._browser is not None:
+                    await render_utils._browser.close()
+                if render_utils._playwright is not None:
+                    await render_utils._playwright.stop()
         self.assertIsNotNone(img)
         assert img is not None
         self.assertTrue(img.startswith(_JPEG_MAGIC))
+        import io
+
+        from PIL import Image
+
+        image = Image.open(io.BytesIO(img))
+        image.load()
+        self.assertEqual(image.width, int(560 * render_utils._render_scale()))
 
 
 if __name__ == "__main__":

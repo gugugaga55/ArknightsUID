@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import os
 import threading
 from collections.abc import Awaitable, Callable, Sequence
@@ -7,6 +8,12 @@ from pathlib import Path
 from PIL import Image
 
 from gsuid_core.logger import logger
+
+
+def data_uri_bytes(data_uri: str) -> bytes:
+    """data:image/…;base64,XXX → 原始 bytes；无 data: 前缀时按纯 base64 解。"""
+    payload = data_uri.split(",", 1)[1] if data_uri.startswith("data:") else data_uri
+    return base64.b64decode(payload)
 
 # per-文件 single-flight（审计 #19）：check 与 download 之间有 await，
 # 并发协程会重复下载/双写同一路径，一方可能读到半写文件
@@ -48,7 +55,7 @@ async def gather_b64(
     *,
     limit: int = DEFAULT_FETCH_CONCURRENCY,
 ) -> list[str]:
-    """受限并发批量取图 b64：失败/异常降级空串，结果与 keys 保序对齐。
+    """受限并发批量取图 b64：同 key 只取一次，失败空串，结果保序对齐。
 
     收编 wiki._gather_b64 与 rogue 五处内联的「Semaphore(4) + gather」
     形状；单飞/负缓存等可靠性语义在各 fetch 内部，这里只管并发上限
@@ -68,7 +75,10 @@ async def gather_b64(
             except Exception:
                 return ""
 
-    return list(await asyncio.gather(*(_one(k) for k in keys)))
+    unique_keys = list(dict.fromkeys(keys))
+    values = await asyncio.gather(*(_one(key) for key in unique_keys))
+    by_key = dict(zip(unique_keys, values, strict=True))
+    return [by_key[key] for key in keys]
 
 
 async def pic_download_from_url(

@@ -143,7 +143,6 @@ if __name__ == "__main__":
         test_request_util_respcode,
         test_skland_client_constants,
         test_path_directories_exist,
-        test_cache_basic_ops,
         test_player_store_gzip_whitelist,
         test_render_html_signature,
     ]
