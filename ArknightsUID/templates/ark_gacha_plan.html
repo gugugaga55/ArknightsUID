@@ -1,7 +1,7 @@
 <!--
   ark_gacha_plan.html —— 攒抽规划卡（抽卡规划，#9）
   设计语言：罗德岛终端（见 ark_base.css 头部注释）
-  口径：ark.yituliu.cn/tools/gachaCalc 逆向（资源换算 + UP 占比 + 300 井），
+  口径：限定寻访模型，六星基础 2%、50 抽未出后每抽 +2 个百分点；
   概率为严格状态 DP（含陪跑六星重置垫刀），与一图流表对照验证
   上下文（build_plan_context）：
     name, uid, pool_name, pool_end, days_left: str
@@ -58,7 +58,7 @@
                 <div class="cell-value">{{ pity }}<span style="font-size: 12px;">（{{ pity_source }}）</span></div>
             </div>
             <div class="cell">
-                <div class="cell-label">井缺口 GAP</div>
+                <div class="cell-label">{% if target_draws == 300 %}井缺口{% else %}目标缺口{% endif %} GAP</div>
                 <div class="cell-value">{{ well_gap }}</div>
             </div>
             <div class="cell">
@@ -68,8 +68,8 @@
         </div>
 
         <div class="sect" style="margin-top: var(--space-4);">
-            <span class="sect-label bk">井进度</span>
-            <span class="sect-en">WELL // {{ current_draws }} / {{ target_draws }}</span>
+            <span class="sect-label bk">{% if target_draws == 300 %}井进度{% else %}目标进度{% endif %}</span>
+            <span class="sect-en">{% if target_draws == 300 %}WELL{% else %}TARGET{% endif %} // {{ current_draws }} / {{ target_draws }}</span>
         </div>
         <div class="bar is-yellow" style="margin-top: var(--space-3);">
             <i style="width: {{ well_pct }}%;"></i>

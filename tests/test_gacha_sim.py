@@ -14,7 +14,6 @@ from ArknightsUID.utils.gamedata.gacha_sim import (
     build_draw_pools,
     format_pulls_text,
     roll_rarity,
-    roll_rarity_at_least,
     simulate_pulls,
     summarize_pulls,
 )
@@ -46,10 +45,19 @@ class RollRarityTest(unittest.TestCase):
         self.assertAlmostEqual(counts[3] / n, 0.40, delta=0.02)
         self.assertAlmostEqual(counts[6] / n, 0.02, delta=0.01)
 
-    def test_at_least_floor_excludes_low(self) -> None:
-        rng = random.Random(7)
-        for _ in range(500):
-            self.assertGreaterEqual(roll_rarity_at_least(rng, 4), 4)
+    def test_first_ten_guarantee_does_not_reroll_six_star_probability(self) -> None:
+        class CountingRNG(random.Random):
+            rolls = 0
+            def choices(self, population, weights=None, k=1):
+                self.rolls += 1
+                return [3 if self.rolls < 10 else 6]
+            def choice(self, sequence):
+                return sequence[0]
+        rng = CountingRNG()
+        result = simulate_pulls(_pools(), 10, rng)
+        self.assertEqual(rng.rolls, 10)
+        self.assertEqual(result[-1]["rarity"], 6)
+        self.assertFalse(result[-1]["guarantee"])
 
 
 class BuildPoolsTest(unittest.TestCase):
@@ -67,13 +75,13 @@ class SimulatePullsTest(unittest.TestCase):
         self.assertEqual(len(simulate_pulls(pools, 0, random.Random(1))), 1)
 
     def test_guarantee_upgrades_last_when_all_three_star(self) -> None:
-        """十连保底：前 9 抽全 3★ → 第 10 抽必 4★+ 且带 guarantee 标记。"""
+        """十连保底：前 9 抽全 3★ → 第 10 抽必 5★+ 且带 guarantee 标记。"""
         pools = _pools()
         # 用只出 3★ 的伪 RNG 触发保底路径
         class ThreeStarRNG(random.Random):
             def choices(self, population, weights=None, k=1):
                 # roll_rarity 传全档 (3,4,5,6) → 恒 3★；
-                # roll_rarity_at_least 传保底档 (4,5,6) → 取最高
+                # 保底逻辑应直接将低星结果提升到五星
                 return [3] if 3 in population else [max(population)]
 
             def choice(self, seq):
@@ -81,18 +89,18 @@ class SimulatePullsTest(unittest.TestCase):
 
         results = simulate_pulls(pools, 10, ThreeStarRNG(1))
         self.assertTrue(all(r["rarity"] == 3 for r in results[:9]))
-        self.assertGreaterEqual(results[9]["rarity"], 4)
+        self.assertEqual(results[9]["rarity"], 5)
         self.assertTrue(results[9].get("guarantee"))
 
-    def test_no_guarantee_when_four_star_present(self) -> None:
+    def test_no_guarantee_when_five_star_present(self) -> None:
         pools = _pools()
         rng = random.Random(2024)
         for _ in range(50):
             results = simulate_pulls(pools, 10, rng)
-            if any(r["rarity"] >= 4 for r in results[:9]):
+            if any(r["rarity"] >= 5 for r in results[:9]):
                 self.assertFalse(
                     any(r.get("guarantee") for r in results),
-                    "前 9 抽已有 4★+ 时不应触发保底标记",
+                    "前 9 抽已有 5★+ 时不应触发保底标记",
                 )
 
     def test_single_pull_never_guarantee(self) -> None:

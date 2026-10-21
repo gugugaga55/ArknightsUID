@@ -5,7 +5,7 @@
 - lEe：双 UP 池（指定限定 35%）"拿到限定"累计概率，301 项
 - sEe：同池"限定+常驻陪跑六星"累计概率，301 项
 前 50 抽（恒定概率区）应逐点一致（表 4 位小数舍入级）；
-50 抽递增区一图流实现为黑盒（混合口径），整体容差放宽。
+50 抽递增区按公布的每抽 +2 个百分点规则，使用独立更新过程模型验证。
 """
 from __future__ import annotations
 
@@ -76,17 +76,22 @@ class ProbabilityTableTest(unittest.TestCase):
             for i in range(WELL_PULLS):
                 self.assertGreaterEqual(table[i + 1], table[i] - 1e-12)
 
-    def test_increment_region_within_tolerance(self) -> None:
-        """递增区：一图流为黑盒混合口径，整体偏差有界。"""
-        worst_limited = max(
-            abs(a - b) for a, b in zip(self.limited, self.limited_ref)
-        )
-        worst_off = max(
-            abs(a - b)
-            for a, b in zip(self.limited_off, self.limited_off_ref)
-        )
-        self.assertLess(worst_limited, 0.011)
-        self.assertLess(worst_off, 0.045)
+    def test_increment_region_matches_independent_renewal_model(self) -> None:
+        """按首次六星等待时间做更新过程计算，不复用生产 DP 的状态转移。"""
+        first_six = [0.0]
+        survival = [1.0]
+        for draw in range(1, 300):
+            rate = min(1.0, .02 + .02 * max(0, draw - 50))
+            first_six.append(survival[-1] * rate)
+            survival.append(survival[-1] * (1 - rate))
+        no_up = [1.0]
+        for draw in range(1, 300):
+            no_up.append(survival[draw] + .65 * sum(
+                first_six[first] * no_up[draw - first]
+                for first in range(1, draw + 1)
+            ))
+            self.assertAlmostEqual(self.limited[draw], 1 - no_up[-1], places=10)
+        self.assertLess(self.limited_off[300], 1.0)
 
     def test_single_up_share(self) -> None:
         table = build_up_table(UP_SHARE_SINGLE)
@@ -98,18 +103,18 @@ class ProbabilityTableTest(unittest.TestCase):
             1, up_share=UP_SHARE_SINGLE, start_pity=60
         )
         self.assertGreater(boosted, base)
-        # 垫刀 60：第 61 抽 p6 = 2%+2.5%×11 = 29.5%，UP = 20.65%
-        self.assertAlmostEqual(boosted, 0.295 * 0.7, places=6)
+        # 垫刀 60：第 61 抽 p6 = 2%+2%×11 = 24%，UP = 16.8%
+        self.assertAlmostEqual(boosted, 0.24 * 0.7, places=6)
 
 
 class SixRateTest(unittest.TestCase):
     def test_rate_schedule(self) -> None:
         self.assertEqual(six_rate(0), 0.02)
         self.assertEqual(six_rate(49), 0.02)      # 第 50 抽仍为基础
-        self.assertEqual(six_rate(50), 0.045)     # 第 51 抽起递增
-        self.assertEqual(six_rate(51), 0.07)
-        self.assertAlmostEqual(six_rate(88), 0.995)   # 第 89 抽
-        self.assertEqual(six_rate(89), 1.0)       # 第 90 抽起封顶
+        self.assertEqual(six_rate(50), 0.04)     # 第 51 抽起递增
+        self.assertEqual(six_rate(51), 0.06)
+        self.assertAlmostEqual(six_rate(88), 0.80)   # 第 89 抽
+        self.assertAlmostEqual(six_rate(97), 0.98)  # 第 98 抽
         self.assertEqual(six_rate(98), 1.0)
 
 
@@ -198,7 +203,7 @@ class BuildSummaryTest(unittest.TestCase):
         self.assertAlmostEqual(summary.daily_needed, 20, delta=0.1)
         self.assertGreater(summary.chance_now, 0.5)
         self.assertLess(summary.chance_now, summary.chance_50)
-        self.assertEqual(summary.up_share, UP_SHARE_SINGLE)
+        self.assertEqual(summary.up_share, UP_SHARE_DOUBLE)
 
     def test_double_up_mode(self) -> None:
         args = parse_plan_args("类型:双UP")
@@ -271,7 +276,7 @@ class DisplayLayerTest(unittest.TestCase):
         self.assertEqual(ctx["res_text"], "60000 玉 + 30 石 + 2 单 + 1 十")
         self.assertEqual(ctx["well_gap"], 179)
         self.assertEqual(ctx["well_pct"], 40)
-        self.assertEqual(ctx["up_share_pct"], "70")
+        self.assertEqual(ctx["up_share_pct"], "35")
         self.assertEqual(ctx["version"], "v9.9.9")
         for key in ("chance_now", "chance_50", "chance_100", "chance_150"):
             float(ctx[key])  # 数字文案可解析
@@ -281,7 +286,7 @@ class DisplayLayerTest(unittest.TestCase):
         self.assertIn("垫刀：37（手动指定）", text)
         self.assertIn("≈ 121 抽", text)
         self.assertIn("井缺口：300 - 121 = 179 抽", text)
-        self.assertIn("单UP口径", text)
+        self.assertIn("双UP口径", text)
 
     def test_empty_resources_display(self) -> None:
         from ArknightsUID.utils.gacha_plan import build_plan_context
