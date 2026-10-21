@@ -94,6 +94,11 @@ _TABLE_MEMO_MAX = 8
 _table_memo: OrderedDict[Path, tuple[float, dict[str, Any]]] = OrderedDict()
 
 
+def clear_table_memory_cache() -> None:
+    """刷新游戏数据时同步失效内存表，下一次查询重新读取/下载。"""
+    _table_memo.clear()
+
+
 def _memo_get(path: Path, ttl: float) -> dict[str, Any] | None:
     hit = _table_memo.get(path)
     if hit is None:
@@ -169,24 +174,6 @@ async def _cache_fresh(path: Path, ttl: float) -> bool:
     return is_fresh(await cache_saved_ts(path), ttl)
 
 
-def _read_sidecar(path: Path) -> Any | None:
-    """读精简衍生缓存（纯 JSON，无包装）。"""
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-
-
-def _write_sidecar(path: Path, payload: Any) -> None:
-    try:
-        path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-    except Exception as exc:
-        logger.debug(
-            f"[ArknightsUID·gamedata] 精简缓存写入失败 {path.name}: "
-            f"{exc.__class__.__name__}: {exc}"
-        )
-
-
 async def _read_fresh_from_disk(path: Path, ttl: float) -> dict[str, Any] | None:
     """磁盘新鲜缓存直读：判鲜只读文件头，命中才整表解析并回填 memo。"""
     saved_ts = await cache_saved_ts(path)
@@ -248,7 +235,7 @@ async def _ensure_table(
             elif raw is not None:
                 parsed = await _parse_json_bytes(raw)
                 if isinstance(parsed, dict):
-                    merged = {**validators, **new_v, "source_url": cond_url}
+                    merged = {**new_v, "source_url": cond_url}
                     await cache_write(path, parsed, validators=merged)
                     _memo_put(path, time.time(), parsed)
                     return parsed

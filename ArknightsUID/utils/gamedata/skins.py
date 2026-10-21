@@ -16,6 +16,8 @@
 
 from __future__ import annotations
 
+from ..disk_cache import index_covers_sources, read_json, write_json
+
 from typing import Any
 
 from ._table_cache import (
@@ -24,8 +26,6 @@ from ._table_cache import (
     GAMEDATA_CACHE_DIR,
     SKIN_TABLE_PATH,
     _cache_fresh,
-    _read_sidecar,
-    _write_sidecar,
     ensure_skin_table,
 )
 
@@ -62,8 +62,6 @@ def build_skin_index(
 
 async def load_skin_index() -> dict[str, dict[str, str]]:
     """加载时装目录（精简缓存优先，TTL 同 skin_table 7 天）。失败返回 {}。"""
-    from .charinfo import _index_covers_sources
-
     if (
         SKININDEX_PATH.exists()
         and await _cache_fresh(CHAR_TABLE_PATH, CHAR_TABLE_TTL)
@@ -72,10 +70,10 @@ async def load_skin_index() -> dict[str, dict[str, str]]:
             # 索引由 char_table + skin_table 共同派生（审计 #24）：任一源表
             # 更新都应触发重建——此前漏查 skin_table，新皮肤最长滞后 7 天；
             # mtime 比对再兜住"源表被旁路刷新"的路径（审计 #39）
-            _index_covers_sources(SKININDEX_PATH, CHAR_TABLE_PATH, SKIN_TABLE_PATH)
+            index_covers_sources(SKININDEX_PATH, CHAR_TABLE_PATH, SKIN_TABLE_PATH)
         )
     ):
-        cached = _read_sidecar(SKININDEX_PATH)
+        cached = await read_json(SKININDEX_PATH)
         if isinstance(cached, dict) and cached:
             return cached
 
@@ -89,7 +87,7 @@ async def load_skin_index() -> dict[str, dict[str, str]]:
         return {}
     index = build_skin_index(skin_table, char_index)
     if index:
-        _write_sidecar(SKININDEX_PATH, index)
+        await write_json(SKININDEX_PATH, index)
     return index
 
 
