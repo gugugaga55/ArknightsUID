@@ -12,7 +12,7 @@
 - 目标 = 精英化2 + 主技能7 + 全技能专精3 + 全模组满级（"毕业"）
 - skillCost 与 player_info chars.skills 按**顺序对位**（同一 API 家族的顺序约定，
   位置对不上时退化为全量计入并打 warning）
-- 模组 equipCost 按顺序对位 char.equips；未安装的模组全量计入
+- 模组按 uniequip_table 的 ID/类型对应当前进度，基础证章不参与扣减
 - 经验书（2001-2004）不按 200/400/1000/2000 经验值折算，按数量直列
 - 刷图建议不并入单干员计算：掉率数据源（yituliu COS 掉落矩阵）已由
   wiki 模块接入，ark养成计划 经 _build_farm_rows 消费（arknightsuid_cultivate）
@@ -146,7 +146,7 @@ def _owned_items(response: Any) -> dict[str, int]:
 
 
 def build_remaining_need(
-    cost: CultivateCost, char: CharEntry
+    cost: CultivateCost, char: CharEntry, *, equip_types: dict[str, str] | None = None
 ) -> tuple[dict[str, int], list[str]]:
     """当前练度 → 毕业的剩余材料需求 {itemId: count} + 假设性 warning 列表。"""
     warnings: list[str] = []
@@ -175,11 +175,16 @@ def build_remaining_need(
             if level_index < len(skill_cost["level_cost"]):
                 add(skill_cost["level_cost"][level_index])
 
-    # 模组：equipCost 顺序对位 char.equips（已安装的从当前级+1 起，未安装全量）
+    # 玩家 equip 列表可能含基础证章且顺序与成本表不同，不能按下标扣材料。
     if cost.equips:
-        installed_levels = [equip.level for equip in char.equips]
-        for index, equip_cost in enumerate(cost.equips):
-            current = installed_levels[index] if index < len(installed_levels) else 0
+        types = equip_types or {}
+        if any(e.level > 0 and e.equip_id not in types for e in char.equips):
+            warnings.append("部分模组类型未能对应，相关进度未扣除，模组材料按未解锁估算")
+        installed = {
+            types[e.equip_id]: e.level for e in char.equips if types.get(e.equip_id)
+        }
+        for equip_cost in cost.equips:
+            current = installed.get(equip_cost["type_name"], 0)
             for level_items in equip_cost["level_cost"][current:]:
                 add(level_items)
 
@@ -278,12 +283,14 @@ async def calculate_cultivation(
     max_rows: int = 12,
     *,
     keep_zero: bool = False,
+    inventory_response: Any | None = None,
 ) -> dict[str, Any] | str:
     """完整计算链：进度（player_info 缓存）+ 需求（cal_character）+ 持有（cal_player）。
 
     返回卡片/文本两用的结果 dict；失败返回中文错误文案。
     keep_zero=True 供多干员合并（ark养成计划）：gap 保留零缺口行与原始
     gold 量纲，合并时统一扣库存（见 summarize_gap/merge_cultivation_results）。
+    inventory_response 供批量规划共用同一次库存响应，避免重复请求与快照不一致。
     """
     from ..enduid.adapter import (
         fetch_cultivate_character,
@@ -312,7 +319,9 @@ async def calculate_cultivation(
     # 持有量失败不中断计算（缺口仍可展示），但必须显式告警——
     # 否则按持有 0 计算会呈现"缺全部材料"的误导清单；
     # 成本接口失败则上方已直接 return，两者口径刻意不同
-    owned_response = await fetch_cultivate_player(credential)
+    owned_response = inventory_response
+    if owned_response is None:
+        owned_response = await fetch_cultivate_player(credential)
     owned: dict[str, int] = {}
     owned_warnings: list[str] = []
     if isinstance(owned_response, str):
@@ -326,7 +335,14 @@ async def calculate_cultivation(
         ):
             owned_warnings.append("持有材料接口返回异常，以下缺口按持有 0 估算")
 
-    need, warnings = build_remaining_need(cost, char)
+    equip_types: dict[str, str] = {}
+    if cost.equips and char.equips:
+        from ..gamedata._table_cache import ensure_uniequip_table
+
+        equip_table = await ensure_uniequip_table()
+        for equip_id, info in (equip_table or {}).get("equipDict", {}).items():
+            equip_types[equip_id] = str(info.get("typeName2") or "")
+    need, warnings = build_remaining_need(cost, char, equip_types=equip_types)
     warnings = owned_warnings + warnings
     item_index = await load_item_index()
     gap = summarize_gap(need, owned, item_index, max_rows=max_rows, keep_zero=keep_zero)

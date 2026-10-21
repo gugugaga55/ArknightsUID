@@ -92,7 +92,7 @@ def _is_open(record: dict[str, Any], now: float | None = None) -> bool:
     end = _num(record.get("end"))
     if start and now < start / 1000:
         return False
-    if end and now > end / 1000:
+    if end and now >= end / 1000:
         return False
     return True
 
@@ -208,15 +208,17 @@ def item_drop_stats(
     item_id: str,
     matrix_by_item: dict[str, list[dict[str, Any]]],
     stage_meta: dict[str, dict[str, Any]],
-    top: int = 8,
+    top: int | None = 8,
     min_times: int = 300,
 ) -> list[dict[str, Any]]:
     """材料的掉落关卡统计（按掉率降序）。
 
     返回 [{stage_code, zone, rate(每把期望件数), times, ap_expect(单件期望理智)}]，
-    剔除样本不足与无关卡元数据的记录。
+    剔除样本不足、无关卡元数据及未开放活动关。top=None 返回全部，
+    供规划按理智成本比较，展示层仍默认只取掉率前 8 项。
     """
     rows: list[dict[str, Any]] = []
+    now = time.time()
     for record in matrix_by_item.get(item_id, []):
         # 全程 _num：裸 float() 会因 "N/A"/null 等异常形态炸整条命令
         # （同文件 _num 的注释口径，审计 #39）
@@ -225,7 +227,7 @@ def item_drop_stats(
         if times < min_times or quantity <= 0:
             continue
         meta = stage_meta.get(str(record.get("stageId", "")))
-        if not meta:
+        if not meta or not _is_open(meta, now):
             continue
         rate = quantity / times
         ap_cost = _num(meta.get("apCost"))
@@ -246,4 +248,4 @@ def item_drop_stats(
             }
         )
     rows.sort(key=lambda r: -r["rate"])
-    return rows[:top]
+    return rows if top is None else rows[:top]

@@ -5,7 +5,6 @@ import unittest
 from typing import Any
 
 from ArknightsUID.utils.cultivate import (
-    CultivateCost,
     _owned_items,
     build_remaining_need,
     parse_cultivate_cost,
@@ -113,7 +112,7 @@ class RemainingNeedTest(unittest.TestCase):
         cost = parse_cultivate_cost(_cal_char_envelope())
         assert cost is not None
         # 精1/技能5/专1/模组1 → 剩：精2 段 + Lv6-7 + 专2-3 + 模组 2-3 级
-        need, warnings = build_remaining_need(cost, _char())
+        need, warnings = build_remaining_need(cost, _char(), equip_types={"uniequip_001": "X"})
         self.assertEqual(warnings, [])
         self.assertEqual(need["PIONEER_4"], 4)  # 精2 段
         self.assertNotIn("PIONEER_2", need)  # 精1 已过
@@ -126,7 +125,7 @@ class RemainingNeedTest(unittest.TestCase):
     def test_fresh_char_takes_everything(self) -> None:
         cost = parse_cultivate_cost(_cal_char_envelope())
         assert cost is not None
-        need, _ = build_remaining_need(cost, _char(0, 0, [0], [0]))
+        need, _ = build_remaining_need(cost, _char(0, 0, [0], [0]), equip_types={"uniequip_001": "X"})
         self.assertEqual(need["PIONEER_2"], 4)
         self.assertEqual(need["2001"], 6)
         self.assertEqual(need["3003"], 2 + 2 + 4)
@@ -135,7 +134,7 @@ class RemainingNeedTest(unittest.TestCase):
     def test_graduated_char_needs_nothing(self) -> None:
         cost = parse_cultivate_cost(_cal_char_envelope())
         assert cost is not None
-        need, _ = build_remaining_need(cost, _char(2, 7, [3], [3]))
+        need, _ = build_remaining_need(cost, _char(2, 7, [3], [3]), equip_types={"uniequip_001": "X"})
         self.assertEqual(need, {})
 
     def test_skill_position_mismatch_warns(self) -> None:
