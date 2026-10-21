@@ -633,6 +633,43 @@ def _format_rogue_enemy(context: dict) -> str:
     return "\n".join(lines)
 
 
+async def _resolve_rogue_stage(query: str, theme: str | None = None) -> dict | str | None:
+    """关名 + 可选「分支N」定位关卡；歧义返回可直接使用的查询指令。"""
+    from ArknightsUID.utils.gamedata.rogue_enemy import (
+        THEME_DIRS,
+        find_stage,
+        search_stages,
+    )
+
+    match = re.search(r"(?:^|\s)分支\s*(\d+)$", query)
+    variant = int(match.group(1)) if match else None
+    name = query[:match.start()].strip() if match else query
+    stage = await find_stage(name)
+    candidates = [stage] if stage else await search_stages(name, limit=None)
+    if theme:
+        candidates = [c for c in candidates if c["theme"] == theme]
+    if not candidates:
+        return None
+    if variant is None and len(candidates) == 1:
+        return candidates[0]
+    groups = {(c["theme"], c["name"]) for c in candidates}
+    if variant is not None and len(groups) == 1 and 1 <= variant <= len(candidates):
+        return candidates[variant - 1]
+
+    lines = ["找到多个关卡或分支，请选择：" if variant is None else "分支编号无效或关名不唯一，请选择："]
+    for candidate in candidates[:8]:
+        suffix = (
+            f" 分支{candidate['variant_index']}"
+            if candidate.get("variants", 1) > 1 else ""
+        )
+        lines.append(
+            f"ark肉鸽关卡 {candidate['name']} {THEME_DIRS[candidate['theme']]}{suffix}"
+        )
+    if len(candidates) > 8:
+        lines.append(f"共 {len(candidates)} 个候选，请补充完整关名或期名。")
+    return "\n".join(lines)
+
+
 async def _build_rogue_enemy_context(
     query: str,
     extra_aliases: dict[str, str] | None = None,
@@ -652,7 +689,6 @@ async def _build_rogue_enemy_context(
         class_labels,
         detect_theme,
         enemy_icon_b64,
-        find_stage,
         form_context,
         form_mechanisms,
         load_difficulty_mods,
@@ -698,7 +734,9 @@ async def _build_rogue_enemy_context(
             continue
         stage_hit = None
         if i < len(tokens):
-            stage_hit = await find_stage(" ".join(tokens[i:]))
+            stage_hit = await _resolve_rogue_stage(" ".join(tokens[i:]), theme_hint)
+            if isinstance(stage_hit, str):
+                return stage_hit
             if stage_hit is None:
                 continue  # 后段不是关名 → 该拆分无效
         entry = db[matched[0]]
@@ -706,7 +744,7 @@ async def _build_rogue_enemy_context(
 
     if entry is None:
         # 没有敌人命中 → 交给关卡视图（敌人命令兜底渲染关卡卡）
-        return await _build_rogue_stage_context(query)
+        return await _build_rogue_stage_context(query, extra_aliases)
 
     enemy_key = str(entry.get("key") or "")
     stage_data = None
@@ -746,9 +784,10 @@ async def _build_rogue_enemy_context(
             base_block = blocks[
                 min(int(stage_enemy.get("level") or 0), len(blocks) - 1)
             ]
-            stage_label = (
-                f"{stage_hit['name']}·形态{int(stage_enemy.get('level') or 0) + 1}"
-            )
+            stage_label = stage_hit["name"]
+            if stage_hit.get("variants", 1) > 1:
+                stage_label += f"·分支{stage_hit['variant_index']}"
+            stage_label += f"·形态{int(stage_enemy.get('level') or 0) + 1}"
         if elite and stage_data.get("elite_mods"):
             extra_effects = stage_data.get("elite_mods")
     if difficulty is not None:
@@ -858,40 +897,30 @@ async def _build_rogue_stage_context(
 ) -> dict | str:
     """关卡视图：出怪列表（含难度/紧急折算面板）+ 紧急作战描述。
 
-    语法：`关名 [期名] [N难度] [紧急]`——四期关卡名零重复，关名即唯一定位；
-    期名可省（关卡自带期归属）。
+    语法：`关名 [期名] [分支N] [N难度] [紧急]`。
+    同名分支需显式选择，地图与敌人数值共用选定的 level_id。
     """
     from ArknightsUID.utils.gamedata.rogue_enemy import (
         THEME_DIRS,
         _floor_buff_note,
         _mod_note,
         enemy_icon_b64,
-        find_stage,
         load_difficulty_mods,
         load_enemy_db,
         load_stage_data,
         max_difficulty,
-        search_stages,
         stage_panel_rows,
     )
 
-    name, _theme_hint, difficulty, elite = _parse_rogue_query(query, extra_aliases)
+    name, theme_hint, difficulty, elite = _parse_rogue_query(query, extra_aliases)
     if not name:
-        return "用法：ark肉鸽关卡 关名 [N难度] [紧急]（如 ark肉鸽关卡 拆东补西 N15）"
+        return "用法：ark肉鸽关卡 关名 [期名] [分支N] [N难度] [紧急]"
 
-    stage = await find_stage(name)
+    stage = await _resolve_rogue_stage(name, theme_hint)
+    if isinstance(stage, str):
+        return stage
     if stage is None:
-        candidates = await search_stages(name)
-        if len(candidates) == 1:
-            stage = candidates[0]
-        elif candidates:
-            shown = "、".join(
-                f"{c['name']}（{THEME_DIRS.get(c['theme'], c['theme'])}）"
-                for c in candidates
-            )
-            return f"找到 {len(candidates)} 个候选关卡：{shown}（请用完整关名）"
-        else:
-            return f"未找到关卡：{name}（六期关卡名均无匹配，请检查关名）"
+        return f"未找到关卡：{name}（请检查关名和期名）"
 
     stage_data = await load_stage_data(stage["level_id"])
     db = await load_enemy_db()
@@ -942,8 +971,7 @@ async def _build_rogue_stage_context(
     if difficulty is not None and not grades:
         difficulty_label += "（该期难度数据暂不可用，按基础数值）"
 
-    # 关卡地图：优先 wiki 上传文件（多变体），无则回退 torappu 预览（按
-    # level_id 系统性生成，覆盖所有层关；PRTS 肉鸽关卡页地图即此来源）
+    # 唯一关卡优先 Wiki 图，下载失败再试预览；同名分支只用对应 level_id。
     maps: list[str] = []
     try:
         from ArknightsUID.utils.prts.client import (
@@ -953,15 +981,18 @@ async def _build_rogue_stage_context(
         from ArknightsUID.utils.render import get_image_b64_with_cache
         from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
 
-        map_urls = await rogue_map_file_urls(stage["code"], stage["name"])
-        if not map_urls:
-            map_urls = rogue_map_preview_urls(stage["level_id"])
-        for url in map_urls:
-            b64 = await get_image_b64_with_cache(
+        async def fetch_map(url: str) -> str:
+            return await get_image_b64_with_cache(
                 url, CACHE_PATH / "wiki" / "map_rogue", quality=85
             )
-            if b64:
-                maps.append(b64)
+
+        # Wiki 的同名文件无法指明分支；已选分支只使用 level_id 预览。
+        if stage.get("variants", 1) <= 1:
+            map_urls = await rogue_map_file_urls(stage["code"], stage["name"])
+            maps = [image for image in await gather_b64(fetch_map, map_urls) if image]
+        if not maps:
+            preview_urls = rogue_map_preview_urls(stage["level_id"])
+            maps = [image for image in await gather_b64(fetch_map, preview_urls) if image]
     except Exception as e:
         from gsuid_core.logger import logger
 
@@ -975,10 +1006,11 @@ async def _build_rogue_stage_context(
         "difficulty": difficulty,
         "difficulty_label": difficulty_label,
         "variant_note": (
-            f"同名关卡有 {stage.get('variants') or 1} 个分支变体，当前显示第一个"
+            f"分支{stage['variant_index']} / 共 {stage['variants']} 个分支"
             if (stage.get("variants") or 1) > 1
             else ""
         ),
+        "variant_index": stage.get("variant_index", 0) if stage.get("variants", 1) > 1 else 0,
         "elite": elite,
         "floors": _floors_display(stage_data.get("floors")),
         "elite_descs": [str(d) for d in (stage_data.get("eliteDesc_zh") or []) if d],

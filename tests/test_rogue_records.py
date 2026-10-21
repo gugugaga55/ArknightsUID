@@ -5,6 +5,8 @@ nonebot-plugin-skland 的 RogueData schema；topicId 用主题表键 rogue_N。
 """
 from __future__ import annotations
 
+import pytest
+
 import sys
 import unittest
 from pathlib import Path
@@ -525,6 +527,7 @@ class RunDetailTest(unittest.TestCase):
         # 不可识别期名 → 错误文案
         self.assertIsInstance(_parse_detail_args("不存在的期", {}), str)
 
+    @pytest.mark.usefixtures("offline_card_assets")
     def test_build_run_detail_context(self) -> None:
         import asyncio
 
