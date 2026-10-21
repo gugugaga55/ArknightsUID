@@ -4,14 +4,12 @@ from __future__ import annotations
 import sys
 import unittest
 from pathlib import Path
-from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 class ReloadShutdownHooksTest(unittest.TestCase):
     def test_only_plugin_owned_hooks_run(self) -> None:
-        from types import SimpleNamespace
 
         from gsuid_core.server import _DefHook, core_shutdown_def
         from gsuid_core.utils.plugins_update.reload_plugin import (

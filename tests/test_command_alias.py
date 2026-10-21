@@ -31,6 +31,7 @@ class FakeEvent:
         self.user_id = "u1"
         self.bot_id = "b1"
         self.user_pm = user_pm
+        self.user_type = "direct"
 
 
 class CommandAliasTest(unittest.IsolatedAsyncioTestCase):
@@ -125,7 +126,10 @@ class CommandAliasTest(unittest.IsolatedAsyncioTestCase):
         self.mod._alias_map["招募"] = "公招推荐"
         ev = FakeEvent(" 术师 输出")
         ev.command = "招募"
-        with mock.patch.object(self.mod, "_find_target_trigger", return_value=fake):
+        with (
+            mock.patch.object(self.mod, "_find_target_trigger", return_value=fake),
+            mock.patch.dict(self.mod.alias_sv.TL["command"], {"ark公招推荐": fake}),
+        ):
             await self.mod.forward_command(FakeBot(), ev)
         # 目标 handler 收到的 text 与 "ark公招推荐 术师 输出" 触发时一致
         self.assertEqual(calls, [("招募", " 术师 输出")])
