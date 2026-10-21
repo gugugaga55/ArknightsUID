@@ -134,6 +134,8 @@ async def show_cultivation_plan(bot: Bot, ev: Event) -> None:
 
     results: list[dict] = []
     unresolved: list[str] = []
+    seen_char_ids: set[str] = set()
+    inventory_response = None
     for name in names:
         char_id, resolve_error = await _resolve_query_to_char_id(
             name, ev.bot_id, ev.user_id
@@ -141,8 +143,16 @@ async def show_cultivation_plan(bot: Bot, ev: Event) -> None:
         if not char_id:
             unresolved.append(f"{name}（{resolve_error}）")
             continue
+        if char_id in seen_char_ids:
+            continue
+        seen_char_ids.add(char_id)
+        if inventory_response is None:
+            from ArknightsUID.utils.enduid.adapter import fetch_cultivate_player
+
+            inventory_response = await fetch_cultivate_player(credential)
         result = await calculate_cultivation(
-            credential, char_id, max_rows=999, keep_zero=True
+            credential, char_id, max_rows=999, keep_zero=True,
+            inventory_response=inventory_response,
         )
         if isinstance(result, str):
             unresolved.append(f"{name}（{result}）")
