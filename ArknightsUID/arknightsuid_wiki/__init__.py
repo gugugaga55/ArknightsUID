@@ -1083,6 +1083,33 @@ async def _get_stage_map_b64(code: str, name: str, stage_id: str = "") -> str:
         # 与 bulk_download 的地图 miss marker 同名（安全 basename）
         return cache / (safe_url_basename(url) + ".miss")
 
+    async def _cached_map_b64(url: str) -> str:
+        """瞬时下载失败时只读已有图片，坏缓存留给下一轮下载修复。"""
+        import base64
+        from io import BytesIO
+
+        from PIL import Image
+
+        from ArknightsUID.utils.gamedata.path_safety import cache_names_for_url
+
+        def _read() -> str:
+            for filename in dict.fromkeys(cache_names_for_url(url)):
+                if not filename:
+                    continue
+                local = cache / filename
+                for candidate in dict.fromkeys((local.with_suffix(".webp"), local)):
+                    try:
+                        data = candidate.read_bytes()
+                        with Image.open(BytesIO(data)) as image:
+                            image.load()
+                            image_format = (image.format or "png").lower()
+                        return f"data:image/{image_format};base64,{base64.b64encode(data).decode()}"
+                    except (OSError, ValueError):
+                        continue
+            return ""
+
+        return await asyncio.to_thread(_read)
+
     async def _fetch_map_b64(url: str) -> str:
         """下载地图 → b64；只把**确认的 404** 当"地图不存在"写负缓存。
 
@@ -1104,7 +1131,7 @@ async def _get_stage_map_b64(code: str, name: str, stage_id: str = "") -> str:
                 pass
             return ""
         if status != 200 or not content:
-            return ""  # 网络失败/5xx：不写负缓存
+            return await _cached_map_b64(url)  # 网络失败/5xx：复用旧图，不写负缓存
         # 200：落盘复用 bulk 的校验规则（非图片内容拒绝，防污染），
         # 随后走缓存读取路径出 b64（含烘焙/格式分支，零重复下载）
         from ArknightsUID.utils.gamedata.path_safety import cache_names_for_url
@@ -1119,7 +1146,7 @@ async def _get_stage_map_b64(code: str, name: str, stage_id: str = "") -> str:
             cache.mkdir(parents=True, exist_ok=True)
             await _asyncio.to_thread(_save_image_sync, cache, url_last, content)
         except (OSError, ValueError):
-            return ""  # 坏内容/写失败：不写负缓存
+            return await _cached_map_b64(url)  # 坏内容/写失败：保留可读旧图
         return await get_image_b64_with_cache(url, cache)
 
     for title in map_candidate_titles(code, name):

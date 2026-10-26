@@ -152,18 +152,44 @@ async def delete_invalid_creds(bot: Bot, ev: Event) -> None:
 @refresh_sv.on_fullmatch(("刷新", "刷新数据", "更新数据"), block=True)
 async def refresh_gamedata_cache(bot: Bot, ev: Event) -> None:
     from ArknightsUID.utils.path import CACHE_BASE
-    from ArknightsUID.utils.gamedata._table_cache import clear_table_memory_cache
+    from ArknightsUID.utils.gamedata._table_cache import table_cache_refresh
+    from ArknightsUID.utils.gamedata.rogue_ending import clear_ending_cache
+    from ArknightsUID.utils.gamedata.rogue_enemy import (
+        THEME_DIRS,
+        clear_stage_index_cache,
+    )
 
-    clear_table_memory_cache()
-    gamedata_dir = CACHE_BASE / "gamedata"
-    removed = 0
-    if gamedata_dir.exists():
-        for path in gamedata_dir.glob("*.json"):
-            try:
-                path.unlink()
-                removed += 1
-            except OSError:
-                continue
+    # 先停旧构建，避免清盘后后台任务把旧数据重新写回来。
+    await clear_stage_index_cache()
+    async with table_cache_refresh():
+        clear_ending_cache()
+        gamedata_dir = CACHE_BASE / "gamedata"
+        removed = 0
+        cache_files = set(gamedata_dir.glob("*.json"))
+        enemy_dir = gamedata_dir / "is_enemy"
+        # 肉鸽基础资料及各期难度表也有独立的每日缓存/失败标记。
+        data_names = ["enemy_database.json", "enemy_skills.json"] + [
+            f"difficulty_{theme}.json" for theme in THEME_DIRS
+        ]
+        for name in data_names:
+            cache_files.update(
+                enemy_dir / (name + suffix)
+                for suffix in ("", ".validators.json", ".miss")
+            )
+        stage_dir = enemy_dir / "stages"
+        cache_files.update(
+            path for path in stage_dir.rglob("*")
+            if path.is_file() and path.name.endswith((".json", ".json.miss"))
+        )
+        if gamedata_dir.exists():
+            for path in cache_files:
+                if not path.exists():
+                    continue
+                try:
+                    path.unlink()
+                    removed += 1
+                except OSError:
+                    continue
     await _send_text(
         bot,
         ev,

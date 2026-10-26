@@ -29,6 +29,8 @@ from ._table_cache import (
     ITEM_TABLE_PATH,
     _cache_fresh,
     ensure_char_table,
+    table_cache_generation,
+    write_index_if_current,
 )
 
 CHARINDEX_PATH = GAMEDATA_CACHE_DIR / "charindex.json"
@@ -86,6 +88,7 @@ def build_char_index(char_table: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 async def load_char_index() -> dict[str, dict[str, Any]]:
     """加载干员索引（精简缓存优先，TTL 同 character_table 7 天）。失败返回 {}。"""
+    generation = table_cache_generation()
     if (
         CHARINDEX_PATH.exists()
         and await _cache_fresh(CHAR_TABLE_PATH, CHAR_TABLE_TTL)
@@ -100,7 +103,7 @@ async def load_char_index() -> dict[str, dict[str, Any]]:
         return cached if isinstance(cached, dict) else {}
     index = build_char_index(char_table)
     if index:
-        await write_json(CHARINDEX_PATH, index)
+        await write_index_if_current(CHARINDEX_PATH, index, generation)
     return index
 
 

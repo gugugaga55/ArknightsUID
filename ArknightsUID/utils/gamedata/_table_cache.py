@@ -18,6 +18,8 @@ import asyncio
 import json
 import time
 from collections import OrderedDict
+from collections.abc import AsyncIterator, Coroutine
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,7 @@ from ..disk_cache import (
     cache_saved_ts,
     cache_write,
     is_fresh,
+    write_json,
 )
 from ..resource.RESOURCE_PATH import CACHE_PATH
 
@@ -92,11 +95,63 @@ def _lock_for(path: Path) -> asyncio.Lock:
 # 不改变任何对外行为。内存代价：常驻表的原生 dict 形态。
 _TABLE_MEMO_MAX = 8
 _table_memo: OrderedDict[Path, tuple[float, dict[str, Any]]] = OrderedDict()
+_table_write_lock = asyncio.Lock()
+_table_generation = 0
 
 
 def clear_table_memory_cache() -> None:
     """刷新游戏数据时同步失效内存表，下一次查询重新读取/下载。"""
+    global _table_generation
+    _table_generation += 1
     _table_memo.clear()
+
+
+def table_cache_generation() -> int:
+    """供衍生索引记录构建代次，刷新前的结果不再持久化。"""
+    return _table_generation
+
+
+@asynccontextmanager
+async def table_cache_refresh() -> AsyncIterator[None]:
+    """等待已提交写盘，清理期间禁止旧表/索引回填；不等待网络。"""
+    async with _table_write_lock:
+        clear_table_memory_cache()
+        yield
+
+
+async def _finish_cache_write(write: Coroutine[Any, Any, None]) -> None:
+    # cache_write/write_json 使用 to_thread：取消调用者不能停止已提交的
+    # 线程。锁必须持有到主文件及旁车全部结束，之后刷新才能安全删盘。
+    task = asyncio.create_task(write)
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        # 查询取消后，关闭流程还可能再次取消同一个调用者；仍须持锁等
+        # 线程完成，不能把第二次取消传给写盘任务后提前允许刷新删盘。
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue
+        task.result()
+        raise
+
+
+async def _store_table(
+    path: Path, payload: dict[str, Any], validators: dict | None, generation: int
+) -> None:
+    async with _table_write_lock:
+        if generation != _table_generation:
+            return
+        await _finish_cache_write(cache_write(path, payload, validators=validators))
+        _memo_put(path, time.time(), payload)
+
+
+async def write_index_if_current(path: Path, payload: dict, generation: int) -> None:
+    """源表查询跨越刷新时，允许返回旧索引，但不覆盖刷新后的索引。"""
+    async with _table_write_lock:
+        if generation == _table_generation:
+            await _finish_cache_write(write_json(path, payload))
 
 
 def _memo_get(path: Path, ttl: float) -> dict[str, Any] | None:
@@ -176,12 +231,14 @@ async def _cache_fresh(path: Path, ttl: float) -> bool:
 
 async def _read_fresh_from_disk(path: Path, ttl: float) -> dict[str, Any] | None:
     """磁盘新鲜缓存直读：判鲜只读文件头，命中才整表解析并回填 memo。"""
+    generation = _table_generation
     saved_ts = await cache_saved_ts(path)
     if not is_fresh(saved_ts, ttl):
         return None
     payload, actual_ts = await cache_read(path)
     if isinstance(payload, dict):
-        _memo_put(path, actual_ts, payload)
+        if generation == _table_generation:
+            _memo_put(path, actual_ts, payload)
         return payload
     return None
 
@@ -194,6 +251,7 @@ async def _ensure_table(
     下载段持 per-path 锁并复查新鲜度，避免 TTL 过期瞬间的并发调用
     重复拉取同一个 15-18MB 全量表。
     """
+    generation = _table_generation
     if not force:
         memo = _memo_get(path, ttl)
         if memo is not None:
@@ -228,22 +286,19 @@ async def _ensure_table(
                 old_payload, _ = await cache_read(path)
                 if isinstance(old_payload, dict):
                     merged = {**validators, **new_v, "source_url": cond_url}
-                    await cache_write(path, old_payload, validators=merged)
-                    _memo_put(path, time.time(), old_payload)
+                    await _store_table(path, old_payload, merged, generation)
                     return old_payload
                 # 304 却无旧 payload（旁车与主缓存脱节的异常态）：落全量
             elif raw is not None:
                 parsed = await _parse_json_bytes(raw)
                 if isinstance(parsed, dict):
                     merged = {**new_v, "source_url": cond_url}
-                    await cache_write(path, parsed, validators=merged)
-                    _memo_put(path, time.time(), parsed)
+                    await _store_table(path, parsed, merged, generation)
                     return parsed
         # ---- 无校验器（历史缓存）/ 条件请求网络失败 → 全量下载（镜像链）----
         fresh, fresh_validators = await _download_json(url)
         if isinstance(fresh, dict):
-            await cache_write(path, fresh, validators=fresh_validators or None)
-            _memo_put(path, time.time(), fresh)
+            await _store_table(path, fresh, fresh_validators or None, generation)
             return fresh
         return await _read_wrapped_cache(path)
 

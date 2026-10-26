@@ -19,12 +19,16 @@
 from __future__ import annotations
 
 import asyncio
+import math
+import re
 import time
 from collections import Counter
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from gsuid_core.logger import logger
+from gsuid_core.server import on_core_shutdown
 
 from ..http import (
     download_bytes,
@@ -389,7 +393,27 @@ _STAGE_CACHE_DIR = Path(IS_ENEMY_CACHE_DIR) / "stages"
 _STAGE_FETCH_CONCURRENCY = 8
 
 _stage_index_cache: dict[str, list[dict]] | None = None
-_stage_index_lock: asyncio.Lock | None = None
+_STAGE_INDEX_TTL = 86400.0
+_STAGE_INDEX_RETRY_SECONDS = 30.0
+_stage_index_generation = 0
+
+
+@dataclass
+class _StageIndexState:
+    data: dict[str, list[dict]] = field(default_factory=dict)
+    status: str = "loading"
+    saved_at: float = 0.0
+    task: asyncio.Task[None] | None = None
+
+
+_stage_index_states: dict[str | None, _StageIndexState] = {}
+
+
+class _IncompleteStageIndex(Exception):
+    def __init__(self, data: dict[str, list[dict]], failures: int) -> None:
+        super().__init__(f"{failures} stage sources unavailable")
+        self.data = data
+        self.failures = failures
 
 
 def _floors_text(floors: list) -> str:
@@ -435,10 +459,30 @@ async def _load_stage_file(level_id: str) -> dict:
     from .path_safety import resolve_inside, safe_cache_stem
 
     stem = safe_cache_stem(level_id)
-    data = await _fetch_url_json_cached(
-        f"{_STAGES_BASE}/ro_stage_data/{stem}.json",
-        resolve_inside(_STAGE_CACHE_DIR, f"{stem}.json"),
-    )
+    relative_path = f"{stem}.json"
+    legacy_path = resolve_inside(_STAGE_CACHE_DIR, relative_path)
+    legacy_data, legacy_ts = None, 0.0
+    # tomimi 将各期关卡移入 ro{N}/；新缓存键隔离旧 URL 的 404 负标记。
+    # 未知格式/主题仍用旧路径，避免猜测第三方尚未注册的目录布局。
+    theme_match = re.match(r"^level_rogue(\d+)_", stem)
+    if (
+        theme_match
+        and (number := int(theme_match.group(1))) in _THEME_ROGUE_NUM.values()
+    ):
+        relative_path = f"ro{number}/{relative_path}"
+        if not resolve_inside(_STAGE_CACHE_DIR, relative_path).exists():
+            legacy_data, legacy_ts = await cache_read(legacy_path)
+    if legacy_data is not None and is_fresh(legacy_ts, _DATA_TTL):
+        # 保留旧有效数据的原 TTL，避免迁移续鲜；旧源 ETag 不用于新 URL。
+        data = legacy_data
+    else:
+        path = resolve_inside(_STAGE_CACHE_DIR, relative_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = await _fetch_url_json_cached(
+            f"{_STAGES_BASE}/ro_stage_data/{relative_path}", path
+        )
+        if data is None:
+            data = legacy_data
     if isinstance(data, dict) and not data.get("enemies"):
         inner = data.get("data")
         if isinstance(inner, list) and inner and isinstance(inner[0], dict):
@@ -451,8 +495,11 @@ async def load_stage_data(level_id: str) -> dict:
     return await _load_stage_file(level_id)
 
 
-async def _do_build_stage_index() -> dict[str, list[dict]]:
-    """全期关卡 → {敌人键: [关卡条目]}。空壳期/单关失败静默跳过。"""
+async def _do_build_stage_index(theme_dir: str | None = None) -> dict[str, list[dict]]:
+    """所选期关卡 → 出没索引；源缺失抛出携带可用部分的异常。"""
+    themes = tuple(_THEME_ROGUE_NUM) if theme_dir is None else (theme_dir,)
+    if any(theme not in _THEME_ROGUE_NUM for theme in themes):
+        raise ValueError("unknown rogue theme")
     index: dict[str, list[dict]] = {}
     semaphore = asyncio.Semaphore(_STAGE_FETCH_CONCURRENCY)
 
@@ -460,7 +507,9 @@ async def _do_build_stage_index() -> dict[str, list[dict]]:
         async with semaphore:
             stage = await _load_stage_file(level_id)
         enemies = stage.get("enemies")
-        if not isinstance(enemies, list) or not enemies:
+        if not isinstance(enemies, list):
+            raise ValueError("stage enemy roster unavailable")
+        if not enemies:
             return
         floors = _floors_text(stage.get("floors"))
         for enemy in enemies:
@@ -484,38 +533,129 @@ async def _do_build_stage_index() -> dict[str, list[dict]]:
                 }
             )
 
-    metas = await asyncio.gather(*(_load_stage_meta(t) for t in _THEME_ROGUE_NUM))
+    metas = await asyncio.gather(
+        *(_load_stage_meta(t) for t in themes), return_exceptions=True
+    )
+    failures = sum(not isinstance(meta, dict) or not meta for meta in metas)
     tasks = [
         _one(theme_dir, level_id, meta)
-        for theme_dir, meta in zip(_THEME_ROGUE_NUM, metas)
+        for theme_dir, meta in zip(themes, metas)
+        if isinstance(meta, dict)
         for level_id, meta in meta.items()
     ]
     if tasks:
-        await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        failures += sum(isinstance(result, BaseException) for result in results)
+    if failures:
+        raise _IncompleteStageIndex(index, failures)
     return index
 
 
-async def build_stage_index() -> dict[str, list[dict]]:
-    """出没索引（进程内 memo + 单飞锁；构建失败返回 {} 不报错）。
+async def _run_stage_index(
+    theme_dir: str | None, state: _StageIndexState, generation: int
+) -> None:
+    global _stage_index_cache
 
-    首次构建拉全部关卡文件（约 250 个有效文件，并发 8）；单文件与
-    meta 均带 30 天磁盘缓存；下载失败过期兜底，404 走 7 天负标记。
-    """
-    global _stage_index_cache, _stage_index_lock
-    if _stage_index_cache is not None:
-        return _stage_index_cache
-    if _stage_index_lock is None:
-        _stage_index_lock = asyncio.Lock()
-    async with _stage_index_lock:
-        if _stage_index_cache is not None:
-            return _stage_index_cache
+    data, status = state.data, "failed"
+    try:
+        # 无参入口兼容既有完整构建调用与测试替身。
+        data = (
+            await _do_build_stage_index()
+            if theme_dir is None
+            else await _do_build_stage_index(theme_dir)
+        )
+        status = "ready"
+    except _IncompleteStageIndex as exc:
+        data = exc.data
+        logger.warning(
+            f"[ArknightsUID·肉鸽] 出没索引构建不完整 "
+            f"({theme_dir or 'all'}，{exc.failures} 个源不可用)"
+        )
+    except Exception as exc:
+        # 后台异常必须在任务内部消费，避免无人等待时丢失异常。
+        logger.warning(
+            f"[ArknightsUID·肉鸽] 出没索引构建失败 "
+            f"({theme_dir or 'all'}，{exc.__class__.__name__})"
+        )
+    if (
+        generation != _stage_index_generation
+        or _stage_index_states.get(theme_dir) is not state
+    ):
+        return
+    state.data, state.status, state.saved_at = data, status, time.monotonic()
+    if theme_dir is None:
+        _stage_index_cache = data
+
+
+def _ensure_stage_index(theme_dir: str | None) -> _StageIndexState:
+    state = _stage_index_states.get(theme_dir)
+    if state is not None:
+        if state.task is not None and not state.task.done():
+            return state
+        # 保留旧测试/调用方将无参缓存置 None 的失效约定。
+        invalidated = theme_dir is None and _stage_index_cache is None
+        ttl = (
+            _STAGE_INDEX_TTL if state.status == "ready" else _STAGE_INDEX_RETRY_SECONDS
+        )
+        if not invalidated and time.monotonic() - state.saved_at < ttl:
+            return state
+    state = _StageIndexState(data=state.data if state is not None else {})
+    _stage_index_states[theme_dir] = state
+    state.task = asyncio.create_task(
+        _run_stage_index(theme_dir, state, _stage_index_generation),
+        name=f"ark-stage-index-{theme_dir or 'all'}",
+    )
+    return state
+
+
+async def _wait_stage_index(
+    theme_dir: str | None, timeout: float | None
+) -> tuple[dict, str]:
+    state = _ensure_stage_index(theme_dir)
+    if state.task is not None and not state.task.done():
         try:
-            index = await _do_build_stage_index()
-        except Exception:
-            index = {}
-        if index:
-            _stage_index_cache = index
-        return index
+            # 调用方超时/取消只停止等待，不会取消其他查询共享的后台构建。
+            await asyncio.wait_for(asyncio.shield(state.task), timeout=timeout)
+        except TimeoutError:
+            return state.data, state.status
+        except asyncio.CancelledError:
+            caller = asyncio.current_task()
+            if caller is not None and caller.cancelling():
+                raise
+            return {}, "failed"  # 刷新取消了被等待的构建。
+    if _stage_index_states.get(theme_dir) is not state:
+        return {}, "failed"
+    return state.data, state.status
+
+
+async def load_stage_appearances(
+    theme_dir: str | None = None, timeout: float = 1.0
+) -> tuple[dict, str]:
+    """按期取得出没索引与 ready/loading/failed 状态；超时后后台继续构建。"""
+    return await _wait_stage_index(theme_dir, timeout)
+
+
+async def build_stage_index() -> dict[str, list[dict]]:
+    """兼容原无参接口：完整等待全期索引，成功缓存 24 小时。"""
+    data, _status = await _wait_stage_index(None, None)
+    return data
+
+
+@on_core_shutdown(priority=-1)
+async def clear_stage_index_cache() -> None:
+    """刷新/退出时先取消并回收旧构建，再允许共享 HTTP 客户端关闭。"""
+    global _stage_index_cache, _stage_index_generation
+
+    _stage_index_generation += 1
+    states = list(_stage_index_states.values())
+    _stage_index_states.clear()
+    _stage_index_cache = None
+    tasks = [state.task for state in states if state.task is not None]
+    for task in tasks:
+        if not task.done():
+            task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def stages_for_enemy(
@@ -611,6 +751,81 @@ async def search_stages(query: str, limit: int | None = 8) -> list[dict]:
     return candidates[:limit]
 
 
+def stage_enemy_count(item: dict, elite: bool = False) -> tuple[str | None, str]:
+    """使用上游按普通/紧急分组预计算的数量范围；双零不等于不出场。
+
+    EnemyCount.svelte 按模式选择 min/max；一边为零、另一边非零表示
+    模式替换。两边均零还可能是召唤/潜在敌人，保留并说明数量未知。
+    """
+    normal = (int(item.get("min_count") or 0), int(item.get("max_count") or 0))
+    has_elite = all(item.get(key) is not None for key in ("elite_min_count", "elite_max_count"))
+    emergency = (
+        (int(item["elite_min_count"]), int(item["elite_max_count"]))
+        if has_elite else normal
+    )
+    lo, hi = emergency if elite else normal
+    other = normal if elite else emergency
+    if hi == 0 and other[1] > 0:
+        return None, ""
+    if hi == 0:
+        return "波次", "潜在/召唤，数量未定"
+    count = str(hi) if lo == hi else f"{lo}-{hi}"
+    if elite and not has_elite:
+        return count, "紧急数量未提供，沿用普通范围"
+    extra = emergency[1] - normal[1]
+    return count, f"紧急+{extra}" if extra > 0 else ""
+
+
+def build_stage_enemy_panel(
+    entry: dict, item: dict, stage: dict, grades: list[dict],
+    difficulty: int | None, elite: bool = False, floor: int = 0,
+) -> dict:
+    """关卡行和单敌面板共用的来源适配：覆写 → 地图 → 难度/层数。
+
+    对照 tomimi stageLoad.prepareStage：只覆盖声明的属性（包括零），
+    未声明项继承选定 stats 块；levelType=NORMAL 去掉领袖/精英标签。
+    statHelpers.parseStats 将 all_mods 与当前模式 runes 先折算并取整，
+    再应用 difficulty/others；不能把两阶段 initial 加成平铺累加。
+    """
+    blocks = entry.get("stats") or []
+    level = max(0, min(int(item.get("level") or 0), len(blocks) - 1))
+    block = dict(blocks[level]) if blocks else {}
+    overwritten = item.get("overwrittenData") or {}
+    for key in PANEL_STATS:
+        if overwritten.get(key) is not None:
+            block[key] = overwritten[key]
+    scoped_entry = dict(entry)
+    if overwritten.get("levelType") == "NORMAL":
+        scoped_entry["type"] = [
+            tag for tag in entry.get("type") or [] if tag not in ("BOSS", "ELITE")
+        ]
+    key = str(entry.get("key") or item.get("id") or "")
+    scoped_entry["key"] = key
+    types = list(scoped_entry.get("type") or [])
+    groups = [
+        ("关卡", stage.get("all_mods")),
+        ("紧急" if elite else "普通", stage.get("elite_mods" if elite else "n_mods")),
+    ]
+    map_mods: list[dict] = []
+    map_notes: list[str] = []
+    has_elite_mods = False
+    for label, effects in groups:
+        mods = _effects_mods_for(effects, key, types)
+        map_mods.extend(mods)
+        map_notes.extend(f"{label}：{_mod_note(mod)}" for mod in mods)
+        has_elite_mods |= label == "紧急" and bool(mods)
+    if map_mods:
+        block.update(_stats_with_mods(block, map_mods, None))
+    panel = build_panel_at(
+        scoped_entry, grades, difficulty, base_block=block, floor=floor
+    )
+    panel["buffs"] = list(dict.fromkeys(map_notes + panel["buffs"]))
+    if has_elite_mods:
+        panel["label"] += "·紧急"
+    panel["has_map_mods"] = bool(map_mods)
+    return panel
+
+
 def stage_panel_rows(
     stage: dict,
     db: dict[str, dict],
@@ -628,7 +843,6 @@ def stage_panel_rows(
     count：min==max 且 >0 → 固定数，0 → 波次出怪，紧急数量差 → 紧急+N 注记。
     """
     rows: list[dict] = []
-    floor_mods = _floor_buff_mods(grades, difficulty, floor)
     for item in stage.get("enemies") or []:
         key = str(item.get("id") or "")
         entry = db.get(key)
@@ -637,45 +851,20 @@ def stage_panel_rows(
         blocks = entry.get("stats") or []
         if not blocks:
             continue
+        count, extra_note = stage_enemy_count(item, elite)
+        if count is None:
+            continue
         level = int(item.get("level") or 0)
-        block = blocks[min(level, len(blocks) - 1)]
-        types = list(entry.get("type") or [])
-        mods: list[dict] = []
-        if difficulty is not None:
-            mods.extend(_grade_mods_for_enemy(grades, key, types, difficulty))
-        mods.extend(floor_mods)
-        elite_mods: list[dict] = []
-        if elite:
-            elite_mods = _effects_mods_for(stage.get("elite_mods"), key, types)
-        stats: dict[str, int]
-        if difficulty is not None or elite_mods:
-            stats = _stats_with_mods(
-                block,
-                mods + elite_mods,
-                difficulty if difficulty is not None else 99,
-            )
-        else:
-            stats = {stat: round(float(block.get(stat) or 0)) for stat in PANEL_STATS}
-        lo, hi = int(item.get("min_count") or 0), int(item.get("max_count") or 0)
-        if lo == hi and hi > 0:
-            count = str(hi)
-        elif hi == 0:
-            count = "波次"
-        else:
-            count = f"{lo}-{hi}"
-        elite_hi = int(item.get("elite_max_count") or 0)
-        extra_note = ""
-        if elite_hi > hi:
-            extra_note = f"紧急+{elite_hi - hi}"
+        panel = build_stage_enemy_panel(entry, item, stage, grades, difficulty, elite, floor)
         rows.append(
             {
                 "key": key,
                 "name": str(entry.get("name_zh") or key),
                 "count": count,
-                "stats": stats,
+                "stats": panel["stats"],
                 "level": level,
                 "elite_note": extra_note,
-                "has_diff": bool(mods or elite_mods),
+                "has_diff": bool(panel["buffs"]),
             }
         )
     return rows
@@ -725,6 +914,19 @@ def _miss_ttl(miss_path: Path) -> float:
     return _STAGE_MISS_TTL if kind == "404" else _NET_MISS_TTL
 
 
+async def _write_source_cache(
+    path: Path, payload: Any, validators: dict | None = None
+) -> None:
+    """取消时回收已提交的写盘任务，避免刷新删盘后旧线程重新落盘。"""
+    write = asyncio.create_task(cache_write(path, payload, validators=validators))
+    try:
+        await asyncio.shield(write)
+    except asyncio.CancelledError:
+        # to_thread 的线程不能随协程取消；仅等待写盘，不延迟网络请求取消。
+        await write
+        raise
+
+
 async def _fetch_url_json_cached(url: str, path: Path) -> Any:
     """任意 tomimi 直链 JSON → 本地缓存（每日条件 diff；失败过期兜底 + 负标记）。
 
@@ -758,7 +960,7 @@ async def _fetch_url_json_cached(url: str, path: Path) -> Any:
             ),
         )
         if status == 304 and payload is not None:
-            await cache_write(
+            await _write_source_cache(
                 path, payload, validators={**validators, **new_v, "source_url": url}
             )
             return payload
@@ -767,7 +969,7 @@ async def _fetch_url_json_cached(url: str, path: Path) -> Any:
                 data = json.loads(raw)
             except Exception:
                 return payload
-            await cache_write(
+            await _write_source_cache(
                 path, data, validators={**new_v, "source_url": url}
             )
             return data
@@ -801,7 +1003,7 @@ async def _fetch_url_json_cached(url: str, path: Path) -> Any:
         data = json.loads(raw)
     except Exception:
         return payload
-    await cache_write(
+    await _write_source_cache(
         path, data, validators={**new_v, "source_url": url} if new_v else None
     )
     return data
@@ -821,8 +1023,8 @@ def _diff_file_url(theme_dir: str, base: str = _TOMIMI_BASE) -> str:
     return f"{base}/is/{theme_dir}/{diff_file_for(theme_dir)}"
 
 
-async def load_difficulty_mods() -> dict[str, list]:
-    """各期难度效果 {期目录: [grade entries]}；单期失败跳过。"""
+async def load_difficulty_mods(theme_dir: str | None = None) -> dict[str, list]:
+    """所选期难度效果 {期目录: [grade entries]}；无参取全期，失败跳过。"""
     import json
 
     async def fetch_one(theme_dir: str) -> tuple[str, list | None]:
@@ -854,9 +1056,14 @@ async def load_difficulty_mods() -> dict[str, list]:
         except Exception:
             return theme_dir, None
 
-    # 六期难度表互不依赖，并发拉取（此前串行 6 × 20s）
+    themes = (
+        tuple(THEME_DIRS)
+        if theme_dir is None
+        else ((theme_dir,) if theme_dir in THEME_DIRS else ())
+    )
+    # 不指定期时并发拉取；指定期只取该期，避免无关的远端慢请求。
     result: dict[str, list] = {}
-    for theme_dir, data in await asyncio.gather(*(fetch_one(t) for t in THEME_DIRS)):
+    for theme_dir, data in await asyncio.gather(*(fetch_one(t) for t in themes)):
         if data is not None:
             result[theme_dir] = data
     return result
@@ -964,8 +1171,13 @@ def _grade_mods_for_enemy(
     return mods
 
 
+def _round_stat(value: float) -> int:
+    """tomimi Math.round 的半数向上语义（Python round 会把正数 .5 舍偶）。"""
+    return math.floor(value + 0.5)
+
+
 def _stats_with_mods(
-    base_block: dict, mods: list[dict], difficulty: int
+    base_block: dict, mods: list[dict], difficulty: int | None
 ) -> dict[str, int]:
     """面板四维折算：mods 累积 + 新手档（难度 0/1/2）HP 削减。"""
     stat_mods: dict[str, list[dict]] = {}
@@ -983,7 +1195,7 @@ def _stats_with_mods(
             value = min(100.0, max(0.0, value))
         if noob and stat_key == "hp":
             value *= noob
-        stats[stat_key] = round(value)
+        stats[stat_key] = _round_stat(value)
     return stats
 
 
@@ -1044,7 +1256,7 @@ def build_diff_panels(
                 value = min(100.0, max(0.0, value))
             if noob and stat_key == "hp":
                 value *= noob
-            stats[stat_key] = round(value)
+            stats[stat_key] = _round_stat(value)
         label = f"难度{grade}"
         if effect_grades and grade >= max(effect_grades):
             label += " 起（更高档数值不变）"
@@ -1142,6 +1354,7 @@ async def enemy_icon_b64(enemy_key: str) -> str:
     """
     import base64
 
+    from ..image import _path_lock, _read_valid_image_bytes, _save_valid_image_bytes
     from .path_safety import safe_cache_stem
 
     enemy_key = (enemy_key or "").strip()
@@ -1152,28 +1365,28 @@ async def enemy_icon_b64(enemy_key: str) -> str:
     filename = f"{stem}.webp"
     local_path = cache_dir / filename
     miss_path = cache_dir / f"{filename}.miss"
-    try:
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        if miss_path.exists():
-            if time.time() - miss_path.stat().st_mtime < _ICON_MISS_TTL:
-                return ""
-            miss_path.unlink()
-        if not local_path.exists():
-            # quiet_404：最新期敌人图标上游渐进上传，404 是预期缺口
-            _status, raw = await download_bytes_status(
-                f"{_ICON_BASE}/{filename}", timeout=20.0, quiet_404=True
-            )
-            if raw is None:
-                raise RuntimeError(f"icon download failed: {filename}")
-            local_path.write_bytes(raw)
-        data = local_path.read_bytes()
-        if not data:
-            raise ValueError("empty icon")
-        return f"data:image/webp;base64,{base64.b64encode(data).decode('utf-8')}"
-    except Exception:
-        local_path.unlink(missing_ok=True)
+    async with await _path_lock(local_path):
         try:
-            miss_path.write_text("", encoding="utf-8")
-        except OSError:
-            pass
-        return ""
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            if miss_path.exists():
+                if time.time() - miss_path.stat().st_mtime < _ICON_MISS_TTL:
+                    return ""
+                miss_path.unlink()
+            data = await asyncio.to_thread(_read_valid_image_bytes, local_path)
+            if data is None:
+                local_path.unlink(missing_ok=True)
+                # quiet_404：上游尚未上传该图时静默降级；失败保留 1h 退避。
+                _status, data = await download_bytes_status(
+                    f"{_ICON_BASE}/{filename}", timeout=20.0, quiet_404=True
+                )
+                if data is None:
+                    raise RuntimeError(f"icon download failed: {filename}")
+                await asyncio.to_thread(_save_valid_image_bytes, local_path, data)
+            return f"data:image/webp;base64,{base64.b64encode(data).decode('utf-8')}"
+        except Exception:
+            local_path.unlink(missing_ok=True)
+            try:
+                miss_path.write_text("", encoding="utf-8")
+            except OSError:
+                pass
+            return ""

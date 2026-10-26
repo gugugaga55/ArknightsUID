@@ -420,6 +420,15 @@ ENDING_GUIDES: dict[str, dict[str, Any]] = {
 # ---------------------------------------------------------------------------
 _CACHE_TTL = 6 * 3600.0
 _cache: dict[str, Any] = {"ts": 0.0, "themes": {}}
+_cache_generation = 0
+
+
+def clear_ending_cache() -> None:
+    """刷新结局 memo，并阻止刷新前仍在加载的旧结果重新填入缓存。"""
+    global _cache_generation
+
+    _cache_generation += 1
+    _cache.update(ts=0.0, themes={})
 
 
 def _merge_theme(
@@ -509,12 +518,14 @@ async def load_all_endings() -> dict[str, dict[str, Any]]:
     now = time.time()
     if _cache["themes"] and now - float(_cache["ts"]) < _CACHE_TTL:
         return _cache["themes"]
+    generation = _cache_generation
     table = await ensure_rogue_topic_table()
     themes = {
         theme_dir: _merge_theme(theme_dir, table) for theme_dir in THEME_TABLE_IDS
     }
-    _cache["themes"] = themes
-    _cache["ts"] = now
+    if generation == _cache_generation:
+        _cache["themes"] = themes
+        _cache["ts"] = now
     return themes
 
 

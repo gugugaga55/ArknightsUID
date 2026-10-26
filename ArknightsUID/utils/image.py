@@ -2,6 +2,7 @@ import asyncio
 import base64
 import os
 import threading
+from io import BytesIO
 from collections.abc import Awaitable, Callable, Sequence
 from pathlib import Path
 
@@ -14,6 +15,31 @@ def data_uri_bytes(data_uri: str) -> bytes:
     """data:image/…;base64,XXX → 原始 bytes；无 data: 前缀时按纯 base64 解。"""
     payload = data_uri.split(",", 1)[1] if data_uri.startswith("data:") else data_uri
     return base64.b64decode(payload)
+
+
+def _validate_image_content(data: bytes) -> None:
+    # 完整解码才能发现有合法文件头的截断图片，不能只验证非空/魔数。
+    with Image.open(BytesIO(data)) as image:
+        image.load()
+
+
+def _read_valid_image_bytes(path: Path) -> bytes | None:
+    """读取并完整解码验证已有图片；损坏/缺失交给调用者重新下载。"""
+    try:
+        data = path.read_bytes()
+        _validate_image_content(data)
+        return data
+    except (OSError, ValueError):
+        return None
+
+
+def _save_valid_image_bytes(path: Path, data: bytes) -> None:
+    """验证后复用资源下载器原子保存，拒绝缓存 200 错误页及截断图片。"""
+    from .resource.bulk_download import _save_image_sync
+
+    _validate_image_content(data)
+    # _save_image_sync 的 webp 分支原样写入，必须先验证再提交。
+    _save_image_sync(path.parent, path.name, data)
 
 # per-文件 single-flight（审计 #19）：check 与 download 之间有 await，
 # 并发协程会重复下载/双写同一路径，一方可能读到半写文件

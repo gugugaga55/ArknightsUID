@@ -83,6 +83,10 @@
         </div>
         {% endif %}
 
+        {% if stage_note %}
+        <div class="prose" style="margin-top: var(--space-2); font-size: 11px; color: var(--tx-2);">{{ stage_note }}</div>
+        {% endif %}
+
         {% if focus %}
         <div class="sect" style="margin-top: var(--space-4);">
             <span class="sect-label bk">指定面板 · {{ theme_name }}{% if stage_label %} · {{ stage_label }}{% endif %}</span>

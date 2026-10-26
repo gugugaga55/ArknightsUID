@@ -39,7 +39,7 @@ git clone https://github.com/gugugaga55/ArknightsUID.git
 - `ark查看绑定`: 查看本地绑定的明日方舟账号。
 - <details><summary>登录成功回执：账号写入卡（ark绑定 / ark扫码登录 通用，标注默认账号）</summary>
 
-  <img src="docs/design/previews/ark_login.jpg" width="55%">
+  <img src="images/ark_login.jpg" width="55%">
 
   </details>
 
@@ -54,80 +54,80 @@ git clone https://github.com/gugugaga55/ArknightsUID.git
 - `ark头像列表 [页码] [分类:N]`（别名 `ark头像目录`）：官方头像缩略图目录，默认明日方舟分类，每页 16 个；例如 `ark头像列表 2`、`ark头像列表 页2 分类:3`。目录缓存 1 小时。
 - `ark头像 <ID> [分类:N]`：按目录显示的 ID 查看图片，例如 `ark头像 200232`。
 
-好友数据的字段和显示规则已按原生模型及官方 UI 核对，签名、缓存、命令和错误回执有离线回归；当前开发环境没有绑定账号，好友接口成功响应的包装与服务端分页仍待实号联调。公开头像目录已通过匿名实网读取和渲染验证。详情见 [实现记录](docs/SOCIAL-FEATURES-2026-10-10.md)。
+好友数据的字段和显示规则已按原生模型及官方 UI 核对，签名、缓存、命令和错误回执有离线回归；当前开发环境没有绑定账号，好友接口成功响应的包装与服务端分页仍待实号联调。公开头像目录已通过匿名实网读取和渲染验证。
 
 - <details><summary><code>ark账号</code> / <code>ark我的方舟</code>：查看当前可用的明日方舟账号（标注默认账号）</summary>
 
-  <img src="docs/design/previews/ark_accounts.jpg" width="55%">
+  <img src="images/ark_accounts.jpg" width="55%">
 
   </details>
 - `ark切换 <序号|UID>`: 设置默认查询账号（多账号用户；不带参数查看当前默认）。
 - `ark绑定列表`: 查看记录的明日方舟 UID 与凭据状态。
 - <details><summary><code>ark理智</code> / <code>ark便签</code>：理智与基础状态卡（等级/注册天数/持有/剿灭）</summary>
 
-  <img src="docs/design/previews/ark_status.jpg" width="55%">
+  <img src="images/ark_status.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark每日</code> / <code>ark日常</code>：日常 / 周常 / 剿灭进度卡</summary>
 
-  <img src="docs/design/previews/ark_daily.jpg" width="55%">
+  <img src="images/ark_daily.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark剿灭</code>：剿灭合成玉进度卡</summary>
 
-  <img src="docs/design/previews/ark_campaign.jpg" width="55%">
+  <img src="images/ark_campaign.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark基建</code>：基建总览卡——控制中枢/无人机/线索/制造配方/贸易订单/宿舍氛围/训练室专精进度与剩余时间/公招槽位状态/低心情干员（换班提醒）</summary>
 
-  <img src="docs/design/previews/ark_building.jpg" width="55%">
+  <img src="images/ark_building.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark训练室</code>：训练室专精进度卡——受训干员立绘/在训技能与专精目标档/协助干员/剩余时间/预计完成时刻（targetSkill 一手字段，进度按目标档 8/16/24h 估算）</summary>
 
-  <img src="docs/design/previews/ark_training.jpg" width="55%">
+  <img src="images/ark_training.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark练度统计</code>：全干员练度统计卡（按职业分组的持有/精二/满级）</summary>
 
-  <img src="docs/design/previews/ark_char_stat.jpg" width="55%">
+  <img src="images/ark_char_stat.jpg" width="55%">
 
   </details>
 - <details><summary><code>arkBOX</code> / <code>arkBOX分析</code>：BOX 稀有度分布与精英化分析卡</summary>
 
-  <img src="docs/design/previews/ark_box_analysis.jpg" width="55%">
+  <img src="images/ark_box_analysis.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark练度卡 &lt;干员名&gt;</code>：单干员练度卡（当前/满级技能效果、专精点、模组；支持中文全名 / 英文代号 / 唯一前缀 / 别名，如 <code>ark练度卡 42</code>）</summary>
 
-  <img src="docs/design/previews/ark_char_card.jpg" width="55%">
+  <img src="images/ark_char_card.jpg" width="55%">
 
   </details>
 - `ark理智 2` / `ark理智 123456789`: 按列表序号或 UID 查询指定账号。
 - `ark签到` / `ark签到 2` / `ark签到 123456789`: 对默认或指定账号发起森空岛签到。
 - <details><summary><code>ark肉鸽</code> / <code>ark集成战略</code>：查询肉鸽（集成战略）进度——最新期在前、合计通关/收藏小结（数据无结局/难度明细，接口仅此五项）</summary>
 
-  <img src="docs/design/previews/ark_rogue.jpg" width="55%">
+  <img src="images/ark_rogue.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark肉鸽战绩 [期名]</code>：单期肉鸽战绩明细卡——森空岛 App「战绩查询」独立端点（与 <code>ark肉鸽</code> 进度卡不同源）：最高达成难度 / 最高得分 / 声望 / 奖章 / 常用干员 / 最近与收藏战绩（胜负、难度、得分、分队、结局或止步关卡、用时、结算阵容）。期名支持简称与自定义期名（如 <code>ark肉鸽战绩 界园</code>），缺省为最新期</summary>
 
-  <img src="docs/design/previews/ark_rogue_record.jpg" width="55%">
+  <img src="images/ark_rogue_record.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark肉鸽详情 [期名] &lt;#局号&gt; [收藏]</code>：单局战况详情——结局回顾（带官方配色分段）/ 开局与结算阵容 / 藏品清单（图标+名称）/ 层数节点战斗统计 / 用时与种子号。局号见 <code>ark肉鸽战绩</code> 卡上的 #N 标记，加「收藏」查收藏战绩（如 <code>ark肉鸽详情 界园 3</code>、<code>ark肉鸽详情 收藏 1</code>）</summary>
 
-  <img src="docs/design/previews/ark_rogue_run.jpg" width="55%">
+  <img src="images/ark_rogue_run.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark肉鸽敌人 &lt;名字&gt;</code>：肉鸽专用敌人 buff 面板——基础形态数值 + 所属期难度档累积加成（含新手档削减；数据 tomimi.dev 游戏解包，支持精确/前缀/子串匹配；期名支持简称与「X肉鸽」叫法：水月/萨米/萨卡兹/界园/树海等，如 <code>ark肉鸽敌人 汉科 树海 N15</code>；层数增益与交互式全 buff 模拟见 tomimi.dev）</summary>
 
-  <img src="docs/design/previews/ark_rogue_enemy.jpg" width="55%">
+  <img src="images/ark_rogue_enemy.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark皮肤</code>：皮肤收集进度卡——已收集/目录/收集率、最近获得（带头像）、未收集清单（skin_table × player_info.skins，按系列排序）</summary>
 
-  <img src="docs/design/previews/ark_skin.jpg" width="55%">
+  <img src="images/ark_skin.jpg" width="55%">
 
   </details>
 
@@ -141,30 +141,30 @@ git clone https://github.com/gugugaga55/ArknightsUID.git
 
   如果历史同步曾漏页，可执行 `ark抽卡记录 全量`：重新扫描官方仍保留的记录并与本地存档合并。超过单轮 50 页时，之后用普通 `ark抽卡记录` 继续断点补拉；官方已清理且本地未保存的记录无法补回。
 
-  <img src="docs/design/previews/ark_gacha_card.jpg" width="55%">
+  <img src="images/ark_gacha_card.jpg" width="55%">
 
   </details>
 - `ark兑换码 <code>`: 官网礼包码兑换（需要账号已保存森空岛登录态）。
 - <details><summary><code>ark养成 &lt;干员名&gt;</code>：养成材料缺口计算——当前练度到毕业（精2/技能7/专精3/模组满级）所需材料对比仓库持有，支持别名（如 <code>ark养成 42</code>）</summary>
 
-  <img src="docs/design/previews/ark_cultivate.jpg" width="55%">
+  <img src="images/ark_cultivate.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark攒抽 [玉:60000] [石:30] [垫刀:20]</code>：攒抽规划——资源折算抽数 + 限定/井概率（按限定寻访模型估算，默认双UP各35%，仅复用同名目标池的本地垫刀，支持 单/十 券、单UP/双UP、天数推演与目标抽数）</summary>
 
-  <img src="docs/design/previews/ark_gacha_plan.jpg" width="55%">
+  <img src="images/ark_gacha_plan.jpg" width="55%">
 
   </details>
 - `ark年度 [年份]`: 寻访年度报告——本地记录的年度总抽数/六星率/最长垫刀/最肝月份纯文本总结。
 - <details><summary><code>ark十连</code> / <code>ark单抽</code>：寻访模拟——官方概率（6★2%/5★8%/4★50%/3★40%）+ 新池首十抽保底 5★+，每次十连模拟新池首轮，纯本地娱乐（不区分卡池、不累计垫刀），出结果卡</summary>
 
-  <img src="docs/design/previews/ark_gacha_sim.jpg" width="55%">
+  <img src="images/ark_gacha_sim.jpg" width="55%">
 
   </details>
 - `ark导出抽卡`: 本地寻访记录导出 JSON 存档文件（info + 逐条记录：时间/池名/干员/稀有度/是否新获；文件发送失败回退摘要文本）。
 - <details><summary><code>ark养成计划 &lt;干员名&gt;…</code>：多干员合并养成规划——最多 6 名干员到毕业的材料缺口合并（仓库持有只扣一次）+ 缺口前 5 的直刷 vs 合成建议，出卡</summary>
 
-  <img src="docs/design/previews/ark_cultivate_plan.jpg" width="55%">
+  <img src="images/ark_cultivate_plan.jpg" width="55%">
 
   </details>
 
@@ -176,76 +176,76 @@ git clone https://github.com/gugugaga55/ArknightsUID.git
 
 - <details><summary><code>arkwiki 词条</code>：查询 PRTS 词条摘要</summary>
 
-  <img src="docs/design/previews/ark_wiki_page.jpg" width="55%">
+  <img src="images/ark_wiki_page.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark干员 干员名</code>：查询干员资料（技能逐级详情含伤害数值、天赋逐阶段与满潜数值；已绑定账号时附「我的练度」——当前技能/专精等级 vs 满级对比、专精训练剩余时间；支持别名，如 <code>ark干员 silverash</code>）</summary>
 
-  <img src="docs/design/previews/ark_wiki_operator.jpg" width="55%">
+  <img src="images/ark_wiki_operator.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark面板 &lt;干员名&gt; [精2] [Lv45/满级] [潜6/满潜] [技能2 专3] [X模/无模] [满好]</code>：干员面板模拟——默认取你自己的练度，可指定任意等级/潜能/模组/技能档出最终面板数值与来源拆解（数据 ArknightsGameData）</summary>
 
-  <img src="docs/design/previews/ark_op_panel.jpg" width="55%">
+  <img src="images/ark_op_panel.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark模组 &lt;干员名&gt;</code>：干员模组详情——类型/解锁条件（精英/等级/好感）/各级属性增量/解锁材料（ArknightsGameData uniequip/battle_equip）</summary>
 
-  <img src="docs/design/previews/ark_module.jpg" width="55%">
+  <img src="images/ark_module.jpg" width="55%">
 
   </details>
 - `ark语音 <干员名> [关键词]`: 干员中文台词查询（PRTS 语音记录子页，可按标题或内容过滤）。
 - <details><summary><code>ark危机合约</code>：危机合约赛季时间线——新旧两制式 18 期全录（名称/起止时间，ArknightsGameData）</summary>
 
-  <img src="docs/design/previews/ark_crisis.jpg" width="55%">
+  <img src="images/ark_crisis.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark专精材料 干员名</code>：查询技能专精材料</summary>
 
-  <img src="docs/design/previews/ark_wiki_mastery.jpg" width="55%">
+  <img src="images/ark_wiki_mastery.jpg" width="55%">
 
   </details>
 - `ark材料 材料名`: 查询材料资料。
 - <details><summary><code>ark敌人 敌人名</code>：查询敌人资料（基础数值、按类型分色的机制区块——技能黄/天赋蓝/能力墨色，含 SP 初始·消耗参数、等级 2 变体数值与独立机制）</summary>
 
-  <img src="docs/design/previews/ark_wiki_enemy.jpg" width="55%">
+  <img src="images/ark_wiki_enemy.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark关卡 1-7</code>：查询关卡信息、掉落、敌方情报（含 HP/攻/防/抗基础数值）、关卡地图（PRTS 文件）与 PRTS.Map 交互链接；「作战条件」区块统一展示突袭条件（情报+数值差）、磨难/活动环境条件、全息作战矩阵指标（基础每组必选1/锁定指标/附加评分指标）与危机合约词条占位。支持磨难难度关（如 <code>ark关卡 磨难10-10</code>）与全息关（如 <code>ark关卡 全息H5-1</code>）</summary>
 
-  <img src="docs/design/previews/ark_wiki_stage.jpg" width="55%">
+  <img src="images/ark_wiki_stage.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark公招 标签1 标签2</code>：公招标签组合查询</summary>
 
-  <img src="docs/design/previews/ark_recruit.jpg" width="55%">
+  <img src="images/ark_recruit.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark公招推荐 标签… / 截图</code>：公招组合推荐——把界面看到的标签全部输入（或直接发公招界面截图，本地 RapidOCR 识别，依赖随插件自动安装），枚举 1-3 标签组合按价值排行（6★ 保底 / 5★ 保底 / 4★ 保底），每个组合的池内干员**全量列出**；高资组合提示拉满 9 小时；池与标签口径 PRTS 公开招募页同步（资深=5★ 池、高级资深=6★ 池，未选高资时 6★ 不入池）</summary>
 
-  <img src="docs/design/previews/ark_recruit_plan.jpg" width="55%">
+  <img src="images/ark_recruit_plan.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark藏品 名字</code>：肉鸽（集成战略）藏品效果查询——跨全期按名聚合、同名去重（数据 ArknightsGameData，图标 tomimi.dev，支持前缀/子串唯一匹配）</summary>
 
-  <img src="docs/design/previews/ark_rogue_relic.jpg" width="55%">
+  <img src="images/ark_rogue_relic.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark肉鸽关卡 &lt;关名&gt; [期名] [分支N] [N难度] [紧急]</code>：肉鸽关卡出怪面板——该难度下全体敌人的折算数值与机制（tomimi.dev 开源数据，支持紧急作战折算，如 <code>ark肉鸽关卡 拆东补西 N15 紧急</code>）</summary>
 
   同名关卡会列出可选分支，例如 `ark肉鸽关卡 止变 界园 分支2`。分支编号按关卡 ID 排序，地图和出怪数据对应同一分支；编号不表示难度或紧急模式。可追加 `N15 紧急`。未指定分支时不再默认展示第一张图。
 
-  <img src="docs/design/previews/ark_rogue_stage.jpg" width="55%">
+  <img src="images/ark_rogue_stage.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark肉鸽结局 [期名/结局名/关键藏品名]</code>：各期肉鸽（集成战略）结局前置条件——结局名单来自游戏主题表（ArknightsGameData），前置链为内置攻略数据（PRTS 口径人工摘编）：前置解锁 / 达成步骤 / 关键藏品 / 最终关卡与 BOSS。期名支持简称（如 <code>ark肉鸽结局 萨卡兹</code>），也可按结局名（<code>ark肉鸽结局 双王记</code>）或关键藏品名反查（<code>ark肉鸽结局 巴别塔誓言</code>）；新 DLC 结局上线后攻略数据随版本更新</summary>
 
-  <img src="docs/design/previews/ark_rogue_ending.jpg" width="55%">
+  <img src="images/ark_rogue_ending.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark日历</code>：活动 / 卡池日历</summary>
 
-  <img src="docs/design/previews/ark_calendar.jpg" width="55%">
+  <img src="images/ark_calendar.jpg" width="55%">
 
   </details>
 
@@ -260,34 +260,34 @@ git clone https://github.com/gugugaga55/ArknightsUID.git
 
 - <details><summary><code>ark活动</code> / <code>ark活动列表</code>：进行中 / 即将开始的限时活动与限定卡池清单</summary>
 
-  <img src="docs/design/previews/ark_activity.jpg" width="55%">
+  <img src="images/ark_activity.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark公告 [编号]</code>：明日方舟官方公告列表（森空岛 web 端，含链接）；带编号查看对应公告正文卡片（段落按原帖顺序还原）</summary>
 
-  <img src="docs/design/previews/ark_announce.jpg" width="55%">
+  <img src="images/ark_announce.jpg" width="55%">
 
-  <img src="docs/design/previews/ark_announce_detail.jpg" width="55%">
+  <img src="images/ark_announce_detail.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark刷图推荐 [主线|别传|限时活动|资源收集]</code>：关卡效率榜（一图流 spm，默认三组混排）</summary>
 
-  <img src="docs/design/previews/ark_stage_rank.jpg" width="55%">
+  <img src="images/ark_stage_rank.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark材料掉率 &lt;材料名&gt;</code>：材料掉落关卡统计——每把期望件数、单件期望理智、样本量（一图流 COS 掉落矩阵，样本 &gt;300 才收录）</summary>
 
-  <img src="docs/design/previews/ark_drop_rate.jpg" width="55%">
+  <img src="images/ark_drop_rate.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark合成 &lt;材料名&gt;</code>：加工站合成树——产出/龙门币/子材料递归展开（ArknightsGameData workshopFormulas）</summary>
 
-  <img src="docs/design/previews/ark_craft.jpg" width="55%">
+  <img src="images/ark_craft.jpg" width="55%">
 
   </details>
 - <details><summary><code>ark计划 &lt;材料:数量 …&gt;</code>：刷图规划——每个目标的直刷关卡（期望理智/把数） vs 合成路径（叶子材料成本）对比与合计理智</summary>
 
-  <img src="docs/design/previews/ark_farm_plan.jpg" width="55%">
+  <img src="images/ark_farm_plan.jpg" width="55%">
 
   </details>
 - `ark订阅剿灭 [序号|UID]` / `ark取消订阅剿灭`: 剿灭周提醒——每周五 20:00 检查本周合成玉，未拿满提醒一次。
@@ -313,7 +313,7 @@ git clone https://github.com/gugugaga55/ArknightsUID.git
 - `ark肉鸽别名 <别名>=<期名>` / `ark肉鸽别名列表` / `ark肉鸽别名删除 <别名>`: 用户自定义肉鸽期名（如 `ark肉鸽别名 树海=沉沦者的黑流树海`），对 ark肉鸽敌人/ark肉鸽关卡/ark肉鸽结局 的期名参数生效（优先级高于内建期名）。
 - <details><summary><code>ark抽签</code>：明日方舟主题每日运势卡（同人一天固定；同行干员带初始头像与星级，纯娱乐）</summary>
 
-  <img src="docs/design/previews/ark_fortune.jpg" width="55%">
+  <img src="images/ark_fortune.jpg" width="55%">
 
   </details>
 - `ark帮助搜索 <关键词>`: 按关键词检索命令（如 `ark帮助搜索 肉鸽`）。
@@ -326,7 +326,7 @@ git clone https://github.com/gugugaga55/ArknightsUID.git
 
 - <details><summary><code>ark帮助</code>：两级帮助——无参为总览卡（核心命令 + 分组目录），<code>ark帮助 &lt;分组名/序号&gt;</code> 看单组明细（如 <code>ark帮助 肉鸽</code>），<code>ark帮助 全部</code> 看全量命令卡</summary>
 
-  <img src="docs/design/previews/ark_help_overview.jpg" width="55%">
+  <img src="images/ark_help_overview.jpg" width="55%">
 
   </details>
 
@@ -367,7 +367,7 @@ git clone https://github.com/gugugaga55/ArknightsUID.git
 
 卡片设计宽为 560 CSS px；实际 JPEG 宽度由 `RenderScale` 决定：1/2/3 倍对应 560/1120/1680px，默认 2 倍。长卡高度随内容变化；状态卡保持 1000:640 的设计比例，仅有像素取整差异。模板约定 `body` 无 margin、`.container` 顶格。
 
-两种引擎的字体、装饰和部分留白存在差异，不保证画面或高度完全相同。渲染耗时也受内容、倍率及字体/素材加载影响。实际出图、比例验证与已修复问题见 [2026-10-10 渲染审查](docs/RENDER-AUDIT-2026-10-10.md)，附双引擎对照图。
+两种引擎的字体、装饰和部分留白存在差异，不保证画面或高度完全相同。渲染耗时也受内容、倍率及字体/素材加载影响。
 
 ## 丨其他
 

@@ -601,6 +601,8 @@ def _format_rogue_enemy(context: dict) -> str:
             f"…等 {group['total']} 关" if group["total"] > len(group["stages"]) else ""
         )
         lines.append(f"出没·{group['theme_name']}：{'、'.join(group['stages'])}{more}")
+    if context.get("stage_note"):
+        lines.append(context["stage_note"])
     # 口径区分：本面板是肉鸽解包数据，主线/活动出没与通用数值走 PRTS
     lines.append(
         f"（出没为集成战略口径；主线/活动出没与通用数值见 ark敌人 {context['name']}）"
@@ -685,7 +687,7 @@ async def _build_rogue_enemy_context(
         THEME_DIRS,
         build_diff_panels,
         build_panel_at,
-        build_stage_index,
+        build_stage_enemy_panel,
         class_labels,
         detect_theme,
         enemy_icon_b64,
@@ -695,9 +697,11 @@ async def _build_rogue_enemy_context(
         load_enemy_db,
         load_skill_dict,
         load_stage_data,
+        load_stage_appearances,
         match_rogue_enemies,
         max_difficulty,
         stages_for_enemy,
+        stage_enemy_count,
         status_labels,
     )
 
@@ -751,10 +755,17 @@ async def _build_rogue_enemy_context(
     if stage_hit is not None:
         stage_data = await load_stage_data(stage_hit["level_id"])
 
-    diff_data = await load_difficulty_mods()
-    theme_dir = (
+    requested_theme = (
         stage_hit["theme"] if stage_hit is not None else theme_hint
-    ) or detect_theme(enemy_key, list(entry.get("type") or []), diff_data)
+    )
+    diff_data = (
+        await load_difficulty_mods(theme_dir=requested_theme)
+        if requested_theme
+        else await load_difficulty_mods()
+    )
+    theme_dir = requested_theme or detect_theme(
+        enemy_key, list(entry.get("type") or []), diff_data
+    )
     grades = diff_data.get(theme_dir or "") or []
     if difficulty is not None and not grades:
         if theme_dir:
@@ -766,8 +777,7 @@ async def _build_rogue_enemy_context(
         return f"需指定期才能算难度面板（该敌人未识别所属期），如：ark肉鸽敌人 {name} 萨卡兹 N12。期名：{known}"
 
     focus = None
-    base_block = None
-    extra_effects = None
+    stage_enemy = None
     stage_label = ""
     if stage_hit is not None:
         # 关卡出场形态块 + 紧急作战效果
@@ -779,17 +789,15 @@ async def _build_rogue_enemy_context(
             ),
             None,
         )
-        blocks = entry.get("stats") or []
-        if stage_enemy is not None and blocks:
-            base_block = blocks[
-                min(int(stage_enemy.get("level") or 0), len(blocks) - 1)
-            ]
+        if stage_enemy is not None:
+            count, _ = stage_enemy_count(stage_enemy, elite)
+            if count is None:
+                mode = "紧急" if elite else "普通"
+                return f"{entry.get('name_zh') or enemy_key}不在{stage_hit['name']}的{mode}作战中出场。"
             stage_label = stage_hit["name"]
             if stage_hit.get("variants", 1) > 1:
                 stage_label += f"·分支{stage_hit['variant_index']}"
             stage_label += f"·形态{int(stage_enemy.get('level') or 0) + 1}"
-        if elite and stage_data.get("elite_mods"):
-            extra_effects = stage_data.get("elite_mods")
     if difficulty is not None:
         difficulty = max(0, min(difficulty, max_difficulty(grades)))
     # 每层增益折算层号：关卡命中时用该关最深层，否则按 tomimi 惯例第 1 层
@@ -799,13 +807,15 @@ async def _build_rogue_enemy_context(
             {int(f) for f in (stage_data.get("floors") or []) if str(f).isdigit()}
         )
         focus_floor = stage_floors[-1] if stage_floors else 1
-    if stage_hit is not None or difficulty is not None:
+    if stage_enemy is not None:
+        focus = build_stage_enemy_panel(
+            entry, stage_enemy, stage_data, grades, difficulty, elite, focus_floor
+        )
+    elif stage_hit is not None or difficulty is not None:
         focus = build_panel_at(
             entry,
             grades,
             difficulty,
-            base_block=base_block,
-            extra_effects=extra_effects,
             floor=focus_floor,
         )
     panels = (
@@ -821,9 +831,14 @@ async def _build_rogue_enemy_context(
     forms = form_context(entry)
     for i, form in enumerate(forms):
         form["mechanics"] = mechanics[i] if i < len(mechanics) else []
-    # 出没关卡（全期索引，构建失败静默降级为不展示）
-    stage_index = await build_stage_index()
+    # 出没资料是可选增强：按当前期后台构建，不能拖住基础图鉴。
+    stage_index, stage_status = await load_stage_appearances(theme_dir)
     stage_groups = stages_for_enemy(stage_index, enemy_key)
+    stage_note = {
+        "loading": "出没关卡资料加载中，本次先展示敌人资料；稍后再查可补全。",
+        "failed": "出没关卡资料暂时不可用，本次出没信息可能不完整。",
+        "ready": "" if stage_groups else "当前查询范围未查到出没关卡。",
+    }[stage_status]
     # atk_type 值域为英文（melee/ranged/…），且线上数据含 null 项（140 个
     # 敌人），须过滤后再按英文键映射——此前拿中文去 join 英文串是永假死代码，
     # 且 null 直接 join 会抛 TypeError 打断整条命令
@@ -844,6 +859,8 @@ async def _build_rogue_enemy_context(
         "icon": icon,
         "forms": forms,
         "stage_groups": stage_groups,
+        "stage_status": stage_status,
+        "stage_note": stage_note,
         "theme_name": THEME_DIRS.get(theme_dir or "", ""),
         "panels": panels,
         "focus": focus,
@@ -926,7 +943,7 @@ async def _build_rogue_stage_context(
     db = await load_enemy_db()
     if not db:
         return "敌人库不可用（tomimi 数据拉取失败），请稍后再试。"
-    diff_data = await load_difficulty_mods()
+    diff_data = await load_difficulty_mods(theme_dir=stage["theme"])
     grades = diff_data.get(stage["theme"]) or []
     if difficulty is not None:
         if grades:
@@ -1017,7 +1034,10 @@ async def _build_rogue_stage_context(
         "elite_chips": elite_chips,
         "rows": rows,
         "row_count": len(rows),
-        "skipped": len(stage_data.get("enemies") or []) - len(rows),
+        "skipped": sum(
+            1 for item in stage_data.get("enemies") or []
+            if not (db.get(str(item.get("id") or "")) or {}).get("stats")
+        ),
         "floor_note": floor_note,
         "maps": maps,
         "template": "ark_rogue_stage.html",
