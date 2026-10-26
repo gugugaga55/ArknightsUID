@@ -800,7 +800,7 @@ class CommandContextTest(unittest.IsolatedAsyncioTestCase):
         )
         from ArknightsUID.utils.render import ark_templates
 
-        async def fake_diffs():
+        async def fake_diffs(theme_dir=None):
             return {"sarkaz": _sarkaz_diffs()}
 
         async def fake_icon(key: str) -> str:
@@ -809,13 +809,13 @@ class CommandContextTest(unittest.IsolatedAsyncioTestCase):
         async def fake_skills():
             return {"taunt": ["嘲讽等级+<v.value>"]}
 
-        async def fake_stage_index():
+        async def fake_stage_index(theme_dir=None):
             return {
                 "enemy_1_boss": [
                     {"theme": "sarkaz", "code": "ISW-NO", "name": "拆东补西",
                      "floors": "1-2层", "level": 0, "elite": False},
                 ]
-            }
+            }, "ready"
 
         def _patches():
             import contextlib
@@ -831,7 +831,7 @@ class CommandContextTest(unittest.IsolatedAsyncioTestCase):
                  fake_icon),
                 ("ArknightsUID.utils.gamedata.rogue_enemy.load_skill_dict",
                  fake_skills),
-                ("ArknightsUID.utils.gamedata.rogue_enemy.build_stage_index",
+                ("ArknightsUID.utils.gamedata.rogue_enemy.load_stage_appearances",
                  fake_stage_index),
             ):
                 stack.enter_context(
@@ -883,14 +883,14 @@ class CommandContextTest(unittest.IsolatedAsyncioTestCase):
         )
         from ArknightsUID.utils.render import ark_templates
 
-        async def fake_diffs():
+        async def fake_diffs(theme_dir=None):
             return {"sarkaz": _sarkaz_diffs()}
 
         async def fake_skills():
             return {}
 
-        async def fake_stage_index():
-            return {}
+        async def fake_stage_index(theme_dir=None):
+            return {}, "ready"
 
         with (
             mock.patch(
@@ -910,7 +910,7 @@ class CommandContextTest(unittest.IsolatedAsyncioTestCase):
                 new=fake_skills,
             ),
             mock.patch(
-                "ArknightsUID.utils.gamedata.rogue_enemy.build_stage_index",
+                "ArknightsUID.utils.gamedata.rogue_enemy.load_stage_appearances",
                 new=fake_stage_index,
             ),
         ):
@@ -960,7 +960,7 @@ class CommandContextTest(unittest.IsolatedAsyncioTestCase):
         from unittest import mock
 
 
-        async def fake_diffs():
+        async def fake_diffs(theme_dir=None):
             return {"sarkaz": _sarkaz_diffs()}
 
         stage_fixture = {
@@ -997,8 +997,8 @@ class CommandContextTest(unittest.IsolatedAsyncioTestCase):
                 new=mock.AsyncMock(return_value={}),
             ),
             mock.patch(
-                "ArknightsUID.utils.gamedata.rogue_enemy.build_stage_index",
-                new=mock.AsyncMock(return_value={}),
+                "ArknightsUID.utils.gamedata.rogue_enemy.load_stage_appearances",
+                new=mock.AsyncMock(return_value=({}, "ready")),
             ),
             mock.patch(
                 "ArknightsUID.utils.gamedata.rogue_enemy.find_stage",
@@ -1033,7 +1033,7 @@ class CommandContextTest(unittest.IsolatedAsyncioTestCase):
         )
         from ArknightsUID.utils.render import ark_templates
 
-        async def fake_diffs():
+        async def fake_diffs(theme_dir=None):
             return {"sarkaz": _sarkaz_diffs()}
 
         stage_fixture = dict(StagePanelRowTest.STAGE)
@@ -1113,7 +1113,7 @@ class CommandContextTest(unittest.IsolatedAsyncioTestCase):
                         "code": "ISW-NO", "name": "拆东补西"}
             return None
 
-        async def fake_diffs():
+        async def fake_diffs(theme_dir=None):
             return {"sarkaz": _sarkaz_diffs()}
 
         with (

@@ -31,8 +31,12 @@ PRTS_MAP_URL = "https://map.ark-nights.com/?map="
 
 # 单关敌方情报模板最多解析的敌人条目数；超过此值的极少数关卡按上限截断。
 _MAX_ENEMY_FIELDS = 80
-# 缓存过期清理阈值与节流间隔。
-_CACHE_MAX_AGE_SECONDS = 7 * 86400
+# 静态游戏数据页缓存 30 天：干员/敌人/关卡页面文本、基建技能表等内容
+# 不随时间变化（干员数值无后续调整），增量只有新版本内容——新页面靠
+# search（仍 24h）发现，新模组走 gamedata 表（独立 7 天 TTL），互不耦合。
+_STATIC_PAGE_CACHE_SECONDS = 30 * 86400
+# 清理保留期覆盖最长支持 TTL，避免删掉仍有效的静态页缓存。
+_CACHE_MAX_AGE_SECONDS = _STATIC_PAGE_CACHE_SECONDS
 _CACHE_CLEANUP_INTERVAL = 3600
 _last_cleanup_at: float = 0.0
 
@@ -1829,11 +1833,6 @@ _LST_SECTION_RE = re.compile(
 )
 # 日历类查询缓存 1 小时（活动数据按天变化，无需 1 天缓存）
 _CALENDAR_CACHE_SECONDS = 3600
-
-# 静态游戏数据页缓存 30 天：干员/敌人/关卡页面文本、基建技能表等内容
-# 不随时间变化（干员数值无后续调整），增量只有新版本内容——新页面靠
-# search（仍 24h）发现，新模组走 gamedata 表（独立 7 天 TTL），互不耦合。
-_STATIC_PAGE_CACHE_SECONDS = 30 * 86400
 
 
 def _parse_smw_raw_date(raw: str) -> tuple[str, float]:

@@ -15,6 +15,7 @@ from __future__ import annotations
 from ..disk_cache import index_covers_sources, read_json, write_json
 
 import base64
+import asyncio
 import time
 from pathlib import Path
 from typing import Any
@@ -177,6 +178,7 @@ async def relic_icon_b64(icon_id: str) -> str:
     iconId 来自外部表：过 safe_cache_stem 清洗后再拼 URL/路径，防数据源
     污染时的路径逃逸（常规 ascii id 文件名不变，缓存兼容）。
     """
+    from ..image import _path_lock, _read_valid_image_bytes, _save_valid_image_bytes
     from .path_safety import safe_cache_stem
 
     icon_id = (icon_id or "").strip()
@@ -187,30 +189,30 @@ async def relic_icon_b64(icon_id: str) -> str:
     filename = f"{stem}.webp"
     local_path = cache_dir / filename
     miss_path = cache_dir / f"{filename}.miss"
-    try:
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        if miss_path.exists():
-            if time.time() - miss_path.stat().st_mtime < _ICON_MISS_TTL:
-                return ""
-            miss_path.unlink()
-        if not local_path.exists():
-            url = f"{_TOMIMI_STATIC_BASE}/{filename}"
-            # quiet_404：最新期（黑流树海等）图标上游渐进上传，404 是预期
-            # 缺口（debug 级），网络故障仍 warning；均落 .miss 负缓存自愈
-            _status, raw = await download_bytes_status(
-                url, timeout=20.0, quiet_404=True
-            )
-            if raw is None:
-                raise ValueError(f"download failed: {filename}")
-            local_path.write_bytes(raw)
-        data = local_path.read_bytes()
-        if not data:
-            raise ValueError("empty icon file")
-        return f"data:image/webp;base64,{base64.b64encode(data).decode('utf-8')}"
-    except Exception:
-        local_path.unlink(missing_ok=True)
+
+    async with await _path_lock(local_path):
         try:
-            miss_path.write_text("", encoding="utf-8")
-        except OSError:
-            pass
-        return ""
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            if miss_path.exists():
+                if time.time() - miss_path.stat().st_mtime < _ICON_MISS_TTL:
+                    return ""
+                miss_path.unlink()
+            data = await asyncio.to_thread(_read_valid_image_bytes, local_path)
+            if data is None:
+                local_path.unlink(missing_ok=True)
+                url = f"{_TOMIMI_STATIC_BASE}/{filename}"
+                # quiet_404：上游尚未上传该图时静默降级；失败保留 1h 退避。
+                _status, data = await download_bytes_status(
+                    url, timeout=20.0, quiet_404=True
+                )
+                if data is None:
+                    raise ValueError(f"download failed: {filename}")
+                await asyncio.to_thread(_save_valid_image_bytes, local_path, data)
+            return f"data:image/webp;base64,{base64.b64encode(data).decode('utf-8')}"
+        except Exception:
+            local_path.unlink(missing_ok=True)
+            try:
+                miss_path.write_text("", encoding="utf-8")
+            except OSError:
+                pass
+            return ""

@@ -2,6 +2,8 @@
 
 import asyncio
 import base64
+import json
+import time
 from io import BytesIO
 from unittest.mock import AsyncMock
 
@@ -16,6 +18,132 @@ from ArknightsUID.utils.gamedata.path_safety import cache_names_for_url
 from ArknightsUID.utils.prts import client as prts
 from ArknightsUID.utils.resource import RESOURCE_PATH as paths
 from ArknightsUID.utils.resource import bulk_download as bulk
+
+
+@pytest.mark.parametrize("number", sorted(set(enemies._THEME_ROGUE_NUM.values())))
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_stage_data_uses_theme_directory_and_preserves_payload(
+    tmp_path, monkeypatch, number, wrapped
+):
+    level_id = f"level_rogue{number}_6-2"
+    stage = {"enemies": [{"id": "enemy_test"}], "floors": [6]}
+    payload = {"name": {"zh": "测试关卡"}, "data": [stage]} if wrapped else stage
+    fetch = AsyncMock(return_value=payload)
+    monkeypatch.setattr(enemies, "_STAGE_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(enemies, "_fetch_url_json_cached", fetch)
+
+    assert asyncio.run(enemies.load_stage_data(level_id)) == stage
+    fetch.assert_awaited_once_with(
+        f"{enemies._STAGES_BASE}/ro_stage_data/ro{number}/{level_id}.json",
+        tmp_path / f"ro{number}" / f"{level_id}.json",
+    )
+
+
+@pytest.mark.parametrize("level_id", ["level_rogue99_1-1", "legacy_stage_1"])
+def test_unknown_stage_data_keeps_legacy_path(tmp_path, monkeypatch, level_id):
+    fetch = AsyncMock(return_value={})
+    monkeypatch.setattr(enemies, "_STAGE_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(enemies, "_fetch_url_json_cached", fetch)
+
+    assert asyncio.run(enemies.load_stage_data(level_id)) == {}
+    fetch.assert_awaited_once_with(
+        f"{enemies._STAGES_BASE}/ro_stage_data/{level_id}.json",
+        tmp_path / f"{level_id}.json",
+    )
+
+
+def test_stage_data_reuses_existing_cache_without_download(tmp_path, monkeypatch):
+    from ArknightsUID.utils.disk_cache import cache_write
+
+    level_id = "level_rogue6_6-2"
+    stage = {"enemies": [{"id": "enemy_test"}], "floors": [6]}
+    fetch = AsyncMock()
+    monkeypatch.setattr(enemies, "_STAGE_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(enemies, "download_bytes_conditional", fetch)
+
+    async def scenario():
+        await cache_write(tmp_path / f"{level_id}.json", stage)
+        assert await enemies.load_stage_data(level_id) == stage
+
+    asyncio.run(scenario())
+    fetch.assert_not_awaited()
+
+
+def test_old_stage_404_does_not_block_new_theme_source(tmp_path, monkeypatch):
+    level_id = "level_rogue6_6-2"
+    (tmp_path / f"{level_id}.json.miss").write_text("404")
+    stage = {"enemies": [{"id": "enemy_test"}]}
+    fetch = AsyncMock(return_value=(200, json.dumps(stage).encode(), {}))
+    monkeypatch.setattr(enemies, "_STAGE_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(enemies, "download_bytes_conditional", fetch)
+
+    assert asyncio.run(enemies.load_stage_data(level_id)) == stage
+    fetch.assert_awaited_once_with(
+        f"{enemies._STAGES_BASE}/ro_stage_data/ro6/{level_id}.json",
+        timeout=20.0,
+        quiet_404=True,
+    )
+
+
+def test_new_theme_stage_404_is_still_negatively_cached(tmp_path, monkeypatch):
+    fetch = AsyncMock(return_value=(404, None, {}))
+    monkeypatch.setattr(enemies, "_STAGE_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(enemies, "download_bytes_conditional", fetch)
+
+    async def scenario():
+        assert await enemies.load_stage_data("level_rogue6_6-2") == {}
+        assert await enemies.load_stage_data("level_rogue6_6-2") == {}
+
+    asyncio.run(scenario())
+    fetch.assert_awaited_once()
+    assert (tmp_path / "ro6" / "level_rogue6_6-2.json.miss").read_text() == "404"
+
+
+@pytest.mark.parametrize("available", [False, True])
+def test_stale_legacy_stage_rechecks_new_source_and_keeps_fallback(
+    tmp_path, monkeypatch, available
+):
+    level_id = "level_rogue6_6-2"
+    old = {"enemies": [{"id": "enemy_old"}]}
+    new = {"enemies": [{"id": "enemy_new"}]}
+    (tmp_path / f"{level_id}.json").write_text(
+        json.dumps({"_cache_time": time.time() - enemies._DATA_TTL - 1, "payload": old})
+    )
+    # 旧源校验器不得携带到新 URL。
+    (tmp_path / f"{level_id}.json.validators.json").write_text('{"etag":"old"}')
+    fetch = AsyncMock(
+        return_value=(200, json.dumps(new).encode(), {})
+        if available
+        else (503, None, {})
+    )
+    monkeypatch.setattr(enemies, "_STAGE_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(enemies, "download_bytes_conditional", fetch)
+
+    assert asyncio.run(enemies.load_stage_data(level_id)) == (new if available else old)
+    fetch.assert_awaited_once_with(
+        f"{enemies._STAGES_BASE}/ro_stage_data/ro6/{level_id}.json",
+        timeout=20.0,
+        quiet_404=True,
+    )
+
+
+def test_new_stage_cache_takes_priority_over_fresh_legacy(tmp_path, monkeypatch):
+    from ArknightsUID.utils.disk_cache import cache_write
+
+    level_id = "level_rogue6_6-2"
+    old = {"enemies": [{"id": "enemy_old"}]}
+    new = {"enemies": [{"id": "enemy_new"}]}
+    fetch = AsyncMock()
+    monkeypatch.setattr(enemies, "_STAGE_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(enemies, "download_bytes_conditional", fetch)
+
+    async def scenario():
+        await cache_write(tmp_path / f"{level_id}.json", old)
+        await cache_write(tmp_path / "ro6" / f"{level_id}.json", new)
+        assert await enemies.load_stage_data(level_id) == new
+
+    asyncio.run(scenario())
+    fetch.assert_not_awaited()
 
 
 def png(color):
