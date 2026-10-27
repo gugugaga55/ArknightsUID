@@ -7,7 +7,8 @@ token_by_phone_code 换 token → 走与扫码相同的 OAuth 链换 cred →
 persist_ark_login 落库。手机号与验证码只进网页表单，不经过聊天记录。
 
 与 EndUID 的差异（对齐本插件口径）：
-- 会话为内存 TTL 存储，不持久化：3 分钟窗口内 core 重启仅使链接失效；
+- 会话持久化到 SQLite，固定 3 分钟有效；进程间原子认领请求，重启可恢复；
+- 已进入账号保存的中断会话不自动重放，请求者需重新发起登录；
 - 群聊使用与扫码共用 AllowGroupScanLogin 开关（登录链接与二维码同属
   "谁完成登录就把谁的账号绑到发起人名下"的免密向量，默认私聊）；
 - 登录成功回执由网页路由经 gss 主动推送（不依赖命令侧轮询协程存活），
@@ -18,9 +19,9 @@ from __future__ import annotations
 
 import asyncio
 import secrets
-import time
 from typing import Any
-from collections.abc import Callable
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager, suppress
 
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -31,6 +32,20 @@ from gsuid_core.models import Event
 from gsuid_core.web_app import app
 
 from ..utils.config import ArkConfig
+from ..utils.crypto import EncryptionUnavailableError
+from ..utils.path import MAIN_PATH
+from ..utils.skland.web_sessions import (
+    EXPIRED,
+    LOGIN_MAX_ATTEMPTS as LOGIN_MAX_ATTEMPTS,
+    SEND_COOLDOWN as SEND_COOLDOWN,
+    SEND_MAX as SEND_MAX,
+    SESSION_MAX as SESSION_MAX,
+    SESSION_TTL,
+    SessionClaim,
+    SessionRejected,
+    SessionUnavailable,
+    WebSessionStore,
+)
 from ..utils.render import ark_templates
 from ..utils.skland import auth as ark_auth
 from ..utils.skland import store as ark_store
@@ -38,79 +53,46 @@ from ._format import format_bind_success
 
 LOGIN_FLOW = "ark_phone"
 
-# 会话参数：链接 3 分钟有效（与页面提示一致）；同用户发起新登录会作废旧会话
-SESSION_TTL = 180.0
-SESSION_MAX = 20
-# 短信验证码：60 秒重发冷却，单会话最多 5 次（鹰角侧另有频控，这是本地兜底）
-SEND_COOLDOWN = 60
-SEND_MAX = 5
-# 验证码提交尝试上限（错码重试计入），超限作废会话防爆破
-LOGIN_MAX_ATTEMPTS = 5
-# 命令侧轮询节奏（测试可 patch 加速）
+# 命令侧仅轮询回执；所有状态/次数/租约由 SQLite 模块原子处理。
 POLL_INTERVAL = 1.0
-POLL_DEADLINE = 180.0
+POLL_DEADLINE = SESSION_TTL
+store = WebSessionStore(MAIN_PATH / "web_login_sessions.sqlite3")
 
 
-class _SessionStore:
-    """内存 TTL 会话表：懒过期 + 容量淘汰 + 按条件批量删除。
-
-    单线程事件循环内使用，无锁；clock 可注入便于测试。
-    """
-
-    def __init__(
-        self,
-        ttl: float = SESSION_TTL,
-        maxsize: int = SESSION_MAX,
-        clock: Callable[[], float] = time.monotonic,
-    ) -> None:
-        self._ttl = ttl
-        self._maxsize = maxsize
-        self._clock = clock
-        self._data: dict[str, tuple[float, dict]] = {}
-
-    def set(self, token: str, state: dict) -> None:
-        self._data[token] = (self._clock(), state)
-        # 先清过期，仍超容量则按插入序淘汰最旧存活会话
-        if len(self._data) > self._maxsize:
-            self._sweep()
-        if len(self._data) > self._maxsize:
-            oldest = min(self._data, key=lambda key: self._data[key][0])
-            del self._data[oldest]
-
-    def get(self, token: str) -> dict | None:
-        entry = self._data.get(token)
-        if entry is None:
-            return None
-        created, state = entry
-        if self._clock() - created > self._ttl:
-            del self._data[token]
-            return None
-        return state
-
-    def delete(self, token: str) -> None:
-        self._data.pop(token, None)
-
-    def delete_where(self, predicate: Callable[[dict], bool]) -> int:
-        removed = [
-            token
-            for token, (_, state) in self._data.items()
-            if predicate(state)
-        ]
-        for token in removed:
-            del self._data[token]
-        return len(removed)
-
-    def _sweep(self) -> None:
-        now = self._clock()
-        for token in [
-            token
-            for token, (created, _) in self._data.items()
-            if now - created > self._ttl
-        ]:
-            del self._data[token]
+def _session_failure(exc: Exception) -> dict[str, Any]:
+    logger.warning(f"[ArknightsUID·网页登录] 会话操作失败: {exc.__class__.__name__}")
+    return {"success": False, "msg": "登录会话暂不可用，请稍后重新发起登录。"}
 
 
-store = _SessionStore()
+async def _heartbeat(backend: WebSessionStore, claim: SessionClaim) -> None:
+    try:
+        while True:
+            await asyncio.sleep(max(0.01, backend.lease_seconds / 3))
+            if not await asyncio.to_thread(backend.renew, claim):
+                return
+    except (SessionUnavailable, EncryptionUnavailableError) as exc:
+        _session_failure(exc)
+
+
+@asynccontextmanager
+async def _claim_session(
+    auth: str, operation: str
+) -> AsyncIterator[tuple[WebSessionStore, SessionClaim]]:
+    backend = store
+    claim = await asyncio.to_thread(backend.claim, auth, operation)
+    heartbeat = asyncio.create_task(_heartbeat(backend, claim))
+    try:
+        yield backend, claim
+    finally:
+        heartbeat.cancel()
+        with suppress(asyncio.CancelledError):
+            await heartbeat
+        # done/failed 已清除 claim；只有未完成步骤需要释放。finalizing 只会
+        # 转为 failed，绝不允许同一链接自动重复进行可能已经提交的账号写入。
+        try:
+            await asyncio.shield(asyncio.to_thread(backend.release, claim))
+        except (SessionUnavailable, EncryptionUnavailableError) as exc:
+            _session_failure(exc)
 
 
 def get_token() -> str:
@@ -151,9 +133,7 @@ async def web_login_entry(bot: Bot, ev: Event) -> None:
 
         return await scan_login(bot, ev)
 
-    if ev.group_id and not bool(
-        ArkConfig.get_config("AllowGroupScanLogin").data
-    ):
+    if ev.group_id and not bool(ArkConfig.get_config("AllowGroupScanLogin").data):
         return await _send_text(
             bot,
             ev,
@@ -162,23 +142,21 @@ async def web_login_entry(bot: Bot, ev: Event) -> None:
             "后群内使用，或留空 ArkLoginUrl 回退为扫码登录。",
         )
 
-    # 同一新登录使旧链接失效：链接是"绑定到发起人"的入口，不允许并存
-    store.delete_where(
-        lambda state: state.get("flow") == LOGIN_FLOW
-        and state.get("user_id") == ev.user_id
-    )
     token = get_token()
-    store.set(
-        token,
-        {
-            "flow": LOGIN_FLOW,
-            "phase": "init",
-            "user_id": ev.user_id,
-            "bot_id": ev.bot_id,
-            "bot_self_id": getattr(ev, "bot_self_id", "") or "",
-            "group_id": ev.group_id,
-        },
-    )
+    try:
+        await asyncio.to_thread(
+            store.create,
+            token,
+            {
+                "flow": LOGIN_FLOW,
+                "user_id": ev.user_id,
+                "bot_id": ev.bot_id,
+                "bot_self_id": getattr(ev, "bot_self_id", "") or "",
+                "group_id": ev.group_id,
+            },
+        )
+    except (SessionUnavailable, EncryptionUnavailableError) as exc:
+        return await _send_text(bot, ev, _session_failure(exc)["msg"])
 
     notice = f"{_GROUP_LINK_NOTICE}\n" if ev.group_id else ""
     await _send_text(
@@ -200,15 +178,18 @@ async def _await_completion(bot: Bot, ev: Event, token: str) -> None:
     deadline = asyncio.get_running_loop().time() + POLL_DEADLINE
     while asyncio.get_running_loop().time() < deadline:
         await asyncio.sleep(POLL_INTERVAL)
-        state = store.get(token)
+        try:
+            state = await asyncio.to_thread(store.get, token)
+        except (SessionUnavailable, EncryptionUnavailableError) as exc:
+            return await _send_text(bot, ev, _session_failure(exc)["msg"])
         if state is None or state.get("flow") != LOGIN_FLOW:
             return
         phase = state.get("phase")
         if phase == "done":
-            store.delete(token)
+            await asyncio.to_thread(store.delete, token)
             return
         if phase == "failed":
-            store.delete(token)
+            await asyncio.to_thread(store.delete, token)
             return await _send_text(
                 bot, ev, f"网页登录失败：{state.get('error_msg') or '未知原因'}"
             )
@@ -246,6 +227,7 @@ async def _push_text(state: dict, text: str) -> None:
 async def _notify_success(state: dict, roles: list[dict]) -> None:
     await _push_text(state, format_bind_success(roles))
 
+
 class SendCodeRequest(BaseModel):
     auth: str
     phone: str
@@ -257,9 +239,9 @@ class LoginRequest(BaseModel):
     code: str
 
 
-def _live_session(auth: str) -> dict | None:
-    """取处于 init 阶段的会话；不存在/已终态（done/failed）返回 None。"""
-    state = store.get(auth)
+async def _live_session(auth: str) -> dict | None:
+    """只向浏览器展示仍可提交的会话；原子认领检查由后端再次执行。"""
+    state = await asyncio.to_thread(store.get, auth)
     if (
         isinstance(state, dict)
         and state.get("flow") == LOGIN_FLOW
@@ -269,16 +251,20 @@ def _live_session(auth: str) -> dict | None:
     return None
 
 
-def _render_page(auth: str = "", user_id: str = "", expired: bool = False) -> HTMLResponse:
+def _render_page(
+    auth: str = "", user_id: str = "", expired: bool = False
+) -> HTMLResponse:
     template = ark_templates.get_template("ark_web_login.html")
-    return HTMLResponse(
-        template.render(auth=auth, user_id=user_id, expired=expired)
-    )
+    return HTMLResponse(template.render(auth=auth, user_id=user_id, expired=expired))
 
 
 @app.get("/ark/i/{auth}")
 async def ark_login_index(auth: str):
-    state = _live_session(auth)
+    try:
+        state = await _live_session(auth)
+    except (SessionUnavailable, EncryptionUnavailableError) as exc:
+        _session_failure(exc)
+        state = None
     if state is None:
         return _render_page(expired=True)
     return _render_page(auth=auth, user_id=str(state.get("user_id", "")))
@@ -286,78 +272,83 @@ async def ark_login_index(auth: str):
 
 @app.post("/ark/sendCode")
 async def ark_login_send_code(data: SendCodeRequest):
-    state = _live_session(data.auth)
-    if state is None:
-        return {"success": False, "msg": "登录会话已超时或已结束，请重新发起命令"}
     if not ark_auth.is_valid_phone(data.phone):
         return {"success": False, "msg": "手机号格式错误"}
+    try:
+        async with _claim_session(data.auth, "sending"):
+            # 在请求之前预留次数和冷却；超时也可能已经发送，不退回配额。
+            ok, msg = await ark_auth.send_phone_code(data.phone)
+            return (
+                {"success": True}
+                if ok
+                else {"success": False, "msg": msg or "验证码发送失败"}
+            )
+    except SessionRejected as exc:
+        return {"success": False, "msg": str(exc)}
+    except (SessionUnavailable, EncryptionUnavailableError) as exc:
+        return _session_failure(exc)
+    except Exception as exc:
+        logger.warning(
+            f"[ArknightsUID·网页登录] 验证码请求异常: {exc.__class__.__name__}"
+        )
+        return {"success": False, "msg": "验证码发送失败，请稍后重试。"}
 
-    now = time.monotonic()
-    wait = SEND_COOLDOWN - int(now - state.get("last_send_ts", 0.0))
-    if wait > 0:
-        return {"success": False, "msg": f"请 {wait} 秒后再获取验证码"}
-    if state.get("send_count", 0) >= SEND_MAX:
-        return {"success": False, "msg": "获取验证码次数过多，请重新发起登录"}
 
-    ok, msg = await ark_auth.send_phone_code(data.phone)
-    if not ok:
-        return {"success": False, "msg": msg or "验证码发送失败"}
-
-    state["last_send_ts"] = now
-    state["send_count"] = state.get("send_count", 0) + 1
-    store.set(data.auth, state)
-    return {"success": True}
-
-
-def _fail(state: dict, auth: str, err: str) -> dict[str, Any]:
-    state["phase"] = "failed"
-    state["error_msg"] = err
-    store.set(auth, state)
+async def _fail(
+    backend: WebSessionStore, claim: SessionClaim, err: str
+) -> dict[str, Any]:
+    await asyncio.to_thread(backend.complete, claim, error=err)
     return {"success": False, "msg": err}
 
 
 @app.post("/ark/login")
 async def ark_login_submit(data: LoginRequest):
-    state = _live_session(data.auth)
-    if state is None:
-        return {"success": False, "msg": "登录会话已超时或已结束，请重新发起命令"}
     if not ark_auth.is_valid_phone(data.phone) or not data.code.strip().isdigit():
         return {"success": False, "msg": "手机号或验证码格式错误"}
-    if state.get("attempts", 0) >= LOGIN_MAX_ATTEMPTS:
-        return _fail(state, data.auth, "验证码尝试次数过多，请重新发起登录")
-
-    state["attempts"] = state.get("attempts", 0) + 1
-    store.set(data.auth, state)
-
-    token, token_msg = await ark_auth.get_token_by_phone_code(
-        data.phone, data.code.strip()
-    )
-    if not token:
-        # 错码可重试：只记账不作废会话
-        return {"success": False, "msg": token_msg or "验证码错误或已过期"}
-
-    cred_info, err = await ark_auth.get_cred_by_token(token)
-    if err == ark_auth.CRED_ERR_UNAVAILABLE:
-        return _fail(
-            state,
-            data.auth,
-            "当前服务暂时无法完成网页登录，请改用 ark扫码登录 或私聊 ark绑定 <cred>。",
+    try:
+        async with _claim_session(data.auth, "checking") as (backend, claim):
+            token, token_msg = await ark_auth.get_token_by_phone_code(
+                data.phone, data.code.strip()
+            )
+            if not token:
+                # 错码释放认领回 init，但次数保留，且不延长链接有效期。
+                return {"success": False, "msg": token_msg or "验证码错误或已过期"}
+            cred_info, err = await ark_auth.get_cred_by_token(token)
+            if err == ark_auth.CRED_ERR_UNAVAILABLE:
+                return await _fail(
+                    backend,
+                    claim,
+                    "当前服务暂时无法完成网页登录，请改用 ark扫码登录 或私聊 ark绑定 <cred>。",
+                )
+            if not cred_info or not cred_info.get("cred"):
+                return await _fail(backend, claim, "获取 cred 失败，请重试")
+            # 新链接顶替、TTL 到期或租约被另一进程接管后，旧请求不能开始保存。
+            if not await asyncio.to_thread(backend.begin_finalization, claim):
+                return {"success": False, "msg": EXPIRED}
+            state = claim.state
+            roles, err = await ark_store.persist_ark_login(
+                state.get("user_id"),
+                state.get("bot_id"),
+                state.get("group_id"),
+                cred_info["cred"],
+                hg_token=token,
+                skland_user_id=cred_info.get("skland_user_id", ""),
+            )
+            if err:
+                return await _fail(backend, claim, err)
+            if not await asyncio.to_thread(backend.complete, claim):
+                return {
+                    "success": False,
+                    "msg": "登录会话已结束，账号保存可能已完成，请先查看绑定；需要时重新发起登录。",
+                }
+            asyncio.create_task(_notify_success(state, roles or []))
+            return {"success": True}
+    except SessionRejected as exc:
+        return {"success": False, "msg": str(exc)}
+    except (SessionUnavailable, EncryptionUnavailableError) as exc:
+        return _session_failure(exc)
+    except Exception as exc:
+        logger.warning(
+            f"[ArknightsUID·网页登录] 登录请求异常: {exc.__class__.__name__}"
         )
-    if not cred_info or not cred_info.get("cred"):
-        return _fail(state, data.auth, "获取 cred 失败，请重试")
-
-    roles, err = await ark_store.persist_ark_login(
-        state.get("user_id"),
-        state.get("bot_id"),
-        state.get("group_id"),
-        cred_info["cred"],
-        hg_token=token,
-        skland_user_id=cred_info.get("skland_user_id", ""),
-    )
-    if err:
-        return _fail(state, data.auth, err)
-
-    asyncio.create_task(_notify_success(state, roles or []))
-    state["phase"] = "done"
-    store.set(data.auth, state)
-    return {"success": True}
+        return {"success": False, "msg": "登录处理已中断，请重新发起登录。"}

@@ -32,6 +32,7 @@ class ArkCredential:
     skland_user_id: str
     # 森空岛账号 uid（抽卡 OAuth 链 u8_token_by_uid 用，非游戏内 UID）
     record_id: str = ""
+    source: str = "local"
 
     @property
     def usable(self) -> bool:
@@ -114,18 +115,26 @@ def _exception_type(exc: Exception) -> str:
 
 
 def _import_first(module_names: tuple[str, ...]) -> ModuleType | None:
+    unavailable = False
     for module_name in module_names:
         try:
             return import_module(module_name)
         except ModuleNotFoundError as exc:
+            if exc.name and not (
+                module_name == exc.name or module_name.startswith(exc.name + ".")
+            ):
+                unavailable = True
             logger.debug(
                 f"[ArknightsUID] 可选模块未找到: {module_name} ({_exception_type(exc)})"
             )
         except Exception as exc:
+            unavailable = True
             logger.warning(
                 "[ArknightsUID] 导入可选模块失败: "
                 f"{module_name}: {_exception_type(exc)}"
             )
+    if unavailable:
+        raise RuntimeError("optional account source unavailable")
     return None
 
 
@@ -139,88 +148,116 @@ def _enduid_models() -> ModuleType | None:
     )
 
 
-async def resolve_accounts(user_id: str, bot_id: str) -> AccountResolveResult:
-    # 自有 ArkUser/ArkBind 优先（脱离 EndUID 硬依赖）
-    local_users = await ark_store.list_local_accounts(user_id, bot_id)
-    if local_users:
-        uids: list[str] = []
-        accounts: list[ArkCredential] = []
-        seen: set[str] = set()
-        for row in local_users:
-            uid = (getattr(row, "uid", "") or "").strip()
-            if uid and uid not in uids:
-                uids.append(uid)
-            if not uid or uid in seen:
-                continue
-            seen.add(uid)
-            accounts.append(
-                ArkCredential(
-                    uid=uid,
-                    nickname=getattr(row, "nickname", "") or "",
-                    server_id=getattr(row, "server_id", "") or "1",
-                    cookie_status=getattr(row, "cookie_status", "") or "",
-                    # cookie/token/hg_token 密文落库（enc:v1:），读取时解密；
-                    # EndUID 回退行是明文，decrypt_secret 对无前缀值原样透传
-                    cred=decrypt_secret(getattr(row, "cookie", "") or ""),
-                    token=decrypt_secret(getattr(row, "token", None) or ""),
-                    hg_token=decrypt_secret(getattr(row, "hg_token", "") or ""),
-                    skland_user_id=getattr(row, "skland_user_id", "") or "",
-                    record_id=str(getattr(row, "record_id", "") or ""),
-                )
-            )
-        if accounts:
-            return AccountResolveResult(True, "", uids, accounts)
+def _credential_from_row(row: Any, source: str) -> ArkCredential:
+    return ArkCredential(
+        uid=_as_text(getattr(row, "uid", "")).strip(),
+        nickname=_as_text(getattr(row, "nickname", "")),
+        server_id=_as_text(getattr(row, "server_id", "")) or "1",
+        cookie_status=_as_text(getattr(row, "cookie_status", "")),
+        cred=decrypt_secret(_as_text(getattr(row, "cookie", ""))),
+        token=decrypt_secret(_as_text(getattr(row, "token", ""))),
+        hg_token=decrypt_secret(_as_text(getattr(row, "hg_token", ""))),
+        skland_user_id=_as_text(getattr(row, "skland_user_id", "")),
+        record_id=_as_text(getattr(row, "record_id", "")), source=source,
+    )
 
-    # EndUID 回退
+
+async def _read_enduid_rows(models, user_id: str, bot_id: str):
+    """直接读同一 core ORM，会话错误上抛；不记录包含凭据的行 repr。"""
+    from sqlmodel import select
+    from gsuid_core.utils.database import base_models
+
+    async with base_models.async_maker() as session:
+        bound = await session.execute(select(models.EndBind).where(
+            models.EndBind.user_id == user_id, models.EndBind.bot_id == bot_id,
+        ))
+        users = await session.execute(select(models.EndUser).where(
+            models.EndUser.user_id == user_id, models.EndUser.bot_id == bot_id,
+            models.EndUser.game_id == ARKNIGHTS_GAME_ID,
+        ))
+        return bound.scalars().first(), list(users.scalars().all())
+
+
+async def resolve_enduid_accounts(user_id: str, bot_id: str) -> AccountResolveResult:
+    """读取 EndUID 当前同身份的方舟账号；只读，不依赖其请求客户端。
+
+    缺少可选插件与读取失败不同：后者抛出，删除全部时必须中止操作。
+    """
     models = _enduid_models()
     if models is None:
         return AccountResolveResult(False, ENDUID_MISSING_HINT, [], [])
-
-    EndBind = models.EndBind
-    EndUser = models.EndUser
-
-    bind = await EndBind.get_data_by_user_id(user_id, bot_id)
-    uids: list[str] = []
-    if bind is not None:
-        uids = _split_uid_list(getattr(bind, "ark_uid", ""))
-
-    users = await EndUser.select_data_list(user_id=user_id, bot_id=bot_id) or []
+    bind, users = await _read_enduid_rows(models, user_id, bot_id)
+    uids = _split_uid_list(getattr(bind, "ark_uid", "")) if bind else []
     accounts: list[ArkCredential] = []
-    seen_accounts: set[str] = set()
-    for user in users:
-        if _as_game_id(getattr(user, "game_id", None)) != ARKNIGHTS_GAME_ID:
+    seen: set[str] = set()
+    for row in users:
+        if _as_game_id(getattr(row, "game_id", None)) != ARKNIGHTS_GAME_ID:
             continue
-        uid = _as_text(getattr(user, "uid", "")).strip()
-        if uid and uid not in uids:
-            uids.append(uid)
-        if not uid or uid in seen_accounts:
+        # ORM 查询已带身份过滤；额外防止旧适配器返回其他身份的数据。
+        if (str(getattr(row, "user_id", user_id)) != str(user_id)
+                or str(getattr(row, "bot_id", bot_id)) != str(bot_id)):
             continue
-        seen_accounts.add(uid)
-        accounts.append(
-            ArkCredential(
-                uid=uid,
-                nickname=_as_text(getattr(user, "nickname", "")),
-                server_id=_as_text(getattr(user, "server_id", "")) or "1",
-                cookie_status=_as_text(getattr(user, "cookie_status", "")),
-                cred=decrypt_secret(_as_text(getattr(user, "cookie", ""))),
-                token=decrypt_secret(_as_text(getattr(user, "token", ""))),
-                hg_token=decrypt_secret(_as_text(getattr(user, "hg_token", ""))),
-                skland_user_id=_as_text(getattr(user, "skland_user_id", "")),
-                record_id=_as_text(getattr(user, "record_id", "")),
-            )
-        )
-
-    if not uids and not accounts:
-        return AccountResolveResult(
-            True,
-            "未找到 EndUID 记录的明日方舟账号，请先使用 EndUID 登录森空岛。",
-            [],
-            [],
-        )
-
+        account = _credential_from_row(row, "enduid")
+        if not account.uid or account.uid in seen:
+            continue
+        seen.add(account.uid)
+        accounts.append(account)
+        if account.uid not in uids:
+            uids.append(account.uid)
     order = {uid: index for index, uid in enumerate(uids)}
     accounts.sort(key=lambda item: order.get(item.uid, len(order)))
-    return AccountResolveResult(True, "", uids, accounts)
+    reason = "" if uids else "未找到明日方舟账号，请使用 ark绑定 登录。"
+    return AccountResolveResult(True, reason, uids, accounts)
+
+
+async def resolve_accounts(user_id: str, bot_id: str) -> AccountResolveResult:
+    """本地列表优先；仅缺失/已确认无效凭据可复用同 UID 的 EndUID 行。"""
+    try:
+        local_users = await ark_store.list_local_accounts(user_id, bot_id)
+    except Exception:
+        return AccountResolveResult(False, "读取本地账号来源失败，请稍后重试。", [], [])
+    accounts: list[ArkCredential] = []
+    seen: set[str] = set()
+    for row in local_users:
+        account = _credential_from_row(row, "local")
+        if account.uid and account.uid not in seen:
+            accounts.append(account)
+            seen.add(account.uid)
+    if accounts and all(account.usable for account in accounts):
+        return AccountResolveResult(True, "", [a.uid for a in accounts], accounts)
+
+    try:
+        blocked = await ark_store.disabled_account_uids(user_id, bot_id)
+        external = await resolve_enduid_accounts(user_id, bot_id)
+    except Exception as exc:
+        logger.warning(
+            "[ArknightsUID] 读取账号来源失败: " + _exception_type(exc)
+        )
+        if accounts:
+            return AccountResolveResult(
+                True, "读取 EndUID 账号来源失败，请稍后重试。",
+                [a.uid for a in accounts], accounts,
+            )
+        return AccountResolveResult(False, "读取账号来源失败，请稍后重试。", [], [])
+
+    if accounts:
+        replacements = {a.uid: a for a in external.accounts if a.usable}
+        accounts = [
+            replacements.get(a.uid, a) if not a.usable and a.uid not in blocked else a
+            for a in accounts
+        ]
+        return AccountResolveResult(True, "", [a.uid for a in accounts], accounts)
+    external.uids = [uid for uid in external.uids if uid not in blocked]
+    external.accounts = [a for a in external.accounts if a.uid not in blocked]
+    if blocked and not external.uids and not external.accounts:
+        external.installed = True
+        external.reason = "本插件的登录已解除，请重新 ark绑定 登录以恢复。"
+    return external
+
+
+def _unusable_hint(account: ArkCredential) -> str:
+    source = "EndUID 复用" if account.source == "enduid" else "本地"
+    return f"该账号的{source}凭据为空或已失效，请重新 ark绑定 登录。"
 
 
 async def resolve_credential(
@@ -235,7 +272,7 @@ async def resolve_credential(
     if not result.accounts:
         if result.uids:
             shown = "、".join(hide_uid(item) for item in result.uids)
-            return f"已找到明日方舟 UID：{shown}，但没有找到对应的 EndUID 凭据记录，请重新使用 EndUID 登录。"
+            return f"已找到明日方舟 UID：{shown}，但没有找到可用凭据，请重新 ark绑定 登录。"
         return result.reason
 
     if index > 0:
@@ -244,14 +281,14 @@ async def resolve_credential(
         account = result.accounts[index - 1]
         if account.usable:
             return account
-        return "该账号的 EndUID 凭据为空或已失效，请重新使用 EndUID 登录。"
+        return result.reason or _unusable_hint(account)
 
     if uid:
         for account in result.accounts:
             if account.uid == uid:
                 if account.usable:
                     return account
-                return "该账号的 EndUID 凭据为空或已失效，请重新使用 EndUID 登录。"
+                return result.reason or _unusable_hint(account)
         return f"未找到 UID {hide_uid(uid)} 的可用凭据。"
 
     # ark切换 设置的用户级默认账号（未显式指定 uid/序号时生效）
@@ -267,16 +304,13 @@ async def resolve_credential(
                     "默认账号的凭据为空或已失效，"
                     "请重新 ark绑定 登录，或用 ark切换 换一个账号。"
                 )
-        # 默认指向的账号已不存在（删除登录等）：落回第一个可用账号
-        logger.info(
-            f"[ArknightsUID] 默认账号 {hide_uid(default_uid)} 不存在，回退首个可用账号"
-        )
+        return "默认账号已不可用，请使用 ark切换 选择账号，或重新 ark绑定 登录。"
 
     for account in result.accounts:
         if account.usable:
             return account
 
-    return "已找到明日方舟账号，但 EndUID 凭据为空或已失效，请重新使用 EndUID 登录。"
+    return "已找到明日方舟账号，但凭据为空或已失效，请重新 ark绑定 登录。"
 
 
 async def fetch_player_info(credential: ArkCredential) -> dict[str, Any] | str:

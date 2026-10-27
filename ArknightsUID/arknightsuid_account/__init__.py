@@ -143,9 +143,10 @@ def _format_accounts(
         for index, account in enumerate(accounts, start=1):
             nickname = account.nickname if account.nickname else "未记录昵称"
             status = "可用" if account.usable else "凭据失效/缺失"
+            source = "EndUID 复用" if getattr(account, "source", "local") == "enduid" else "本地登录"
             mark = " ★默认" if account.uid == default_uid else ""
             lines.append(
-                f"{index}. {nickname} | UID {_shown(account.uid)} | {status}{mark}"
+                f"{index}. {nickname} | UID {_shown(account.uid)} | {source} | {status}{mark}"
             )
         lines.append("多账号查询：ark理智 序号 / ark理智 UID；ark切换 序号 设默认。")
     elif uids:
@@ -328,6 +329,7 @@ async def show_ark_accounts(bot: Bot, ev: Event) -> None:
                 "nickname": account.nickname if account.nickname else "未记录昵称",
                 "uid": shown_uids.get(account.uid, hide_uid(account.uid)),
                 "usable": bool(account.usable),
+                "source": "EndUID 复用" if getattr(account, "source", "local") == "enduid" else "本地登录",
                 "is_default": account.uid == default_uid,
             }
             for index, account in enumerate(result.accounts, start=1)

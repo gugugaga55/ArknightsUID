@@ -30,7 +30,7 @@
         <div class="rows" style="margin-top: var(--space-5);">
             {% for a in accounts %}
             <div class="row">
-                <span class="row-value" style="font-size: 13px;"><span class="idx idx--ghost" style="margin-right: var(--space-2);">{{ "%02d" | format(a.index) }}</span>{{ a.nickname }}<span class="u-mute mono" style="font-size: 10px; font-weight: 400; margin-left: 8px;">UID {{ a.uid }}</span></span>
+                <span class="row-value" style="font-size: 13px;"><span class="idx idx--ghost" style="margin-right: var(--space-2);">{{ "%02d" | format(a.index) }}</span>{{ a.nickname }}<span class="u-mute mono" style="font-size: 10px; font-weight: 400; margin-left: 8px;">UID {{ a.uid }} · {{ a.source | default("本地登录") }}</span></span>
                 {% if a.is_default %}<span class="chip chip--yellow">默认</span>{% endif %}
                 {% if a.usable %}<span class="chip">可用</span>{% else %}<span class="chip chip--ink">凭据失效</span>{% endif %}
             </div>

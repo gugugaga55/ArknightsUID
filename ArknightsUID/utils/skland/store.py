@@ -12,14 +12,30 @@ from typing import Any
 from gsuid_core.logger import logger
 
 from ..crypto import EncryptionUnavailableError, encrypt_secret
-from ..database.models import ArkBind, ArkUser
+from ..database.models import ArkBind as ArkBind, ArkUser
 from .auth import list_ark_roles_by_cred
 
 
 async def list_local_accounts(user_id: str, bot_id: str) -> list[ArkUser]:
     """读取该用户在自有表里的全部明日方舟（game_id==1）账号。"""
-    users = await ArkUser.select_data_list(user_id=user_id, bot_id=bot_id) or []
-    return [u for u in users if (u.game_id or 1) == 1]
+    users = await ArkUser.account_rows(user_id=user_id, bot_id=bot_id)
+    if users is None:
+        raise RuntimeError("local account source unavailable")
+    return [
+        u for u in users
+        if (u.game_id or 1) == 1 and not getattr(u, "login_disabled", False)
+    ]
+
+
+async def disabled_account_uids(user_id: str, bot_id: str) -> set[str]:
+    """读取失败不可放开 EndUID 回退。"""
+    users = await ArkUser.account_rows(user_id=user_id, bot_id=bot_id)
+    if users is None:
+        raise RuntimeError("account source state unavailable")
+    return {
+        str(row.uid) for row in users
+        if (row.game_id or 1) == 1 and getattr(row, "login_disabled", False)
+    }
 
 
 # ArkBind.insert_uid 是"查列表 → 拼接 → 整行覆盖"的非原子读改写：
@@ -85,59 +101,57 @@ async def persist_ark_login(
         )
 
     async with await _bind_write_lock(bot_id, user_id):
-        for role in valid_roles:
-            # 按 (user_id, bot_id, uid) upsert：只更新当前账号行。
-            # 不能用基类 insert_data——它的 update 分支只按 (user_id, bot_id)
-            # 更新，会把该用户全部账号行改写成当前 uid（多账号凭据互相覆盖）。
-            # cred / hg_token 是长期凭据，落库前加密（见 utils/crypto）。
-            saved = await ArkUser.upsert_by_uid(
-                user_id=user_id,
-                bot_id=bot_id,
-                uid=role["role_id"],
-                nickname=role["nickname"],
-                cookie=enc_cred,
-                hg_token=enc_hg_token,
-                skland_user_id=skland_user_id,
-                record_id=role["record_uid"],
-                server_id=role["server_id"],
-                game_id=1,
-                cookie_status="",
-                platform="3",
-            )
-            if not saved:
-                logger.warning(
-                    f"[ArknightsUID·绑定] 账号 {role['role_id']} 写入未确认，"
-                    "中止本轮保存（已写入的 role 保留，凭据未落库的账号请重试登录）"
-                )
-                return None, "登录信息保存失败（数据库写入异常），请稍后重试。"
-            # insert_uid 自动去重（多 uid 用 _ 拼接），重复绑返回 -2 无害；
-            # 与并发登录/退订互斥，防整行覆盖丢 uid
-            await ArkBind.insert_uid(
-                user_id, bot_id, role["role_id"], group_id=group_id
-            )
+        saved = await ArkUser.save_login_roles(
+            user_id=user_id, bot_id=bot_id, group_id=group_id,
+            roles=valid_roles, cookie=enc_cred, hg_token=enc_hg_token,
+            skland_user_id=skland_user_id,
+        )
+        if not saved:
+            return None, "登录信息保存失败（数据库写入异常），请稍后重试。"
     logger.info(
         f"[ArknightsUID·绑定] 用户 {user_id} 写入 {len(valid_roles)} 个方舟角色"
     )
     return valid_roles, None
 
 
-async def remove_ark_login(user_id: str, bot_id: str, uid: str = "") -> int:
-    """删除自有登录；确认账号删除成功后再清绑定，同用户登录/解绑互斥。"""
+async def remove_ark_login(user_id: str, bot_id: str, uid: str = "") -> int | None:
+    """解除本插件登录；不删除 EndUID 原记录。None 表示读取/写入失败。"""
+    from ..enduid.adapter import resolve_accounts, resolve_enduid_accounts
+
     async with await _bind_write_lock(bot_id, user_id):
-        uids = [uid] if uid else [
-            user.uid for user in await list_local_accounts(user_id, bot_id) if user.uid
-        ]
         if uid:
-            deleted = await ArkUser.delete_by_user(user_id, bot_id, uid=uid)
+            resolved = await resolve_accounts(user_id, bot_id)
+            if not resolved.installed:
+                return None if resolved.reason.startswith("读取") else 0
+            visible = {account.uid for account in resolved.accounts} | set(resolved.uids)
+            if uid not in visible:
+                return 0
+            targets = [uid]
         else:
-            deleted = await ArkUser.delete_by_user(user_id, bot_id)
-        if deleted is None:
-            logger.error(
-                f"[ArknightsUID·绑定] 删除登录时数据库不可用 user={user_id} "
-                f"bot={bot_id}，绑定关系保留"
-            )
+            # 也解除被本地账号遮蔽的 EndUID 角色，避免下一次查询复活。
+            try:
+                local = await list_local_accounts(user_id, bot_id)
+                blocked = await disabled_account_uids(user_id, bot_id)
+                external = await resolve_enduid_accounts(user_id, bot_id)
+            except Exception as exc:
+                logger.warning(
+                    "[ArknightsUID·绑定] 读取账号来源失败，未解除: "
+                    f"{exc.__class__.__name__}"
+                )
+                return None
+            targets = list(dict.fromkeys([
+                *(row.uid for row in local if row.uid),
+                *(account.uid for account in external.accounts), *external.uids,
+            ]))
+            targets = [target for target in targets if target not in blocked]
+        if not targets:
             return 0
-        if deleted:
-            for target_uid in uids:
-                await ArkBind.delete_uid(user_id, bot_id, target_uid)
-        return deleted
+        return await ArkUser.disable_logins(user_id, bot_id, targets)
+
+
+async def remove_invalid_ark_login(user_id: str, bot_id: str, uid: str) -> int | None:
+    """维护清理仅解除仍标为无效的方舟行；不覆盖并发重登。"""
+    if not uid.isdigit() or not user_id or not bot_id:
+        return 0
+    async with await _bind_write_lock(bot_id, user_id):
+        return await ArkUser.disable_logins(user_id, bot_id, [uid], only_invalid=True)

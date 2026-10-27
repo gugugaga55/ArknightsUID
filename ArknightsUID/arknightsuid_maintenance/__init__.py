@@ -124,6 +124,8 @@ async def delete_invalid_creds(bot: Bot, ev: Event) -> None:
     rows = await ArkUser.select_rows(cookie_status="无效")
     if not rows:
         return await _send_text(bot, ev, "没有标记为无效的本地登录。")
+    from ArknightsUID.utils.skland.store import remove_invalid_ark_login
+
     uids = []
     skipped = 0
     for row in rows:
@@ -134,14 +136,17 @@ async def delete_invalid_creds(bot: Bot, ev: Event) -> None:
             # 成删光该用户所有账号（审计 #39）
             skipped += 1
             continue
-        uids.append(uid)
-        await ArkUser.delete_by_user(
+        removed = await remove_invalid_ark_login(
             getattr(row, "user_id", ""), getattr(row, "bot_id", ""), uid
         )
+        if removed:
+            uids.append(uid)
+        else:
+            skipped += 1
     shown = "、".join(hide_uid(u) for u in uids[:10])
     more = f" 等 {len(uids)} 个" if len(uids) > 10 else ""
-    suffix = f"（跳过 {skipped} 条 uid 为空的异常行，请人工核查）" if skipped else ""
-    await _send_text(bot, ev, f"已删除 {len(uids)} 条无效登录：{shown}{more}{suffix}")
+    suffix = f"（跳过 {skipped} 条无法确认或已更新的记录）" if skipped else ""
+    await _send_text(bot, ev, f"已解除本插件 {len(uids)} 条无效登录：{shown}{more}{suffix}；重新登录可恢复。")
 
 
 # ---------------------------------------------------------------------------

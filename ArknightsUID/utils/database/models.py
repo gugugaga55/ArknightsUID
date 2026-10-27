@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from sqlmodel import Field, SQLModel, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import Index, UniqueConstraint, update
+from sqlalchemy import Index, UniqueConstraint, false, update
 from sqlalchemy.exc import IntegrityError
 
 from gsuid_core.logger import logger
@@ -85,6 +85,11 @@ class ArkUser(User, table=True):
     # Cookie 状态（""=正常, "无效"=失效）
     cookie_status: str = Field(default="", title="Cookie 状态")
 
+    # 删除后保留无凭据标记，阻止同 UID 从 EndUID 回退；成功重登清除。
+    login_disabled: bool = Field(
+        default=False, nullable=False, sa_column_kwargs={"server_default": false()}
+    )
+
     # 用户偏好
     hide_uid_self_value: str = Field(default="", title="隐藏 UID（用户级，覆盖全局）")
 
@@ -115,6 +120,20 @@ class ArkUser(User, table=True):
         UPDATE；**其他**完整性错误（长度/非空/外键等）如实上抛，不吞。
         返回 False = 未确认落库，调用方不得当成功。
         """
+        return await cls._upsert_in_session(session, user_id, bot_id, uid, **data)
+
+    @classmethod
+    async def _upsert_in_session(
+        cls, session: AsyncSession, user_id: str, bot_id: str, uid: str, **data
+    ) -> bool:
+        """账号和绑定事务共用；不在内部提交。"""
+        if data.get("game_id") == ARKNIGHTS_CHANNEL_OFFICIAL:
+            result = await session.execute(select(cls).where(
+                cls.user_id == user_id, cls.bot_id == bot_id, cls.uid == uid,
+                cls.game_id != ARKNIGHTS_CHANNEL_OFFICIAL,
+            ))
+            if result.scalars().first() is not None:
+                raise ValueError("UID belongs to a different game record")
         stmt = (
             update(cls)
             .where(
@@ -150,6 +169,18 @@ class ArkUser(User, table=True):
                 raise
             result = await session.execute(stmt)
             return bool(result.rowcount)
+
+    @classmethod
+    @with_session
+    async def account_rows(
+        cls, session: AsyncSession, user_id: str, bot_id: str,
+    ) -> list[ArkUser]:
+        """空列表与数据库错误(None)分开，供来源策略失败时关闭回退。"""
+        result = await session.execute(select(cls).where(
+            cls.user_id == user_id, cls.bot_id == bot_id,
+            cls.game_id == ARKNIGHTS_CHANNEL_OFFICIAL,
+        ).order_by(cls.id))
+        return list(result.scalars().all())
 
     @classmethod
     @with_session
@@ -289,6 +320,92 @@ class ArkUser(User, table=True):
         for row in rows:
             await session.delete(row)
         return len(rows)
+
+
+    @classmethod
+    async def _sync_bindings(
+        cls, session: AsyncSession, user_id: str, bot_id: str, group_id=None
+    ) -> None:
+        """账号变更事务内重建当前用户的绑定。"""
+        result = await session.execute(
+            select(ArkBind).where(
+                ArkBind.user_id == user_id, ArkBind.bot_id == bot_id
+            ).with_for_update()
+        )
+        bindings = list(result.scalars().all())
+        result = await session.execute(
+            select(cls).where(
+                cls.user_id == user_id, cls.bot_id == bot_id,
+                cls.game_id == ARKNIGHTS_CHANNEL_OFFICIAL,
+                cls.login_disabled == False,  # noqa: E712 - SQL expression
+            ).order_by(cls.id)
+        )
+        uids = list(dict.fromkeys(row.uid for row in result.scalars() if row.uid))
+        if not uids:
+            for binding in bindings:
+                await session.delete(binding)
+        elif bindings:
+            bindings[0].uid = "_".join(uids)
+            for extra in bindings[1:]:
+                await session.delete(extra)
+        else:
+            session.add(ArkBind(
+                user_id=user_id, bot_id=bot_id, group_id=group_id,
+                uid="_".join(uids),
+            ))
+        await session.flush()
+
+    @classmethod
+    @with_session
+    async def save_login_roles(
+        cls, session: AsyncSession, user_id: str, bot_id: str, group_id,
+        roles: list[dict[str, str]], **credentials,
+    ) -> bool:
+        """已验证角色、加密凭据与绑定同一事务提交。"""
+        for role in roles:
+            saved = await cls._upsert_in_session(
+                session, user_id, bot_id, role["role_id"],
+                **credentials, nickname=role["nickname"],
+                record_id=role["record_uid"], server_id=role["server_id"],
+                game_id=ARKNIGHTS_CHANNEL_OFFICIAL, cookie_status="",
+                login_disabled=False, platform="3", token=None,
+                last_cred_request_time=None,
+            )
+            if not saved:
+                raise RuntimeError("account write was not confirmed")
+        await cls._sync_bindings(session, user_id, bot_id, group_id)
+        return True
+
+    @classmethod
+    @with_session
+    async def disable_logins(
+        cls, session: AsyncSession, user_id: str, bot_id: str, uids: list[str],
+        only_invalid: bool = False,
+    ) -> int:
+        """仅接受已解析归属的 UID；擦除凭据并禁止本插件 EndUID 回退。"""
+        targets = list(dict.fromkeys(uid for uid in uids if uid.isdigit()))
+        removed = 0
+        for uid in targets:
+            if only_invalid:
+                current = await session.execute(select(cls).where(
+                    cls.user_id == user_id, cls.bot_id == bot_id, cls.uid == uid,
+                    cls.game_id == ARKNIGHTS_CHANNEL_OFFICIAL,
+                    cls.cookie_status == "无效", cls.login_disabled == False,  # noqa: E712
+                ).with_for_update())
+                if current.scalars().first() is None:
+                    continue
+            saved = await cls._upsert_in_session(
+                session, user_id, bot_id, uid,
+                game_id=ARKNIGHTS_CHANNEL_OFFICIAL, login_disabled=True,
+                cookie="", token=None, hg_token="", record_id=None,
+                skland_user_id="", last_cred_request_time=None,
+                cookie_status="已删除",
+            )
+            if not saved:
+                raise RuntimeError("account removal was not confirmed")
+            removed += 1
+        await cls._sync_bindings(session, user_id, bot_id)
+        return removed
 
 
 class ArkBind(Bind, table=True):

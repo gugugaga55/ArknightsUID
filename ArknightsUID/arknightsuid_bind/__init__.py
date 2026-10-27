@@ -213,6 +213,8 @@ async def remove_login(bot: Bot, ev: Event) -> None:
     uid = extract_uid(ev.text)
     if uid:
         removed = await ark_store.remove_ark_login(ev.user_id, ev.bot_id, uid=uid)
+        if removed is None:
+            return await _send_text(bot, ev, "读取或保存账号来源失败，未解除，请稍后重试。")
         if not removed:
             return await _send_text(
                 bot,
@@ -224,19 +226,28 @@ async def remove_login(bot: Bot, ev: Event) -> None:
             await _send_text(
                 bot,
                 ev,
-                f"已删除 UID {hide_uid(uid)} 的明日方舟登录（该账号原为默认账号，默认已重置）。",
+                f"已解除本插件 UID {hide_uid(uid)} 的登录，默认账号已重置；重新登录可恢复。",
             )
         else:
-            await _send_text(bot, ev, f"已删除 UID {hide_uid(uid)} 的明日方舟登录。")
+            await _send_text(bot, ev, f"已解除本插件 UID {hide_uid(uid)} 的登录；EndUID 原记录不变，重新登录可恢复。")
     else:
         count = await ark_store.remove_ark_login(ev.user_id, ev.bot_id)
+        if count is None:
+            return await _send_text(bot, ev, "读取或保存账号来源失败，未解除，请稍后重试。")
         clear_default_uid(ev.bot_id, ev.user_id)
-        await _send_text(bot, ev, f"已删除 {count} 个明日方舟登录。")
+        await _send_text(
+            bot, ev,
+            f"已解除本插件的 {count} 个明日方舟登录（含 EndUID 复用）；"
+            "EndUID 原记录不变，重新登录可恢复。",
+        )
 
 
 @bind_sv.on_fullmatch(("查看绑定", "我的绑定"), block=True)
 async def show_bind(bot: Bot, ev: Event) -> None:
-    users = await ark_store.list_local_accounts(ev.user_id, ev.bot_id)
+    try:
+        users = await ark_store.list_local_accounts(ev.user_id, ev.bot_id)
+    except Exception:
+        return await _send_text(bot, ev, "读取本地账号失败，请稍后重试。")
     if not users:
         return await _send_text(
             bot, ev, "本地未绑定明日方舟账号。请私聊使用 ark绑定 或 ark扫码登录。"
