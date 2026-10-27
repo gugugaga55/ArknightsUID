@@ -2,7 +2,8 @@
   ArknightsUID 模板公共头部（被所有 ark_*.html include）
 
   包含：字体加载策略 + 设计系统基座内联。
-  - 中文 MiSans：jsdelivr CDN（加载失败回退系统黑体）
+  - 中文 MiSans：jsdelivr CDN（本地加载失败回退内置思源黑体）
+  - fallback_font_css_url：本地内置字体的静态路由；外置渲染不注入
   - 拉丁/等宽：font_css_url 可配置（ArkConfig FontCssUrl）
   - 颜文字符号字体：kaomoji_font_css（render_html 注入的内联 @font-face，
     公告正文 ꒰˶>ᗜ<˶꒱ 一类字符的兜底；包未就绪时为空串自动跳过）
@@ -15,6 +16,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/misans@4.1.0/lib/Normal/MiSans-Semibold.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/misans@4.1.0/lib/Normal/MiSans-Bold.min.css">
 <link rel="stylesheet" href="{{ font_css_url }}">
+{% if fallback_font_css_url %}<link rel="stylesheet" href="{{ fallback_font_css_url }}">{% endif %}
 {% if kaomoji_font_css %}<style>{{ kaomoji_font_css | safe }}</style>{% endif %}
 <style>
     {% include "ark_base.css" %}

@@ -51,7 +51,8 @@ CONFIG_DEFAULT: dict[str, GSC] = {
     ),
     "FontCssUrl": GsStrConfig(
         "字体 CSS 地址",
-        "HTML 渲染使用的拉丁显示字体 CSS URL（中文 MiSans 由模板内置 CDN 提供）。本地默认走 /ark/fonts/fonts.css；外置渲染可填公网字体 CDN。",
+        "HTML 渲染使用的拉丁显示字体 CSS URL（中文 MiSans 由模板 CDN 提供，"
+        "本地附带思源黑体中文兜底）。外置渲染使用可公网访问的字体 CDN。",
         "https://fonts.loli.net/css2?family=Noto+Serif+SC:wght@700;900&family=Google+Sans+Flex:opsz,wght@6..144,500..700&family=JetBrains+Mono:wght@500;700&display=swap",
         secret=True,
     ),

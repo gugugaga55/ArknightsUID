@@ -1,0 +1,17 @@
+/* Bundled Adobe Source Han Sans CN, SIL OFL 1.1; see OFL.txt and SOURCE.md. */
+@font-face {
+    font-family: "Source Han Sans CN";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url("SourceHanSansCN-Regular.otf") format("opentype");
+}
+
+/* Google Noto Color Emoji, SIL OFL 1.1; see OFL-NotoColorEmoji.txt. */
+@font-face {
+    font-family: "Noto Color Emoji";
+    font-style: normal;
+    font-weight: 400;
+    font-display: swap;
+    src: url("NotoColorEmoji.ttf") format("truetype");
+}

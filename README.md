@@ -18,11 +18,11 @@ git clone https://github.com/gugugaga55/ArknightsUID.git
 
 必需 Python 依赖 httpx 声明在 `pyproject.toml`，core 启动时会通过 AutoInstallDep（默认开）自动安装。公招标签截图识别 rapidocr 为可选依赖，管理员可发送 `ark安装依赖 ocr` 安装（多镜像回退，装完即生效）。
 
-**公告颜文字字体（自动，无需配置）**：官方公告正文常含颜文字（实帖样本 `꒰˶>ᗜ<˶꒱`、`ദ്ദി˶>𖥦<)`），这些字符不在 MiSans / Noto CJK / 彩色 Emoji 的覆盖范围，缺字体时会渲染成方框。插件在首次本地渲染时自动下载一套 OFL 符号字体包（Google Noto 五件：Yi / 加拿大原住民音节 / 马拉雅拉姆 / Symbols2 / Noto Sans，约 1.3MB，落插件目录 `ArknightsUID/templates/fonts/kaomoji/`，GitHub + jsdelivr 双镜像回退，失败 1 小时后自动重试）。离线部署可改为给系统手动装字体（装了即用，可免下载）：
+正式功能位于 `ArknightsUID/arknightsuid_*`，共享逻辑位于 `ArknightsUID/utils/`，模板和内置素材随 `ArknightsUID/templates/` 发布；`images/` 仅用于本文示例。安装后无需运行测试或预览脚本即可出图。玩家数据、缓存和下载资源统一保存在 GsCore 的 `data/ArknightsUID/`。
 
-- 颜文字 / 符号字体：如 `Symbola`、`Noto Sans Symbols 2`
-- emoji 字体：如 `Noto Color Emoji`（takumi 引擎下公告 📮/✅ 等需要）
-- 汉字字体：如 `Noto Sans CJK SC` / 思源黑体（远程 MiSans CSS 失效时的离线中文兜底）
+**内置字体**：本地 Playwright 与 Takumi 共用思源黑体 CN Regular（约 8.4 MB）、Noto Color Emoji（约 10.7 MB）和颜文字符号包（约 1.7 MB，覆盖 `꒰˶>ᗜ<˶꒱`、`ദ്ദി˶>𖥦<)`）。系统缺少中文、emoji 或符号字体、字体 CDN 不可用时，可直接使用这些随插件发布的字体；Playwright 仍需正常安装 Chromium 及其系统运行依赖。官方来源、固定版本和 SIL OFL 1.1 许可证见 `ArknightsUID/templates/fonts/`。外置渲染继续使用可公网访问的字体 CSS。
+
+颜文字字体优先复用已有下载，内置文件缺失时自动补到 GsCore 数据目录 `data/ArknightsUID/resource/fonts/kaomoji/`（双镜像回退，失败 1 小时后重试）。旧版 `ArknightsUID/templates/fonts/kaomoji/` 中的文件继续使用，无需搬动。
 
 ## 功能
 

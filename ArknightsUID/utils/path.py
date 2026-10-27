@@ -1,8 +1,8 @@
 """ArknightsUID 路径管理。
 
-所有运行时数据（缓存、玩家数据、模板等）的路径都在此集中声明，
-避免散落在各模块导致路径不一致。基础目录复用 GsCore 的 get_res_path，
-保证插件数据落在 GsCore 的统一资源目录下。
+插件内模板和内置字体只读；玩家数据、缓存及下载资源统一落在 GsCore
+数据目录。路径在此集中声明，兼容入口 utils/resource/RESOURCE_PATH.py
+仅转出这些定义。
 """
 
 from __future__ import annotations
@@ -12,6 +12,12 @@ from pathlib import Path
 
 from gsuid_core.data_store import get_res_path
 
+# 随插件发布的代码与静态资源
+PACKAGE_PATH: Path = Path(__file__).resolve().parents[1]
+PLUGIN_ROOT: Path = PACKAGE_PATH.parent
+TEMPLATES_PATH: Path = PACKAGE_PATH / "templates"
+BUNDLED_FONTS_PATH: Path = TEMPLATES_PATH / "fonts"
+
 # 插件根数据目录：<GsCore 资源目录>/ArknightsUID
 MAIN_PATH: Path = get_res_path() / "ArknightsUID"
 
@@ -20,6 +26,7 @@ PLAYER_PATH: Path = MAIN_PATH / "players"
 
 # 缓存根目录及子目录
 CACHE_BASE: Path = MAIN_PATH / "cache"
+CACHE_PATH: Path = CACHE_BASE  # 兼容早期资源模块的命名
 AVATAR_CACHE_PATH: Path = CACHE_BASE / "avatar"  # 干员头像
 CHAR_CACHE_PATH: Path = CACHE_BASE / "char"  # 干员立绘
 SKILL_CACHE_PATH: Path = CACHE_BASE / "skill"  # 技能图标
@@ -30,11 +37,9 @@ WIKI_CACHE_PATH: Path = CACHE_BASE / "wiki"  # PRTS Wiki 查询缓存
 # 配置文件
 CONFIG_PATH: Path = MAIN_PATH / "config.json"
 
-# 模板目录（jinja2 模板根）
-TEMPLATES_PATH: Path = Path(__file__).parents[1] / "templates"
-
-# 静态资源根（插件内置资源，非运行时生成）
-RESOURCE_PATH: Path = Path(__file__).parents[1] / "resources"
+# 用户背景与自动下载的资源；不向插件源码目录写入新文件
+RESOURCE_PATH: Path = MAIN_PATH / "resource"
+FONT_CACHE_PATH: Path = RESOURCE_PATH / "fonts"
 
 
 def init_dir() -> None:
@@ -53,6 +58,8 @@ def init_dir() -> None:
         EQUIP_CACHE_PATH,
         BAKE_PATH,
         WIKI_CACHE_PATH,
+        RESOURCE_PATH,
+        FONT_CACHE_PATH,
     ]
     for p in dirs:
         p.mkdir(parents=True, exist_ok=True)

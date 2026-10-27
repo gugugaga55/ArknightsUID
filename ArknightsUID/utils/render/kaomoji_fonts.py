@@ -4,7 +4,7 @@
 ``ദ്ദി˶>𖥦<)``），其字符分布在 Yi 音节（꒰꒱）、加拿大原住民音节
 （ᗜᕕᐛᕗᐢ）、改造上标字母（˶ᴗᵕˬ）、马来亚拉姆文（ദ്ദി）等 Unicode
 区块——MiSans 远程 CSS 切片不含这些码位，Noto CJK / 彩色 Emoji 同样
-不覆盖，缺兜底时公告卡里颜文字渲染成豆腐块（像素哈希探针证实：无包
+  不覆盖，缺兜底时公告卡里颜文字渲染成豆腐块（像素哈希探针证实：无包
 时 9 个颜文字字符渲染完全同相，加包后逐字不同）。
 
 对齐 XutheringWavesUID README 的系统字体建议（emoji / Symbola /
@@ -12,9 +12,9 @@ Noto Sans Symbols2 / CJK），本模块在插件侧自动补齐等价能力：
 
 - 多级自愈：系统已装符号字体（Symbola / Segoe UI Symbol 等）直接用
   → 插件字体包（全部 OFL，googlefonts/noto-fonts 单源 + jsdelivr
-  镜像；首个本地渲染触发后台单飞下载）→ 仍无字体的字符（如 Lisu
-  增补 𖥦，noto 静态版无此区块）降级为豆腐块，不影响其余内容。
-- 供给两条渲染链：playwright 经 /ark/fonts 静态路由 + 内联 @font-face
+  镜像；内置包缺失时后台单飞补下载）。𖥦 属于 Bamum 补充区，
+  由同包 Noto Sans Bamum 覆盖。
+- 供给两条渲染链：playwright 经 /ark/font-cache（兼容旧 /ark/fonts）+ 内联 @font-face
   （font_face_css，由 render_html 注入模板上下文）；takumi 不走系统
   fontconfig，由 render_utils._local_cjk_fonts 直接读字节注册。
 - 失败语义：单镜像失败 warning 后换镜像，整轮未补齐进入 1h 冷却，
@@ -32,11 +32,12 @@ from pathlib import Path
 
 from gsuid_core.logger import logger
 
-from ..path import TEMPLATES_PATH
+from ..path import BUNDLED_FONTS_PATH, FONT_CACHE_PATH
 
-# 字体包落盘目录：复用 templates/fonts 的 /ark/fonts 静态路由设计
-# （render_utils._mount_fonts），运行时生成、仓库 .gitignore 忽略
-FONT_PACK_DIR = TEMPLATES_PATH / "fonts" / "kaomoji"
+# 新下载写入 GsCore 数据目录，旧版本下载到源码目录的字体继续只读复用。
+FONT_PACK_DIR = FONT_CACHE_PATH / "kaomoji"
+LEGACY_FONT_PACK_DIR = BUNDLED_FONTS_PATH / "kaomoji"
+BUNDLED_FONT_PACK_DIR = BUNDLED_FONTS_PATH / "kaomoji-bundled"
 
 # (落盘文件名, CSS font-family 名, 仓库内路径)。
 # 选型依据 fc-scan 实测覆盖：NotoSans → ˶ˬᵕᴗ‿；Yi → ꒰꒱；
@@ -64,14 +65,20 @@ _FONT_PACK: tuple[tuple[str, str, str], ...] = (
     ),
     (
         "NotoSansSymbols2-Regular.ttf",
-        "Noto Sans Symbols 2",
+        "Noto Sans Symbols2",
         "hinted/ttf/NotoSansSymbols2/NotoSansSymbols2-Regular.ttf",
+    ),
+    (
+        "NotoSansBamum-Regular.otf",
+        "Noto Sans Bamum",
+        "unhinted/otf/NotoSansBamum/NotoSansBamum-Regular.otf",
     ),
 )
 
+_FONT_REVISION = "ffebf8c1ee449e544955a7e813c54f9b73848eac"
 _FONT_MIRRORS: tuple[str, ...] = (
-    "https://raw.githubusercontent.com/googlefonts/noto-fonts/main/",
-    "https://cdn.jsdelivr.net/gh/googlefonts/noto-fonts@main/",
+    f"https://raw.githubusercontent.com/notofonts/noto-fonts/{_FONT_REVISION}/",
+    f"https://cdn.jsdelivr.net/gh/notofonts/noto-fonts@{_FONT_REVISION}/",
 )
 
 # 系统已装符号字体（存在即用；命中即部分免下包，wwuid README 建议清单同源）
@@ -109,18 +116,25 @@ def is_valid_font(data: bytes) -> bool:
 
 def pack_complete() -> bool:
     """字体包是否齐（stat 级；字节校验在下载与读取时做）。"""
-    if not FONT_PACK_DIR.exists():
-        return False
-    return all((FONT_PACK_DIR / item[0]).exists() for item in _FONT_PACK)
+    return all(_font_path(item[0]) is not None for item in _FONT_PACK)
+
+
+def _font_path(filename: str) -> Path | None:
+    """复用已有下载，内置包兜底；不搬动或删除用户文件。"""
+    for directory in (FONT_PACK_DIR, LEGACY_FONT_PACK_DIR, BUNDLED_FONT_PACK_DIR):
+        path = directory / filename
+        if path.is_file():
+            return path
+    return None
 
 
 def pack_font_paths() -> list[Path]:
     """字体包中校验通过的字体文件（takumi 字节注册用）。"""
     result: list[Path] = []
-    if not FONT_PACK_DIR.exists():
-        return result
     for filename, _, _ in _FONT_PACK:
-        path = FONT_PACK_DIR / filename
+        path = _font_path(filename)
+        if path is None:
+            continue
         try:
             if is_valid_font(path.read_bytes()):
                 result.append(path)
@@ -137,17 +151,25 @@ def system_symbol_font_paths() -> list[Path]:
 def font_face_css(base_url: str) -> str:
     """字体包已就绪字体 → 内联 @font-face CSS（playwright 页面加载用）。
 
-    base_url 为 core 本地服务地址（/ark/fonts 静态路由）；包未就绪返回
+    base_url 为 core 本地服务地址；包未就绪返回
     空串，模板按 falsy 跳过注入。系统字体无需声明——fontconfig 按
     font-family 栈中的 family 名直取。
     """
     rules = []
     for filename, family, _ in _FONT_PACK:
-        if (FONT_PACK_DIR / filename).exists():
+        path = _font_path(filename)
+        if path is not None:
+            if path.parent == FONT_PACK_DIR:
+                route = "/ark/font-cache/kaomoji"
+            elif path.parent == LEGACY_FONT_PACK_DIR:
+                route = "/ark/fonts/kaomoji"
+            else:
+                route = "/ark/fonts/kaomoji-bundled"
             rules.append(
                 f'@font-face{{font-family:"{family}";'
-                f'src:url("{base_url}/ark/fonts/kaomoji/{filename}")'
-                ' format("truetype");font-display:swap;}'
+                f'src:url("{base_url}{route}/{filename}")'
+                f' format("{"opentype" if path.suffix == ".otf" else "truetype"}");'
+                'font-display:swap;}'
             )
     return "\n".join(rules)
 
@@ -161,7 +183,7 @@ async def _download_font(filename: str, repo_path: str) -> bool:
 
     target = FONT_PACK_DIR / filename
     with file_locked(target):
-        if target.exists():  # 等锁期间其他进程已下好
+        if _font_path(filename) is not None:  # 等锁期间其他进程已下好
             return False
         FONT_PACK_DIR.mkdir(parents=True, exist_ok=True)
         tmp = unique_tmp(target)
@@ -199,7 +221,7 @@ async def ensure_font_pack() -> tuple[bool, bool]:
         return False, True
     changed = False
     for filename, _, repo_path in _FONT_PACK:
-        if (FONT_PACK_DIR / filename).exists():
+        if _font_path(filename) is not None:
             continue
         if await _download_font(filename, repo_path):
             changed = True

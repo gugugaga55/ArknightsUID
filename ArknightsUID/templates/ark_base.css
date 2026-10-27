@@ -66,7 +66,7 @@
     --pad-x: 26px;
 
     --mono: "JetBrains Mono", "Google Sans Flex", "Consolas",
-        "Noto Sans Mono CJK SC", monospace;
+        "Noto Sans Mono CJK SC", "Source Han Sans CN", "Noto Color Emoji", monospace;
 }
 
 * {
@@ -84,10 +84,11 @@ body {
        区块，浏览器按字形逐族回退）——必须排在 CJK 之后，提前会抢
        拉丁字形；其中 Noto 五件由 kaomoji_fonts 字体包 @font-face
        提供，系统装了 Symbola / Segoe UI Symbol 也能被 fontconfig 命中 */
-    font-family: "MiSans", "Google Sans Flex", "Noto Sans CJK SC",
+    font-family: "MiSans", "Google Sans Flex", "Source Han Sans CN", "Noto Sans CJK SC",
         "Noto Sans SC", "PingFang SC", "Microsoft YaHei",
         "Noto Sans Yi", "Noto Sans Canadian Aboriginal",
-        "Noto Sans Malayalam", "Noto Sans Symbols 2", "Noto Sans",
+        "Noto Sans Malayalam", "Noto Sans Symbols2", "Noto Sans Symbols 2",
+        "Noto Sans Bamum", "Noto Sans", "Noto Color Emoji",
         "Segoe UI Symbol", "Symbola", "Apple Symbols", sans-serif;
     background: var(--paper);
     color: var(--tx-0);

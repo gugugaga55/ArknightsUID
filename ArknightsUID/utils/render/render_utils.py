@@ -14,12 +14,14 @@ from gsuid_core.app_life import app as fastapi_app
 from fastapi.staticfiles import StaticFiles
 
 from . import kaomoji_fonts
-from ..path import TEMPLATES_PATH
+from ..path import BUNDLED_FONTS_PATH, FONT_CACHE_PATH, TEMPLATES_PATH
 from ..config import ArkConfig, CONFIG_DEFAULT
 from ..http import get_client
 
 logging.getLogger("uvicorn.access").addFilter(
-    lambda record: "/ark/fonts" not in record.getMessage()
+    lambda record: not any(
+        path in record.getMessage() for path in ("/ark/fonts", "/ark/font-cache")
+    )
 )
 
 TEMPLATES_ABS_PATH = TEMPLATES_PATH
@@ -98,9 +100,9 @@ _local_font_bytes: list | None = None
 
 
 def _local_cjk_fonts() -> list:
-    """缓存读取系统 Noto Sans CJK + 彩色 Emoji + 颜文字符号字体（存在才返回）。
+    """缓存读取内置中文字体、系统 Emoji 与颜文字符号字体。
 
-    CJK 是远程字体失败的兜底；Emoji 字体解决公告正文 📮/✅ 等字符、
+    内置 CJK 是远程字体失败的兜底；Emoji 字体解决公告正文 📮/✅ 等字符、
     符号字体（下载包 + 系统已装）补齐颜文字区块（꒰ᗜ˶ദ‿✧ 等，见
     kaomoji_fonts 模块说明）——takumi 不走系统 fontconfig，这两类
     字体缺失时公告字符渲染成豆腐块（playwright 受影响的是未装字体
@@ -110,6 +112,7 @@ def _local_cjk_fonts() -> list:
     if _local_font_bytes is None:
         fonts = []
         for candidate in (
+            BUNDLED_FONTS_PATH / "SourceHanSansCN-Regular.otf",
             Path("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"),
             Path("/usr/share/fonts/opentype/noto/NotoSansCJK.ttc"),
             Path("/System/Library/Fonts/PingFang.ttc"),
@@ -121,6 +124,7 @@ def _local_cjk_fonts() -> list:
             except OSError:
                 continue
         for candidate in (
+            BUNDLED_FONTS_PATH / "NotoColorEmoji.ttf",
             Path("/usr/share/fonts/truetype/noto/NotoColorEmoji.ttf"),
             Path("/System/Library/Fonts/Apple Color Emoji.ttc"),
         ):
@@ -217,7 +221,7 @@ _pool_scale = None
 _pool_generation = 0  # Incremented on browser restart to invalidate stale pages
 
 _FONT_CSS_NAME = "fonts.css"
-_FONTS_DIR = TEMPLATES_PATH / "fonts"
+_FONTS_DIR = BUNDLED_FONTS_PATH
 
 
 def _get_font_css_url() -> str:
@@ -229,15 +233,17 @@ def _get_font_css_url() -> str:
 
 def _mount_fonts() -> None:
     try:
-        for route in fastapi_app.routes:
-            if getattr(route, "path", None) == "/ark/fonts":
-                return
-        if _FONTS_DIR.exists():
-            fastapi_app.mount(
-                "/ark/fonts",
-                CORSStaticFiles(directory=_FONTS_DIR),
-                name="ark_fonts",
-            )
+        mounted = {getattr(route, "path", None) for route in fastapi_app.routes}
+        for route, directory, name in (
+            ("/ark/fonts", _FONTS_DIR, "ark_fonts"),
+            ("/ark/font-cache", FONT_CACHE_PATH, "ark_font_cache"),
+        ):
+            if route not in mounted and directory.exists():
+                fastapi_app.mount(
+                    route,
+                    CORSStaticFiles(directory=directory),
+                    name=name,
+                )
         logger.debug("[ARK·渲染] 已挂载字体静态路由 (CORS Enabled)")
     except Exception as e:
         logger.warning(f"[ARK·渲染] 挂载字体静态路由失败: {e}")
@@ -534,6 +540,8 @@ async def render_html(ark_templates, template_name: str, context: dict) -> bytes
             try:
                 font_css_url = _get_font_css_url()
                 context["font_css_url"] = font_css_url
+                context["fallback_font_css_url"] = ""
+                context["kaomoji_font_css"] = ""
                 html_content = template.render(**context)
                 logger.debug(f"[ARK·渲染] 使用在线字体渲染 HTML: {template_name}")
                 logger.debug(f"[ARK·渲染] 外置渲染已启用，尝试使用: {remote_url}")
@@ -549,10 +557,12 @@ async def render_html(ark_templates, template_name: str, context: dict) -> bytes
             font_css_path = _FONTS_DIR / _FONT_CSS_NAME
             base_url = _get_local_base_url()
 
-            if font_css_path.exists():
-                context["font_css_url"] = f"{base_url}/ark/fonts/{_FONT_CSS_NAME}"
-            else:
-                context["font_css_url"] = _get_font_css_url()
+            context["font_css_url"] = _get_font_css_url()
+            context["fallback_font_css_url"] = (
+                f"{base_url}/ark/fonts/{_FONT_CSS_NAME}"
+                if font_css_path.exists()
+                else ""
+            )
 
             # 颜文字字体包：@font-face 内联注入（playwright 经静态路由取
             # 字体文件）；包缺失时顺手调度后台下载，下一张卡生效——
