@@ -1,18 +1,14 @@
 """肉鸽期权威注册表（唯一事实源，纯数据模块零 I/O）。
 
-为什么：期号存在三套体系——期目录（tomimi 命名）/ 主题表编号
-（roguelike_topic_table 键，**傀影起编**）/ 玩家数据编号（skland 进度
-与战绩返回，**灰蕈迷境起编**，比表编号差一）。历史上 6 个文件各自维护
-换算副本，出新一期要改 6 处，且踩过两次坑：玩家 rogue_6 = 表 rogue_5
-的差一（岁的界园志异接入时勘正）、sami 期显示名误写"萨米的腐朽安眠"
-（正名"探索者的银凇止境"，官方主题表口径；旧名保留为期别名）。
+期目录使用 tomimi 命名；主题表、森空岛玩家进度与战绩均从傀影
+rogue_1 起编，同一期使用相同 rogue_N。官方 player/info 页面直接
+以 records[].rogueId 查询 rogueInfoMap，不对编号做偏移。
 
 收敛后**新一期 = 本表 THEMES 加一行** + rogue_ending.ENDING_GUIDES
 补该期人工攻略；其余消费者（期名/别名/topicId/短名/排序/难度数据
 文件名）全部从本模块派生导入，不再各养副本。
 
-灰蕈迷境特殊：只在玩家进度数据出现（无主题表条目、无战绩端点口径），
-因此仅进 ROGUE_THEME_NAMES（玩家编号 rogue_1），不占 THEMES 表行。
+灰蕈迷境不占本表编号，不能为其插入 rogue_1 并平移其他主题。
 """
 
 from __future__ import annotations
@@ -22,7 +18,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class RogueTheme:
-    """一期肉鸽的注册行（字段即三套编号体系的换算锚点）。"""
+    """一期肉鸽的目录、官方编号及展示信息。"""
 
     dir: str  # tomimi 期目录（数据文件与图标的目录名）
     table_id: str  # 主题表键 rogue_N（傀影起编；skland topicId 同口径）
@@ -90,12 +86,8 @@ TABLE_THEME_ORDER: list[str] = [t.table_id for t in THEMES]
 # 主题表键 → 切换条短名（records 战绩卡）
 TOPIC_SHORT_NAMES: dict[str, str] = {t.table_id: t.short for t in THEMES}
 
-# 玩家数据键 → 主题名（进度卡）。表 rogue_N 对应玩家 rogue_{N+1}：
-# 玩家编号在表编号之上再垫灰蕈迷境一期（差一换算的唯一例外行）
-ROGUE_THEME_NAMES: dict[str, str] = {
-    "rogue_1": "刻俄柏的灰蕈迷境",
-    **{f"rogue_{i + 2}": t.name for i, t in enumerate(THEMES)},
-}
+# 玩家进度键与主题表键相同（官方 rogueInfoMap 同键查名）。
+ROGUE_THEME_NAMES: dict[str, str] = {t.table_id: t.name for t in THEMES}
 
 
 def diff_file_for(theme_dir: str) -> str:

@@ -5,9 +5,8 @@
 iconId/rarity，type=RELIC）。同名藏品跨期复用（钝爪-典训 每期都有），
 索引按名聚合、展示按效果去重组。
 
-主题编号注意（实测推位规律，5 对名字全部吻合）：主题表 rogue_N 从傀影起编，
-玩家数据 rogue_N 从灰蕈迷境起编——表 rogue_5 = 岁的界园志异 = 玩家 rogue_6。
-本模块只用主题表自身 id+name，不与玩家侧编号互转。
+主题表和森空岛玩家进度均从傀影 rogue_1 起编，编号相同。
+本模块使用主题表自身 id+name。
 """
 
 from __future__ import annotations

@@ -575,8 +575,7 @@ async def get_user_info(credential: ArkCredential) -> dict[str, Any] | None:
     vName=SKLAND_APP_VNAME / SKLAND_APP_USER_AGENT + get_skland_app_headers
     风控头（language/os/nId/vCode/channel/manufacturer）+ use_device_id。
 
-    状态：联调探针端点——仅 tools/real_smoke.py 与单测使用，生产链路
-    未消费（业务用 get_binding / get_player_info）。
+    肉鸽战绩查询在旧账号缺少森空岛用户 ID 时补读 data.user.id。
     """
     return await _signed_request(
         credential,
@@ -671,16 +670,34 @@ async def get_cultivate_player(credential: ArkCredential) -> dict[str, Any] | No
 async def get_rogue_records(
     credential: ArkCredential, topic_id: str, target_uid: str = ""
 ) -> dict[str, Any] | None:
-    """查询肉鸽战绩（按主题，可查指定玩家；森空岛 App「战绩查询」页同源）。
+    """查询当前角色的肉鸽战绩（按主题；森空岛 App「战绩查询」页同源）。
 
     topic_id 是 roguelike_topic_table 的主题键（rogue_1=傀影 rogue_2=水月
     rogue_3=萨米 rogue_4=萨卡兹 rogue_5=界园 rogue_6=黑流树海，空串=服务端
     默认期；与社区 nonebot-plugin-skland Topics._MAPPING 一致）；
-    target_uid 缺省查自己（=credential.uid），指定则查他人（战绩页"@/UID 查询"）。
+    target_uid 是森空岛用户 ID，缺省为 credential.skland_user_id；它与
+    游戏角色 credential.uid 独立，不能互相替代。显式传入时也必须与
+    credential.uid 属于同一被查账号，此函数不单独解析他人的角色 UID。
+    旧绑定缺 ID 时仅在此补读用户信息（SDK getUserInfo 对应 data.user.id）。
 
-    ⚠️ 端点与参数来自社区（nonebot-plugin-skland get_rogue）实测，签名
-    组合按 player/info 同族推断——尚未经本插件真实凭据联调。
+    端点及 ID 口径已与官方战绩页 fetchBrief、社区 get_rogue 核对；
+    当前修复尚未经真实凭据联调。
     """
+    target_user_id = target_uid or credential.skland_user_id
+    if not target_user_id:
+        profile = await get_user_info(credential)
+        if profile is None or profile.get("code") != 0:
+            return profile
+        data = profile.get("data")
+        user = data.get("user") if isinstance(data, dict) else None
+        user_id = user.get("id") if isinstance(user, dict) else None
+        if not isinstance(user_id, (str, int)) or not str(user_id).isdigit():
+            return {
+                "code": -1,
+                "message": "未获取到森空岛用户 ID，请重新登录后重试。",
+            }
+        target_user_id = str(user_id)
+        credential.skland_user_id = target_user_id
     return await _signed_request(
         credential,
         url=ARK_ROGUE_URL,
@@ -689,7 +706,7 @@ async def get_rogue_records(
         game_id=ARKNIGHTS_CHANNEL_OFFICIAL,
         params={
             "uid": credential.uid,
-            "targetUserId": target_uid or credential.uid,
+            "targetUserId": target_user_id,
             "topicId": topic_id,
         },
     )

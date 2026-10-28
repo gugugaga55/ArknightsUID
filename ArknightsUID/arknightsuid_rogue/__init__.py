@@ -45,9 +45,7 @@ rogue_alias_sv = SV("ArknightsUID肉鸽别名", priority=5)
 rogue_sv = SV("ArknightsUID肉鸽", priority=5)
 
 # 集成战略主题名（玩家数据 rogue_id → 官方主题名）收敛至
-# gamedata.rogue_registry（唯一事实源）。推位规律（roguelike_topic_table
-# 5 对名字全吻合验证）：主题表 rogue_N 从傀影起编，玩家数据从灰蕈迷境
-# 起编——玩家 rogue_6 = 表 rogue_5 = 岁的界园志异。
+# gamedata.rogue_registry（唯一事实源），与官方 rogueInfoMap 同键查名。
 from ..utils.gamedata.rogue_registry import ROGUE_THEME_NAMES
 
 
