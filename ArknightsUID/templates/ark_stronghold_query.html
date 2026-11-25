@@ -1,0 +1,285 @@
+<!--
+  ark_stronghold_query.html —— 卫戍攻略结构化查询卡（盟约/策略/干员 三形态）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_stronghold._build_query_context / _build_combo_context 组装）：
+    kind: bond | strategy | char | combo
+    season / version / source_note / guides[{title,poster,liked,scope,tags[],idea,url}]
+    bond 形态: name,type_label,icon_b64,active_count,effect(多行),
+               members[{name,avatar}],member_total
+    strategy 形态: name,initiator,icon_b64,hp,effect
+    char 形态: name,avatar,profession,sub_profession,traits[{type,desc,level,merge}],
+               skills[{name}],modules[{name}],bonds[{name,type_label,effect}]
+    combo 形态: conditions[{label}],condition_text,has_guides
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <style>
+        .sq-head {
+            display: flex;
+            align-items: center;
+            gap: var(--space-3);
+            margin-top: var(--space-3);
+        }
+        .sq-icon {
+            width: 56px;
+            height: 56px;
+            flex-shrink: 0;
+            border: 1px solid var(--line);
+            background: var(--panel);
+        }
+        .sq-icon img { width: 100%; height: 100%; object-fit: contain; }
+        .sq-avatar {
+            width: 72px;
+            height: 72px;
+            flex-shrink: 0;
+            border: 1px solid var(--line);
+            background: var(--panel);
+        }
+        .sq-avatar img { width: 100%; height: 100%; object-fit: cover; }
+        .sq-name { font-size: 18px; font-weight: 700; color: var(--tx-0); }
+        .sq-sub {
+            margin-top: 4px;
+            font-family: var(--mono);
+            font-size: 10px;
+            letter-spacing: 0.06em;
+            color: var(--tx-2);
+        }
+        .sq-effect {
+            margin-top: var(--space-3);
+            padding: 10px 12px;
+            border-left: 3px solid var(--yellow-deep);
+            background: var(--panel);
+            font-size: 12px;
+            line-height: 1.7;
+            color: var(--tx-1);
+            white-space: pre-line;
+        }
+        .sq-members {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px 14px;
+            margin-top: var(--space-3);
+        }
+        .sq-member { width: 60px; text-align: center; }
+        .sq-member .av {
+            width: 48px;
+            height: 48px;
+            margin: 0 auto;
+            border: 1px solid var(--line);
+            background: var(--paper);
+        }
+        .sq-member .av img { width: 100%; height: 100%; object-fit: cover; }
+        .sq-member .nm {
+            margin-top: 4px;
+            font-size: 10px;
+            color: var(--tx-1);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .sq-guide {
+            padding: 9px 10px;
+            margin-top: var(--space-2);
+            border: 1px solid var(--line);
+            background: var(--panel);
+        }
+        .sq-guide .gt {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--tx-0);
+        }
+        .sq-guide .gm {
+            margin-left: auto;
+            font-family: var(--mono);
+            font-size: 10px;
+            color: var(--tx-2);
+            white-space: nowrap;
+        }
+        .sq-guide .gs {
+            margin-top: 4px;
+            font-size: 10px;
+            color: var(--tx-2);
+        }
+        .sq-block {
+            padding: 8px 10px;
+            margin-top: var(--space-2);
+            border: 1px solid var(--line);
+            background: var(--panel);
+        }
+        .sq-block .bt {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--tx-0);
+        }
+        .sq-block .bd {
+            margin-top: 3px;
+            font-size: 11px;
+            line-height: 1.6;
+            color: var(--tx-1);
+            white-space: pre-line;
+        }
+        /* takumi 不画伪元素：全部装饰用真实元素 */
+    </style>
+    <div class="container" data-ghost="GUIDE-Q">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 卫戍攻略 QUERY</em></span>
+            <span class="mast-meta"><span class="idx">42</span>GARRISON</span>
+        </div>
+
+        {% if kind == 'combo' %}
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">{{ season }} · 条件 AND 组合筛选</div>
+                <h1 class="title title--s">攻略<em>筛选</em></h1>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_help.b64" %}" alt="">
+        </div>
+
+        <div class="chip-flow" style="margin-top: var(--space-3);">
+            {% for c in conditions %}
+            <span class="chip chip--ink">{{ c.label }}</span>
+            {% endfor %}
+        </div>
+
+        {% if not has_guides %}
+        <div class="prose" style="margin-top: var(--space-3); font-size: 12px;">
+            暂无同时满足全部条件的攻略——试试放宽条件（去掉一两个词条后重查），
+            或到森空岛「卫戍协议攻略」页发布一篇。
+        </div>
+        {% endif %}
+
+        {% elif kind == 'bond' %}
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">{{ season }} · {{ type_label }}</div>
+                <h1 class="title title--s">盟约<em>{{ name }}</em></h1>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_stage.b64" %}" alt="">
+        </div>
+
+        <div class="sq-head">
+            <div class="sq-icon">{% if icon_b64 %}<img src="{{ icon_b64 }}" alt="">{% endif %}</div>
+            <div>
+                <div class="sq-name">{{ name }}</div>
+                <div class="sq-sub">{{ type_label }} · 激活人数 {{ active_count }}</div>
+            </div>
+        </div>
+        <div class="sq-effect">{{ effect }}</div>
+
+        <div class="sect" style="margin-top: var(--space-3);">
+            <span class="sect-label">成员干员</span>
+            <span class="sect-en">{{ member_total }}</span>
+        </div>
+        <div class="sq-members">
+            {% for m in members %}
+            <div class="sq-member">
+                <div class="av">{% if m.avatar %}<img src="{{ m.avatar }}" alt="">{% endif %}</div>
+                <div class="nm">{{ m.name }}</div>
+            </div>
+            {% endfor %}
+        </div>
+
+        {% elif kind == 'strategy' %}
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">{{ season }} · 初始策略{% if hp %} · 初始生命 {{ hp }}{% endif %}</div>
+                <h1 class="title title--s">策略<em>{{ name }}</em></h1>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_campaign.b64" %}" alt="">
+        </div>
+
+        <div class="sq-head">
+            <div class="sq-icon">{% if icon_b64 %}<img src="{{ icon_b64 }}" alt="">{% endif %}</div>
+            <div>
+                <div class="sq-name">{{ name }}</div>
+                <div class="sq-sub">发起干员 {{ initiator }}{% if hp %} · 初始生命 {{ hp }}{% endif %}</div>
+            </div>
+        </div>
+        <div class="sq-effect">{{ effect }}</div>
+
+        {% else %}
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">{{ season }} · 本期参战干员</div>
+                <h1 class="title title--s">{{ name }}<em>{{ profession }}</em></h1>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_operator.b64" %}" alt="">
+        </div>
+
+        <div class="sq-head">
+            <div class="sq-avatar">{% if avatar %}<img src="{{ avatar }}" alt="">{% endif %}</div>
+            <div>
+                <div class="sq-name">{{ name }}</div>
+                <div class="sq-sub">{{ profession }} · {{ sub_profession }}</div>
+            </div>
+        </div>
+
+        {% for bond in bonds %}
+        <div class="sect" style="margin-top: var(--space-3);">
+            <span class="sect-label">{{ bond.name }}</span>
+            <span class="sect-en">{{ bond.type_label }}</span>
+        </div>
+        <div class="sq-effect" style="margin-top: var(--space-2);">{{ bond.effect }}</div>
+        {% endfor %}
+
+        {% if traits %}
+        <div class="sect" style="margin-top: var(--space-3);">
+            <span class="sect-label">特质</span>
+            <span class="sect-en">TRAITS</span>
+        </div>
+        {% for t in traits %}
+        <div class="sq-block">
+            <div class="bt">{{ t.type }}{% if t.merge %} · 精锐状态{% else %} · 初始状态{% endif %}</div>
+            <div class="bd">{{ t.desc }}</div>
+        </div>
+        {% endfor %}
+        {% endif %}
+
+        {% if skills or modules %}
+        <div class="sect" style="margin-top: var(--space-3);">
+            <span class="sect-label">技能 / 模组</span>
+            <span class="sect-en">KIT</span>
+        </div>
+        <div class="chip-flow">
+            {% for s in skills %}<span class="chip chip--ghost">{{ s.name }}</span>{% endfor %}
+            {% for m in modules %}<span class="chip chip--blue">{{ m.name }}</span>{% endfor %}
+        </div>
+        {% endif %}
+        {% endif %}
+
+        {% if guides %}
+        <div class="sect" style="margin-top: var(--space-3);">
+            <span class="sect-label">社区攻略</span>
+            <span class="sect-en">GUIDES</span>
+        </div>
+        {% for g in guides %}
+        <div class="sq-guide">
+            <div class="gt"><span>{{ g.title }}</span><span class="gm">赞 {{ g.liked }}</span></div>
+            {% if g.tags %}
+            <div class="gs">{{ g.tags | join(' / ') }}</div>
+            {% endif %}
+            <div class="gs">by {{ g.poster }}{% if g.scope %} · {{ g.scope }}{% endif %}</div>
+        </div>
+        {% endfor %}
+        {% endif %}
+
+        <div class="prose" style="margin-top: var(--space-3); font-size: 11px;">
+            攻略详情与发布见森空岛「卫戍协议攻略」页 · 更多查询 <b>ark卫戍攻略 &lt;盟约/策略/干员&gt;</b> · 模式玩法 <b>ark卫戍攻略</b>
+        </div>
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 卫戍攻略查询</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// GARRISON GUIDE QUERY // SKLAND</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

@@ -1,0 +1,235 @@
+<!--
+  ark_stronghold.html —— 卫戍协议战绩卡
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_stronghold._build_records_context 组装）：
+    name_main: str          博士名（# 前）
+    name_tag: str           # 后编号（可空）
+    level: int              卫戍等级
+    server_label: str       官服 / B服
+    uid_shown: str          脱敏后 UID
+    avatar: str             森空岛头像 b64（可空=占位）
+    badge: str              头衔徽章（全服之最；可空）
+    stat_rows: [{label, value, is_most, badge}]
+    kind_blocks: [{label, kind, teams: [
+      {name, band_id, icon, pass_count, shortest_text, is_most_pass, is_fastest,
+       defeats: [{name, defeat}]}]}]
+    char_upgrade: [{name, count}]
+    daily_note: str         「统计非实时，每日更新一次」
+    source_note: str
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <style>
+        .sh-player {
+            display: flex;
+            align-items: center;
+            gap: var(--space-3);
+            margin-top: var(--space-3);
+        }
+        .sh-avatar {
+            position: relative;
+            width: 64px;
+            height: 64px;
+            flex-shrink: 0;
+            border: 1px solid var(--line);
+            background: var(--panel);
+        }
+        .sh-avatar img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .sh-level {
+            position: absolute;
+            right: -6px;
+            bottom: -6px;
+            min-width: 30px;
+            height: 18px;
+            padding: 0 5px;
+            box-sizing: border-box;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--ink-block);
+            color: #fff;
+            font-family: var(--mono);
+            font-size: 11px;
+            font-weight: 700;
+        }
+        .sh-name {
+            font-size: 17px;
+            font-weight: 700;
+            color: var(--tx-0);
+        }
+        .sh-name .tag {
+            color: var(--tx-2);
+            font-weight: 500;
+            font-size: 13px;
+        }
+        .sh-sub {
+            margin-top: 4px;
+            font-family: var(--mono);
+            font-size: 10px;
+            letter-spacing: 0.06em;
+            color: var(--tx-2);
+        }
+        .sh-team {
+            display: flex;
+            align-items: center;
+            gap: var(--space-3);
+            padding: 9px 10px;
+            margin-top: var(--space-2);
+            border: 1px solid var(--line);
+            background: var(--panel);
+        }
+        .sh-team .tico {
+            width: 36px;
+            height: 36px;
+            flex-shrink: 0;
+            border: 1px solid var(--line);
+            background: var(--paper);
+        }
+        .sh-team .tico img { width: 100%; height: 100%; object-fit: contain; }
+        .sh-team .tmain { flex: 1; min-width: 0; }
+        .sh-team .tname {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--tx-0);
+        }
+        .sh-team .tnum {
+            margin-left: auto;
+            text-align: right;
+            font-family: var(--mono);
+            font-size: 11px;
+            color: var(--tx-2);
+            white-space: nowrap;
+        }
+        .sh-team .tnum b { color: var(--tx-0); font-size: 13px; }
+        .sh-team .tdef {
+            margin-top: 3px;
+            font-size: 10px;
+            color: var(--tx-2);
+        }
+        .sh-up {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+            margin-top: var(--space-2);
+            font-size: 12px;
+            color: var(--tx-0);
+        }
+        .sh-up .cnt {
+            font-family: var(--mono);
+            font-size: 11px;
+            color: var(--tx-2);
+        }
+        /* takumi 不画伪元素：全部装饰用真实元素 */
+    </style>
+    <div class="container" data-ghost="STRONGHOLD">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 卫戍协议 STRONGHOLD</em></span>
+            <span class="mast-meta"><span class="idx">40</span>GAMEDATA</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">卫戍协议数据 · 战绩统计</div>
+                <h1 class="title title--s">卫戍<em>协议</em></h1>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_campaign.b64" %}" alt="">
+        </div>
+        <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">STRONGHOLD PROTOCOL</span></div>
+
+        <div class="sh-player">
+            <div class="sh-avatar">
+                {% if avatar %}<img src="{{ avatar }}" alt="">{% endif %}
+                <span class="sh-level">Lv.{{ level }}</span>
+            </div>
+            <div>
+                <div class="sh-name">Dr. {{ name_main }}{% if name_tag %} <span class="tag">#{{ name_tag }}</span>{% endif %}</div>
+                <div class="sh-sub">{{ server_label }} · UID {{ uid_shown }}</div>
+                {% if badge %}
+                <div class="chip-flow" style="margin-top: 6px;">
+                    <span class="chip chip--yellow"><span class="st"></span>{{ badge }}</span>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <div class="sect" style="margin-top: var(--space-3);">
+            <span class="sect-label">生涯统计</span>
+            <span class="sect-en">CAREER</span>
+        </div>
+        <div class="grid" style="grid-template-columns: repeat(5, 1fr);">
+            {% for row in stat_rows %}
+            <div class="cell">
+                <div class="cell-label">{{ row.label }}</div>
+                <div class="cell-value" style="font-size: 15px; white-space: nowrap;">{{ row.value }}</div>
+                {% if row.is_most %}<div class="cell-sub" style="color: var(--yellow-deep);">{{ row.badge }}</div>
+                {% else %}<div class="cell-sub">&nbsp;</div>{% endif %}
+            </div>
+            {% endfor %}
+        </div>
+
+        {% for block in kind_blocks %}
+        <div class="sect" style="margin-top: var(--space-3);">
+            <span class="sect-label">{{ block.label }}</span>
+            <span class="sect-en">TOP {{ block.teams | length }}</span>
+        </div>
+        {% for team in block.teams %}
+        <div class="sh-team">
+            <div class="tico">{% if team.icon %}<img src="{{ team.icon }}" alt="">{% endif %}</div>
+            <div class="tmain">
+                <div class="tname">
+                    <span>{{ team.name }}</span>
+                    {% if team.is_most_pass %}<span class="chip chip--ink">最常用</span>{% endif %}
+                    {% if team.is_fastest %}<span class="chip chip--blue">最速</span>{% endif %}
+                </div>
+                {% if team.defeats %}
+                <div class="tdef">
+                    {% for d in team.defeats %}{{ d.name }} ×{{ d.defeat }}{% if not loop.last %} · {% endif %}{% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            <div class="tnum">
+                <b>{{ team.pass_count }}</b> 次<br>
+                最快 {{ team.shortest_text }}
+            </div>
+        </div>
+        {% endfor %}
+        {% endfor %}
+
+        {% if char_upgrade %}
+        <div class="sect" style="margin-top: var(--space-3);">
+            <span class="sect-label">升金干员</span>
+            <span class="sect-en">TOP {{ char_upgrade | length }}</span>
+        </div>
+        {% for item in char_upgrade %}
+        <div class="sh-up">
+            <span>{{ item.name }}</span>
+            <span class="cnt">升金 ×{{ item.count }}</span>
+        </div>
+        {% endfor %}
+        {% endif %}
+
+        <div class="prose" style="margin-top: var(--space-3); font-size: 11px;">
+            {{ daily_note }} · 攻略见 <b>ark卫戍攻略</b> · 关卡 <b>ark关卡 AC-4</b>
+        </div>
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 卫戍协议</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// STRONGHOLD PROTOCOL // SKLAND</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>

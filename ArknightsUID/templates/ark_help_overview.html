@@ -31,7 +31,7 @@
         <div class="chip-flow" style="margin-top: var(--space-4);">
             <span class="chip chip--ink">{{ total }} 条命令</span>
             <span class="chip chip--blue">{{ groups | length }} 个分组</span>
-            <span class="chip chip--ghost">ark帮助 &lt;分组名&gt; 看明细</span>
+            <span class="chip chip--ghost">{{ prefix }}帮助 &lt;分组名&gt; 看明细</span>
         </div>
 
         <div class="sect" style="margin-top: var(--space-4);">
@@ -57,15 +57,15 @@
                 <div class="cell-label">{{ g.idx }} · {{ g.en }}</div>
                 <div class="cell-value" style="font-size: 17px;">{{ g.name }}<span style="font-size: 11px; font-weight: 400; color: var(--tx-3);">（{{ g.count }}）</span></div>
                 <div class="cell-sub">{{ g.blurb }}</div>
-                <div class="cell-eg">ark帮助 {{ g.name }}</div>
+                <div class="cell-eg">{{ prefix }}帮助 {{ g.name }}</div>
                 <img class="cell-chibi" src="data:image/png;base64,{% include g.icon %}" alt="">
             </div>
             {% endfor %}
         </div>
 
         <div class="chip-flow" style="margin-top: var(--space-4);">
-            <span class="chip chip--ghost">ark帮助 全部 · 全量命令</span>
-            <span class="chip chip--ghost">ark帮助搜索 &lt;关键词&gt; · 按词检索</span>
+            <span class="chip chip--ghost">{{ prefix }}帮助 全部 · 全量命令</span>
+            <span class="chip chip--ghost">{{ prefix }}帮助搜索 &lt;关键词&gt; · 按词检索</span>
         </div>
 
         <div class="foot">

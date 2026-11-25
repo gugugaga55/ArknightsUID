@@ -1,14 +1,119 @@
 from gsuid_core.bot import Bot
-from gsuid_core.help.utils import register_help
+from gsuid_core.help.utils import plugins_help, register_help
 from gsuid_core.models import Event
 from gsuid_core.sv import SV
 
 from ArknightsUID.utils.card import send_card_or_text
+from ArknightsUID.utils import registration as _registration
 from ArknightsUID.version import ArknightsUID_version
 
 help_sv = SV("ArknightsUID帮助", priority=5)
 
-register_help("ArknightsUID", "ark帮助")
+# HELP_GROUPS / HELP_CORE_CMDS 以默认前缀 ark 的规范形式存储（兼容既有
+# 表示）；展示层按「当前生效前缀」生成副本，不在数据上原地二次加前缀
+_DEFAULT_PREFIX = "ark"
+
+
+def _effective_prefix() -> str:
+    """本次展示用的命令前缀：按宿主触发器注册同款构造规则推导。
+
+    - force_prefix 未禁用且有值 → force 首选；否则自定义 prefix；
+      全空且 allow_empty_prefix=True → 空串（合法裸命令）；
+      显式清空 force/prefix 且 allow_empty=False → 宿主实际注册裸命令，
+      展示同样为空串（不得擅自补 ark）。
+    - 尚未完成真实注册（SV 先于本包 __init__ 导入产生占位 Plugins：
+      force/prefix/allow_empty 全空与宿主 plugins_sample 默认同形）→
+      暂用 ark 默认展示。占位与显式清空同形，靠本包自身就绪标记区分。
+    - 不用宿主 get_plugin_available_prefix：它在 disable_force_prefix=
+      False、force_prefix 为空而 prefix 非空时也返回空串，会让展示误判
+      为裸命令（此时实际触发键带 prefix）。
+    """
+    from gsuid_core.sv import SL
+
+    plugin = SL.plugins.get("ArknightsUID")
+    if plugin is None:
+        return _DEFAULT_PREFIX
+    prefixes: list[str] = []
+    if not plugin.disable_force_prefix:
+        prefixes.extend(p for p in plugin.force_prefix if p)
+    prefixes.extend(p for p in plugin.prefix if p)
+    if plugin.allow_empty_prefix:
+        prefixes.append("")
+    if not prefixes:
+        # 读模块当前字段（非 import 时冻结值）：支持"先占位 help 导入、
+        # 后完成真实注册"的生命周期顺序
+        return "" if _registration.registered else _DEFAULT_PREFIX
+    for prefix in prefixes:
+        if prefix:
+            return prefix
+    return ""  # 仅 allow_empty_prefix：合法裸命令
+
+
+def _swap_prefix(text: str, prefix: str) -> str:
+    """默认前缀 ark 的命令串 → 当前生效前缀版本（每个「 / 」备选各自换）。"""
+    if prefix == _DEFAULT_PREFIX:
+        return text
+    parts = text.split(" / ")
+    swapped = []
+    for part in parts:
+        if part.startswith(_DEFAULT_PREFIX):
+            part = prefix + part[len(_DEFAULT_PREFIX) :]
+        swapped.append(part)
+    return " / ".join(swapped)
+
+
+def _display_groups(prefix: str) -> list[dict]:
+    """HELP_GROUPS 的展示副本：cmd/eg 按当前前缀重写（原数据不动）。"""
+    return [
+        {
+            **group,
+            "cmds": [
+                {
+                    **cmd,
+                    "cmd": _swap_prefix(cmd["cmd"], prefix),
+                    "eg": _swap_prefix(cmd.get("eg", ""), prefix),
+                }
+                for cmd in group["cmds"]
+            ],
+        }
+        for group in HELP_GROUPS
+    ]
+
+
+def _display_group(group: dict, prefix: str) -> dict:
+    """单个分组的展示副本（send_ark_help 单组明细视图用）。"""
+    return {
+        **group,
+        "cmds": [
+            {
+                **cmd,
+                "cmd": _swap_prefix(cmd["cmd"], prefix),
+                "eg": _swap_prefix(cmd.get("eg", ""), prefix),
+            }
+            for cmd in group["cmds"]
+        ],
+    }
+
+
+def _display_core_cmds(prefix: str) -> list[dict]:
+    return [
+        {**cmd, "cmd": _swap_prefix(cmd["cmd"], prefix)} for cmd in HELP_CORE_CMDS
+    ]
+
+
+def _register_plugin_help() -> None:
+    """把本插件帮助入口注册进宿主插件帮助一览（按插件名替换旧记录）。
+
+    宿主 register_help 只按整字典去重、不会按插件名更新——热重载/改前缀
+    后直接追加会积累新旧入口，这里先按名清掉旧记录再注册当前前缀版本。
+    """
+    entry = f"{_effective_prefix()}帮助"
+    data = plugins_help["插件帮助一览"]["data"]
+    data[:] = [item for item in data if item.get("name") != "ArknightsUID"]
+    register_help("ArknightsUID", entry)
+
+
+_register_plugin_help()
 
 # 命令分组（ark_help.html / ark_help_overview.html 的上下文与文本帮助同源，
 # 增改命令三处同步）。blurb 是总览卡上的一行说明。
@@ -19,9 +124,9 @@ HELP_GROUPS = [
         "blurb": "绑定 / 登录 / 多账号切换",
         "cmds": [
             {
-                "cmd": "ark绑定 <凭据>",
-                "desc": "森空岛登录凭据绑定（仅私聊）",
-                "eg": "ark绑定 <森空岛凭据>",
+                "cmd": "ark绑定 [凭据]",
+                "desc": "无参查看登录方式，也可在私聊中绑定凭据",
+                "eg": "ark绑定",
             },
             {
                 "cmd": "ark扫码登录",
@@ -33,7 +138,7 @@ HELP_GROUPS = [
                 "desc": "手机号验证码网页登录（未配置 ArkLoginUrl 时回退扫码）",
                 "eg": "ark登录",
             },
-            {"cmd": "ark账号", "desc": "绑定账号列表（标注默认）", "eg": "ark账号"},
+            {"cmd": "ark账号 / ark查看绑定", "desc": "账号列表（含复用账号与默认标记；查看绑定仅私聊）", "eg": "ark账号"},
             {"cmd": "ark好友 [序号|UID] [页N] [搜索:关键词]", "desc": "游戏好友与最近在线时间", "eg": "ark好友 页2"},
             {"cmd": "ark头像分类 / ark头像列表 [页码] [分类:N]", "desc": "森空岛官方头像目录，无需登录", "eg": "ark头像列表 2"},
             {"cmd": "ark头像 <ID> [分类:N]", "desc": "按目录 ID 查看官方头像图片", "eg": "ark头像 200232"},
@@ -42,7 +147,6 @@ HELP_GROUPS = [
                 "desc": "设置默认查询账号",
                 "eg": "ark切换 2",
             },
-            {"cmd": "ark查看绑定", "desc": "本地绑定账号列表", "eg": "ark查看绑定"},
             {
                 "cmd": "ark删除登录 [UID]",
                 "desc": "删除本地登录（仅私聊）",
@@ -55,7 +159,7 @@ HELP_GROUPS = [
             },
             {
                 "cmd": "ark设置背景 + 图片 / 干员名 [皮肤名] / 重置",
-                "desc": "状态卡背景：上传图或干员皮肤立绘（管理员另有 ark设置全局背景）",
+                "desc": "状态卡背景：上传图或干员皮肤立绘（管理员另有全局背景指令）",
                 "eg": "ark设置背景 阿米娅 报童",
             },
             {
@@ -75,16 +179,16 @@ HELP_GROUPS = [
                 "desc": "理智·日常·周常合并状态卡（背景可自定义）",
                 "eg": "ark理智 2",
             },
-            {"cmd": "ark签到", "desc": "森空岛每日签到", "eg": "ark签到 2"},
+            {"cmd": "ark签到 [2号|全部]", "desc": "签到默认账号、指定账号或自己的全部账号", "eg": "ark签到 全部"},
             {"cmd": "ark剿灭", "desc": "剿灭合成玉进度卡", "eg": "ark剿灭"},
             {
                 "cmd": "ark基建",
-                "desc": "基建总览：无人机/制造/训练/换班",
+                "desc": "基建总览：无人机/制造/训练/换班（实时数据，每次查询重新拉取）",
                 "eg": "ark基建",
             },
             {
                 "cmd": "ark训练室",
-                "desc": "训练室专精进度卡（技能/专精目标/剩余/完成时刻）",
+                "desc": "训练室专精进度卡（技能/专精目标/剩余/完成时刻；实时数据）",
                 "eg": "ark训练室",
             },
             {"cmd": "ark练度统计", "desc": "全干员练度统计卡", "eg": "ark练度统计"},
@@ -123,18 +227,18 @@ HELP_GROUPS = [
                 "eg": "ark干员 银灰",
             },
             {
-                "cmd": "ark专精材料 <干员名>",
-                "desc": "技能专精材料清单卡",
-                "eg": "ark专精材料 阿米娅",
+                "cmd": "ark专精 <干员名> [技能2|二技能] [专1|专精2|专三]",
+                "desc": "技能专精效果与材料（也可用 ark专精材料 或倒序 ark银灰 专精）",
+                "eg": "ark专精 塔露拉 二技能 专三",
             },
             {
-                "cmd": "ark别名 <别名>=<干员>",
-                "desc": "自定义干员别名（干员/面板/养成/练度卡/模组生效）",
+                "cmd": "ark别名 <别名>=<干员或期名>",
+                "desc": "自定义干员或肉鸽期名别名，目标有歧义时提示选类型",
                 "eg": "ark别名 银羽毛=银灰",
             },
             {
                 "cmd": "ark别名列表 / ark别名删除 <别名>",
-                "desc": "查看 / 删除我的自定义别名",
+                "desc": "按类型查看或删除我的别名",
                 "eg": "ark别名删除 银羽毛",
             },
         ],
@@ -145,7 +249,7 @@ HELP_GROUPS = [
         "blurb": "进度 / 战绩 / 敌人 / 关卡 / 结局",
         "cmds": [
             {
-                "cmd": "ark肉鸽",
+                "cmd": "ark肉鸽 [期名] [第N局]",
                 "desc": "集成战略进度卡（各期通关/声望/收藏合计）",
                 "eg": "ark肉鸽",
             },
@@ -192,16 +296,42 @@ HELP_GROUPS = [
         ],
     },
     {
+        "name": "卫戍",
+        "en": "STRONGHOLD",
+        "blurb": "战绩 / 攻略",
+        "cmds": [
+            {
+                "cmd": "ark卫戍 [序号]",
+                "desc": "卫戍协议战绩卡：通关/最速/升金/击杀统计与最佳盟约（每日更新）",
+                "eg": "ark卫戍",
+            },
+            {
+                "cmd": "ark卫戍攻略 [盟约|策略|干员|组合]",
+                "desc": "总览卡/盟约·策略·干员查询；多词条 + 组合筛选社区攻略（AND）",
+                "eg": "ark卫戍攻略 炎+不屈+阿米娅",
+            },
+        ],
+    },
+    {
         "name": "抽卡",
         "en": "GACHA",
         "blurb": "记录 / 规划 / 模拟寻访",
         "cmds": [
-            {"cmd": "ark抽卡记录", "desc": "抽卡记录统计卡", "eg": "ark抽卡记录"},
-            {"cmd": "ark兑换码 <code>", "desc": "礼包码兑换", "eg": "ark兑换码 TFBUIT"},
-            {"cmd": "ark养成 <干员>", "desc": "养成材料缺口计算", "eg": "ark养成 银灰"},
+            {
+                "cmd": "ark抽卡记录 [页:N]",
+                "desc": "抽卡统计卡：全局摘要 + 按卡池分组（每页 3 池，页:2 翻页）",
+                "eg": "ark抽卡记录 页:2",
+            },
+            {
+                "cmd": "ark导入抽卡 <链接>",
+                "desc": "小黑盒导出链接导入（仅私聊；与官方记录合并去重）",
+                "eg": "ark导入抽卡 <链接>",
+            },
+            {"cmd": "ark兑换码 <码…> [2号|全部]", "desc": "批量兑换礼包码，支持空格或换行", "eg": "ark兑换码 码1 码2 2号"},
+            {"cmd": "ark养成 <干员…> [目标]", "desc": "按目标计算缺口并给刷图建议，支持多干员", "eg": "ark养成 银灰 精2 3技能 专3 X模 模1"},
             {
                 "cmd": "ark养成计划 <干员…>",
-                "desc": "多干员合并养成缺口+刷图建议",
+                "desc": "养成规划别名；不同目标用分号分隔",
                 "eg": "ark养成计划 银灰 42",
             },
             {
@@ -233,23 +363,24 @@ HELP_GROUPS = [
         "cmds": [
             {"cmd": "arkwiki <词条>", "desc": "PRTS 百科查询", "eg": "arkwiki 源石"},
             {
-                "cmd": "ark材料 / ark敌人",
-                "desc": "材料 / 敌方资料卡",
-                "eg": "ark材料 固源岩",
+                "cmd": "ark材料 <材料[:数量]>",
+                "desc": "材料全景：掉落、配方与当前账号库存",
+                "eg": "ark材料 固源岩组:10",
             },
+            {"cmd": "ark敌人 <敌人>", "desc": "敌方资料卡", "eg": "ark敌人 源石虫"},
             {
                 "cmd": "ark关卡 <关卡>",
                 "desc": "关卡资料卡（敌方数值/地图）",
                 "eg": "ark关卡 1-7",
             },
             {
-                "cmd": "ark公招 <标签>",
-                "desc": "公招标签组合查询",
-                "eg": "ark公招 高级资深干员",
+                "cmd": "ark公招 <标签…或截图>",
+                "desc": "查交集或自动推荐，支持高资/快活/小车等简称",
+                "eg": "ark公招 高资 术师",
             },
             {
                 "cmd": "ark公招推荐 <标签…/截图>",
-                "desc": "输标签或发公招截图→最优组合排行",
+                "desc": "强制推荐组合；只查交集用 ark公招查询",
                 "eg": "ark公招推荐 高级资深干员 术师 输出",
             },
             {
@@ -257,7 +388,7 @@ HELP_GROUPS = [
                 "desc": "危机合约赛季时间线（18 期全录）",
                 "eg": "ark危机合约",
             },
-            {"cmd": "ark日历", "desc": "活动/卡池日历", "eg": "ark日历"},
+            {"cmd": "ark日历 / ark活动", "desc": "活动、卡池与维护日历", "eg": "ark日历"},
         ],
     },
     {
@@ -292,9 +423,8 @@ HELP_GROUPS = [
         "en": "NEWS",
         "blurb": "活动 / 公告 / 每日抽签",
         "cmds": [
-            {"cmd": "ark活动进度 [活动名]", "desc": "森空岛个人活动关卡通关进度", "eg": "ark活动进度"},
-            {"cmd": "ark活动战绩 [玩法]", "desc": "引航者试炼/保全派驻/生息演算个人摘要", "eg": "ark活动战绩 引航者"},
-            {"cmd": "ark活动", "desc": "进行中活动/卡池清单", "eg": "ark活动"},
+            {"cmd": "ark活动进度 [活动名] [2号]", "desc": "森空岛个人活动关卡通关进度", "eg": "ark活动进度"},
+            {"cmd": "ark活动战绩 [玩法] [2号]", "desc": "引航者试炼/保全派驻/生息演算个人摘要", "eg": "ark活动战绩 引航者"},
             {
                 "cmd": "ark公告 [编号]",
                 "desc": "官方公告列表/正文（森空岛）",
@@ -313,6 +443,12 @@ HELP_GROUPS = [
         "en": "PUSH",
         "blurb": "自动提醒（订阅/取消成对）",
         "cmds": [
+            {"cmd": "ark订阅 [2号] / ark我的订阅", "desc": "个人提醒与当前会话订阅总览", "eg": "ark订阅 2号"},
+            {
+                "cmd": "ark订阅日常 [2号] [含签到] / ark退订日常 [2号]",
+                "desc": "批量管理选中账号的个人提醒，自动签到另选",
+                "eg": "ark订阅日常 2号 含签到",
+            },
             {
                 "cmd": "ark订阅方舟活动 / ark取消订阅方舟活动",
                 "desc": "群聊新动态推送",
@@ -367,7 +503,7 @@ HELP_GROUPS = [
             },
             {
                 "cmd": "ark指令别名列表 / ark删除指令别名 <别名>",
-                "desc": "查看 / 删除指令别名（内置：ark招募 ≡ ark公招推荐）",
+                "desc": "查看 / 删除指令别名（内置：招募 ≡ 公招推荐）",
                 "eg": "ark删除指令别名 招募",
             },
             {
@@ -432,59 +568,48 @@ def help_view(query: str) -> tuple[str, dict | None]:
     return "unknown", None
 
 
-def _group_text(group: dict) -> str:
+def _group_text(group: dict, prefix: str) -> str:
     lines = [f"「明日方舟」{group['name']}（{group['en']}）—— {group.get('blurb', '')}"]
     for cmd in group["cmds"]:
-        lines.append(f"{cmd['cmd']} - {cmd['desc']}")
-    lines.append("ark帮助 - 返回总览；ark帮助 全部 - 全量命令")
+        lines.append(f"{_swap_prefix(cmd['cmd'], prefix)} - {cmd['desc']}")
+    lines.append(f"{prefix}帮助 - 返回总览；{prefix}帮助 全部 - 全量命令")
     return "\n".join(lines)
 
 
-def _overview_text() -> str:
+def _overview_text(prefix: str) -> str:
     total = sum(len(g["cmds"]) for g in HELP_GROUPS)
     lines = ["「明日方舟」ArknightsUID", ""]
     lines.append("自有森空岛登录（优先），无则回退 EndUID；不会回显登录凭据。")
     lines.append("")
     lines.append(
-        f"共 {total} 条命令 / {len(HELP_GROUPS)} 组，「ark帮助 分组名」看明细："
+        f"共 {total} 条命令 / {len(HELP_GROUPS)} 组，「{prefix}帮助 分组名」看明细："
     )
     for i, group in enumerate(HELP_GROUPS, start=1):
         lines.append(
             f"{i:02d} {group['name']}（{len(group['cmds'])}）{group.get('blurb', '')}"
         )
     lines.append("")
-    lines.append("常用：" + " · ".join(c["cmd"] for c in HELP_CORE_CMDS))
-    lines.append("ark帮助 全部 - 全量命令；ark帮助搜索 <关键词> - 按词检索")
+    lines.append("常用：" + " · ".join(_swap_prefix(c["cmd"], prefix) for c in HELP_CORE_CMDS))
+    lines.append(f"{prefix}帮助 全部 - 全量命令；{prefix}帮助搜索 <关键词> - 按词检索")
     return "\n".join(lines)
 
 
-def _help_text() -> str:
+def _help_text(prefix: str) -> str:
     lines = ["「明日方舟」ArknightsUID", ""]
     lines.append("自有森空岛登录（优先），无则回退 EndUID；不会回显登录凭据。")
     lines.append("")
     for group in HELP_GROUPS:
         lines.append(f"—— {group['name']} ——")
         for cmd in group["cmds"]:
-            lines.append(f"{cmd['cmd']} - {cmd['desc']}")
+            lines.append(f"{_swap_prefix(cmd['cmd'], prefix)} - {cmd['desc']}")
         lines.append("")
-    lines.append("ark帮助 <分组> - 单组明细；ark帮助搜索 <关键词> - 按词检索")
+    lines.append(f"{prefix}帮助 - 查看本帮助")
     return "\n".join(lines)
 
 
-def _help_text() -> str:
-    lines = ["「明日方舟」ArknightsUID", ""]
-    lines.append("自有森空岛登录（优先），无则回退 EndUID；不会回显登录凭据。")
-    lines.append("")
-    for group in HELP_GROUPS:
-        lines.append(f"—— {group['name']} ——")
-        for cmd in group["cmds"]:
-            lines.append(f"{cmd['cmd']} - {cmd['desc']}")
-        lines.append("")
-    lines.append("ark帮助 - 查看本帮助")
-    return "\n".join(lines)
-
-
-HELP_TEXT = _help_text()
+def help_text() -> str:
+    """全量帮助文本（按当前生效前缀生成；供测试与其他模块取用）。"""
+    return _help_text(_effective_prefix())
 
 # 帮助卡每条命令的 Q 版干员图标（EndUID 帮助图式：每条命令一个对应角色）。
 # 资产为 templates/assets/chibi/ 下的烘焙 b64（PRTS 官方表情套组，零运行时依赖）。
@@ -494,6 +619,7 @@ _GROUP_CHIBI_POOLS: dict[str, list[str]] = {
     "状态": ["mmz_2", "mmz_1", "mmz_5", "mmz_3", "mmz_4", "mmz_6"],
     "干员": ["mmz_3", "vvm_4", "bss_8", "mmz_5", "bss_2", "mmz_2"],
     "肉鸽": ["vvm_2", "bss_4", "vvm_6", "mmz_6", "bss_6", "vvm_4"],
+    "卫戍": ["bss_6", "mmz_3", "vvm_2", "bss_1", "mmz_5", "vvm_6"],
     "抽卡": ["vvm_6", "vvm_1", "vvm_5", "vvm_2", "vvm_3", "vvm_4"],
     "Wiki": ["mmz_5", "bss_8", "vvm_4", "mmz_3", "bss_2", "vvm_5"],
     "刷图": ["bss_4", "mmz_4", "vvm_3", "bss_5", "mmz_1", "vvm_1"],
@@ -526,14 +652,15 @@ def assign_group_icons(groups: list[dict]) -> list[dict]:
     return result
 
 
-def _overview_context() -> dict:
-    """帮助总览卡上下文（组清单 + 核心命令）。
+def _overview_context(prefix: str) -> dict:
+    """帮助总览卡上下文（组清单 + 核心命令，均按当前前缀生成展示副本）。
 
     每组配一个 Q 版代表图标（组池第一个；烘焙资产，与全量帮助卡同源）。
     """
     return {
         "version": ArknightsUID_version,
-        "core_cmds": HELP_CORE_CMDS,
+        "prefix": prefix,
+        "core_cmds": _display_core_cmds(prefix),
         "groups": [
             {
                 "idx": f"{i:02d}",
@@ -553,25 +680,30 @@ def _overview_context() -> dict:
 
 
 # 「帮助搜索」关键字长于「帮助」（core 前缀分发按关键字降序），
-# ark帮助搜索 恒先命中本处理器，不会被 ark帮助 抢走
+# <前缀>帮助搜索 恒先命中本处理器，不会被 <前缀>帮助 抢走
 @help_sv.on_command(("帮助搜索", "搜指令"), block=True)
 async def search_ark_help(bot: Bot, ev: Event) -> None:
-    """ark帮助搜索 关键词 → 命中命令的纯文本清单（卡片帮助不打断）。"""
+    """帮助搜索 关键词 → 命中命令的纯文本清单（按当前前缀展示）。"""
+    prefix = _effective_prefix()
     keyword = (ev.text or "").strip()
     if not keyword:
         return await _send_help_text(
-            bot, ev, "用法：ark帮助搜索 关键词（如 ark帮助搜索 肉鸽）"
+            bot, ev, f"用法：{prefix}帮助搜索 关键词（如 {prefix}帮助搜索 肉鸽）"
         )
     lowered = keyword.lower()
     hits: list[str] = []
     for group in HELP_GROUPS:
         for cmd in group["cmds"]:
-            haystack = f"{cmd['cmd']} {cmd['desc']} {cmd.get('eg', '')}".lower()
+            shown = _swap_prefix(cmd["cmd"], prefix)
+            shown_eg = _swap_prefix(cmd.get("eg", ""), prefix)
+            haystack = (
+                f"{cmd['cmd']} {shown} {cmd['desc']} {cmd.get('eg', '')} {shown_eg}"
+            ).lower()
             if lowered in haystack:
-                hits.append(f"[{group['name']}] {cmd['cmd']} - {cmd['desc']}")
+                hits.append(f"[{group['name']}] {shown} - {cmd['desc']}")
     if not hits:
         return await _send_help_text(
-            bot, ev, f"没有命中「{keyword}」的命令；ark帮助 查看总览。"
+            bot, ev, f"没有命中「{keyword}」的命令；{prefix}帮助 查看总览。"
         )
     lines = [f"「{keyword}」命中 {len(hits)} 条命令："]
     lines.extend(f"- {h}" for h in hits[:15])
@@ -582,35 +714,50 @@ async def search_ark_help(bot: Bot, ev: Event) -> None:
 
 @help_sv.on_command(("帮助", "help", "方舟帮助", "bz"), block=True)
 async def send_ark_help(bot: Bot, ev: Event) -> None:
-    """两级帮助：无参=总览卡；「全部」=全量卡；分组名/序号=单组明细。"""
+    """两级帮助：无参=总览卡；「全部」=全量卡；分组名/序号=单组明细。
+
+    入口/文本/图上下文均按本次调用时的生效前缀生成（自定义 prefix 或
+    禁 force_prefix 后不再展示失效的 ark 命令），并同步刷新宿主帮助
+    一览里的入口记录。
+    """
+    _register_plugin_help()
+    prefix = _effective_prefix()
     view, group = help_view(ev.text)
     if view == "overview":
         await send_card_or_text(
-            bot, ev, "ark_help_overview.html", _overview_context(), _overview_text()
+            bot,
+            ev,
+            "ark_help_overview.html",
+            _overview_context(prefix),
+            _overview_text(prefix),
         )
         return
     if view == "all":
         # 全量卡逐命令带 Q 版图标（烘焙资产，无运行时下载）
         context = {
             "version": ArknightsUID_version,
-            "groups": assign_group_icons(HELP_GROUPS),
+            "prefix": prefix,
+            "groups": assign_group_icons(_display_groups(prefix)),
         }
-        await send_card_or_text(bot, ev, "ark_help.html", context, HELP_TEXT)
+        await send_card_or_text(bot, ev, "ark_help.html", context, _help_text(prefix))
         return
     if view == "group" and group is not None:
         context = {
             "version": ArknightsUID_version,
-            "groups": assign_group_icons([group]),
+            "prefix": prefix,
+            "groups": assign_group_icons([_display_group(group, prefix)]),
             "focus": str(group["name"]),
         }
-        await send_card_or_text(bot, ev, "ark_help.html", context, _group_text(group))
+        await send_card_or_text(
+            bot, ev, "ark_help.html", context, _group_text(group, prefix)
+        )
         return
     names = "、".join(str(g["name"]) for g in HELP_GROUPS)
     await _send_help_text(
         bot,
         ev,
         f"未找到分组「{(ev.text or '').strip()}」。可用：{names}；"
-        "ark帮助 看总览，ark帮助 全部 看全量。",
+        f"{prefix}帮助 看总览，{prefix}帮助 全部 看全量。",
     )
 
 

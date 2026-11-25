@@ -1,0 +1,164 @@
+<!--
+  ark_stronghold_guide.html —— 卫戍协议模式总览卡（攻略）
+  设计语言：罗德岛终端（见 ark_base.css 头部注释）
+  上下文（由 arknightsuid_stronghold._build_guide_context 组装）：
+    intro: str                                      玩法导语（PRTS 简述）
+    supply_sections: [{name, prose, bullets}]       物资的调配：干员/盟约/特质/道具
+    flow_bullets: [str]                             模拟流程三阶段
+    coop_modes: [{name, tagline, bullets}]          联机方式
+    difficulty_modes: [{name, tagline, bullets}]    难度模式
+    source_url: str                                 PRTS 页链接
+    source_note: str                                数据源声明
+    version: str
+-->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>{% include "ark_head.html" %}</head>
+<body>
+    <style>
+        .gd-entry {
+            padding: 9px 10px;
+            margin-top: var(--space-2);
+            border: 1px solid var(--line);
+            background: var(--panel);
+        }
+        .gd-entry .ename {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--tx-0);
+        }
+        .gd-entry .ename .etag {
+            font-size: 10px;
+            font-weight: 500;
+            color: var(--tx-2);
+        }
+        .gd-bullet {
+            display: flex;
+            gap: 7px;
+            margin-top: 5px;
+            font-size: 11px;
+            line-height: 1.55;
+            color: var(--tx-1);
+        }
+        .gd-bullet .dot {
+            flex-shrink: 0;
+            width: 4px;
+            height: 4px;
+            margin-top: 7px;
+            background: var(--yellow-deep);
+        }
+        .gd-flow {
+            display: flex;
+            gap: 7px;
+            margin-top: 5px;
+            font-size: 11px;
+            line-height: 1.55;
+            color: var(--tx-1);
+        }
+        .gd-flow .no {
+            flex-shrink: 0;
+            font-family: var(--mono);
+            font-size: 10px;
+            font-weight: 700;
+            color: var(--yellow-deep);
+        }
+        /* takumi 不画伪元素：全部装饰用真实元素 */
+    </style>
+    <div class="container" data-ghost="GUIDE">
+        <div class="mast">
+            <span class="mast-brand">ArknightsUID <em>// 卫戍协议 GUIDE</em></span>
+            <span class="mast-meta"><span class="idx">41</span>WIKI</span>
+        </div>
+
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">模式总览 · 玩法攻略</div>
+                <h1 class="title title--s">卫戍<em>协议</em></h1>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_stage.b64" %}" alt="">
+        </div>
+        <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">STRONGHOLD PROTOCOL</span></div>
+
+        {% if intro %}
+        <div class="prose" style="margin-top: var(--space-3);">{{ intro }}</div>
+        {% endif %}
+
+        <div class="sect" style="margin-top: var(--space-3);">
+            <span class="sect-label">模拟流程</span>
+            <span class="sect-en">FLOW</span>
+        </div>
+        {% for item in flow_bullets %}
+        <div class="gd-flow"><span class="no">{{ '%02d' % loop.index }}</span><span>{{ item }}</span></div>
+        {% endfor %}
+
+        {% for section in supply_sections %}
+        <div class="sect" style="margin-top: var(--space-3);">
+            <span class="sect-label">{{ section.name }}</span>
+            <span class="sect-en">{{ section.en | default('SUPPLY') }}</span>
+        </div>
+        {% if section.prose %}
+        <div class="prose" style="font-size: 11px;">{{ section.prose }}</div>
+        {% endif %}
+        {% for bullet in section.bullets %}
+        <div class="gd-bullet"><span class="dot"></span><span>{{ bullet }}</span></div>
+        {% endfor %}
+        {% endfor %}
+
+        {% if coop_modes %}
+        <div class="sect" style="margin-top: var(--space-3);">
+            <span class="sect-label">联机方式</span>
+            <span class="sect-en">CO-OP</span>
+        </div>
+        {% for entry in coop_modes %}
+        <div class="gd-entry">
+            <div class="ename"><span>{{ entry.name }}</span>{% if entry.tagline %}<span class="etag">{{ entry.tagline }}</span>{% endif %}</div>
+            {% for bullet in entry.bullets[:3] %}
+            <div class="gd-bullet"><span class="dot"></span><span>{{ bullet }}</span></div>
+            {% endfor %}
+        </div>
+        {% endfor %}
+        {% endif %}
+
+        {% if difficulty_modes %}
+        <div class="sect" style="margin-top: var(--space-3);">
+            <span class="sect-label">难度模式</span>
+            <span class="sect-en">MODES</span>
+        </div>
+        <div class="rows">
+            {% for entry in difficulty_modes %}
+            <div class="row">
+                <span class="row-value" style="font-size: 13px;">{{ entry.name }}{% if entry.tagline %}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 6px;">{{ entry.tagline }}</span>{% endif %}</span>
+                <span class="bar-num">{{ entry.bullets | length }} 条要点</span>
+            </div>
+            {% endfor %}
+        </div>
+        {% for entry in difficulty_modes %}
+        {% if entry.bullets %}
+        <div class="gd-entry">
+            <div class="ename"><span>{{ entry.name }}</span></div>
+            {% for bullet in entry.bullets %}
+            <div class="gd-bullet"><span class="dot"></span><span>{{ bullet }}</span></div>
+            {% endfor %}
+        </div>
+        {% endif %}
+        {% endfor %}
+        {% endif %}
+
+        <div class="prose" style="margin-top: var(--space-3); font-size: 11px;">
+            关卡详情：<b>ark关卡 AC-4</b>（AC-4 ~ AC-9）· 战绩查询：<b>ark卫戍</b>
+        </div>
+
+        <div class="foot">
+            <span class="foot-brand">ArknightsUID · 卫戍协议攻略</span>
+            <span class="foot-meta mono">VER {{ version }}</span>
+        </div>
+        <div class="ticker">
+            <span>// STRONGHOLD GUIDE // PRTS WIKI</span>
+            <span>// RHODES ISLAND TERMINAL</span>
+        </div>
+    </div>
+</body>
+</html>
