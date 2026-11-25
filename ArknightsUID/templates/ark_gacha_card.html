@@ -1,5 +1,5 @@
 <!--
-  ark_gacha_card.html —— 抽卡记录统计卡（#8）
+  ark_gacha_card.html —— 抽卡记录统计卡（#8，按卡池分组小黑盒式）
   设计语言：罗德岛终端（见 ark_base.css 头部注释）
   上下文：
     name: str, uid: str
@@ -9,14 +9,19 @@
     avg_six: str          平均多少抽出六星（如 "37.5"）
     five_count: int       五星数量
     five_rate: str        五星率（如 "12.67"）
-    pity: int             距上次六星已垫抽数
+    pity: int             距上次六星已垫抽数（全局）
     pity_max: int         保底阈值
-    pity_fives: [{name: str, avatar: str}]   当前垫刀段已出五星（截断）
-    pity_fives_extra: int                    垫刀段五星溢出数（+N）
-    recent: [{name: str, pool: str, pull: int, date: str, avatar: str,
-              fives: [{name: str, avatar: str}], fives_extra: int}]
-                                    最近六星（pull=该六星是第几抽出的/垫了几抽；
-                                    date=MM-DD；fives=该段内五星，小黑盒式挂六星条目下）
+    pity_fives: [{name, char_id, avatar}]       全局当前垫刀段五星（截断）
+    pity_fives_extra: int
+    pools: [{pool_id, pool_name, rule_type, total, six_count, avg_six,
+             pity, pity_max, first_date, last_date, sixes_total,
+             sixes: [{name, char_id, avatar, pull, date, is_new, is_up,
+                      fives: [{name, char_id, avatar}], fives_extra}],
+             pity_fives: [...], pity_fives_extra}]
+                          当前页卡池（每池独立统计；is_up 三态：
+                          true=UP / false=非UP / None=名单缺失不判定）
+    page: int, pages: int, pool_total: int    分页信息
+    warning: str          同步警告（空串无）
     version: str
 -->
 <!DOCTYPE html>
@@ -68,58 +73,82 @@
                 <div class="cell-value">{{ pity }}</div>
             </div>
             <div class="cell">
-                <div class="cell-label">保底 MAX</div>
-                <div class="cell-value">{{ pity_max }}</div>
+                <div class="cell-label">卡池 POOLS</div>
+                <div class="cell-value">{{ pool_total }}</div>
             </div>
         </div>
 
-        <div class="sect">
-            <span class="sect-label bk">保底进度</span>
-            <span class="sect-en">PITY // {{ pity }} / {{ pity_max }}</span>
+        {% for p in pools %}
+        <div class="sect" style="margin-top: var(--space-5);">
+            <span class="sect-label bk">{{ p.pool_name or "未知卡池" }}</span>
+            <span class="sect-en">{{ p.first_date }} → {{ p.last_date }}</span>
         </div>
+        <div class="grid grid-4" style="margin-top: var(--space-3);">
+            <div class="cell">
+                <div class="cell-label">抽数 PULLS</div>
+                <div class="cell-value">{{ p.total }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">六星 6★</div>
+                <div class="cell-value">{{ p.six_count }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">平均 AVG</div>
+                <div class="cell-value">{{ p.avg_six }}</div>
+            </div>
+            <div class="cell">
+                <div class="cell-label">池内垫刀 PITY</div>
+                <div class="cell-value">{{ p.pity }}</div>
+            </div>
+        </div>
+        {% set bar_pct = (p.pity * 100 / p.pity_max) | round | int if p.pity_max else 0 %}
         <div class="bar is-yellow" style="margin-top: var(--space-3);">
-            <i style="width: {{ (pity * 100 / pity_max) | round | int }}%;"></i>
+            <i style="width: {{ bar_pct if bar_pct <= 100 else 100 }}%;"></i>
         </div>
-        {% if pity_fives %}
-        <div style="display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: var(--space-3);">
-            {% for f in pity_fives %}
-            {% if f.avatar %}<span class="aicon" title="{{ f.name }}"><img src="{{ f.avatar }}" alt="{{ f.name }}"></span>{% else %}<span class="chip chip--ghost">{{ f.name }}</span>{% endif %}
-            {% endfor %}
-            {% if pity_fives_extra %}<span class="chip chip--ghost">+{{ pity_fives_extra }}</span>{% endif %}
-            <span class="u-mute" style="font-size: 10px; margin-left: 2px;">本段已出五星 ×{{ pity_fives | length + pity_fives_extra }}</span>
-        </div>
-        {% endif %}
-
-        <div class="sect">
-            <span class="sect-label bk">最近六星</span>
-            <span class="sect-en">RECENT // {{ recent | length }}</span>
-        </div>
+        {% if p.sixes %}
         <div class="rows">
-            {% for r in recent %}
-            <div class="row"{% if r.fives %} style="border-bottom: none; padding-bottom: 2px;"{% endif %}>
-                <span class="row-value" style="display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px;">{% if r.avatar %}<span class="aicon"><img src="{{ r.avatar }}" alt=""></span>{% endif %}{{ r.name }}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 4px;">{{ r.pool }}{% if r.date %} · {{ r.date }}{% endif %}</span></span>
-                <span class="bar-num">{{ r.pull }} 抽</span>
+            {% for s in p.sixes %}
+            <div class="row"{% if s.fives %} style="border-bottom: none; padding-bottom: 2px;"{% endif %}>
+                <span class="row-value" style="display: inline-flex; align-items: center; gap: 8px; min-width: 0; font-size: 13px;">{% if s.avatar %}<span class="aicon"><img src="{{ s.avatar }}" alt=""></span>{% endif %}{{ s.name }}{% if s.is_new %}<span class="chip chip--yellow" style="height: 16px; font-size: 9px; padding: 0 5px;">NEW</span>{% endif %}{% if s.is_up is not none %}<span class="chip {{ 'chip--yellow' if s.is_up else 'chip--ghost' }}" style="height: 16px; font-size: 9px; padding: 0 5px;">{{ 'UP' if s.is_up else '非UP' }}</span>{% endif %}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 4px;">{% if s.date %}{{ s.date }}{% endif %}</span></span>
+                <span class="bar-num">{{ s.pull }} 抽</span>
             </div>
-            {% if r.fives %}
+            {% if s.fives %}
             <div class="row" style="padding-top: 2px;">
                 <span style="display: inline-flex; align-items: center; gap: 4px; flex-wrap: wrap; min-width: 0;">
-                    {% for f in r.fives %}
+                    {% for f in s.fives %}
                     {% if f.avatar %}<span class="aicon" title="{{ f.name }}"><img src="{{ f.avatar }}" alt="{{ f.name }}"></span>{% else %}<span class="chip chip--ghost">{{ f.name }}</span>{% endif %}
                     {% endfor %}
-                    {% if r.fives_extra %}<span class="chip chip--ghost">+{{ r.fives_extra }}</span>{% endif %}
+                    {% if s.fives_extra %}<span class="chip chip--ghost">+{{ s.fives_extra }}</span>{% endif %}
                 </span>
-                <span class="row-label">五星 ×{{ r.fives | length + r.fives_extra }}</span>
+                <span class="row-label">本段五星 ×{{ s.fives | length + s.fives_extra }}</span>
             </div>
             {% endif %}
             {% endfor %}
         </div>
+        {% if p.sixes_total > p.sixes | length %}
+        <div class="u-mute" style="font-size: 10px; margin-top: 4px;">（该池六星共 {{ p.sixes_total }} 个，仅列最近 {{ p.sixes | length }} 个）</div>
+        {% endif %}
+        {% else %}
+        <div class="u-mute" style="font-size: 10px; margin-top: var(--space-3);">（该池暂无六星记录）</div>
+        {% endif %}
+        {% if p.pity_fives %}
+        <div style="display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-top: var(--space-2);">
+            {% for f in p.pity_fives %}
+            {% if f.avatar %}<span class="aicon" title="{{ f.name }}"><img src="{{ f.avatar }}" alt="{{ f.name }}"></span>{% else %}<span class="chip chip--ghost">{{ f.name }}</span>{% endif %}
+            {% endfor %}
+            {% if p.pity_fives_extra %}<span class="chip chip--ghost">+{{ p.pity_fives_extra }}</span>{% endif %}
+            <span class="u-mute" style="font-size: 10px; margin-left: 2px;">池内垫刀段已出五星 ×{{ p.pity_fives | length + p.pity_fives_extra }}</span>
+        </div>
+        {% endif %}
+        {% endfor %}
 
+        {% if pool_data_hint %}<div class="u-mute" style="font-size: 10px; margin-top: var(--space-3);">{{ pool_data_hint }}</div>{% endif %}
         <div class="foot">
-            <span class="foot-brand">ArknightsUID · 抽卡</span>
+            <span class="foot-brand">ArknightsUID · 抽卡 · 卡池 {{ page | default(1) }}/{{ pages | default(1) }} 页（共 {{ pool_total | default(pools | default([]) | length) }} 池{% if (page | default(1)) < (pages | default(1)) %}，下一页用 页:{{ (page | default(1)) + 1 }}{% endif %}）</span>
             <span class="foot-meta mono">VER {{ version }}</span>
         </div>
         <div class="ticker">
-            <span>// GACHA REPORT</span>
+            <span>// GACHA REPORT{% if warning %} // ⚠ {{ warning }}{% endif %}</span>
             <span>// RHODES ISLAND TERMINAL</span>
         </div>
     </div>

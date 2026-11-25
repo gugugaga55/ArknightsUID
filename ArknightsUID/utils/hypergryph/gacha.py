@@ -16,7 +16,8 @@
 from __future__ import annotations
 
 import asyncio
-import time
+import heapq
+from collections import defaultdict
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -39,6 +40,10 @@ PITY_DISPLAY_MAX = 99
 # 单个六星段/垫刀段展示的五星头像上限（超出折叠为 +N）
 _FIVES_DISPLAY_MAX = 12
 
+# 按池展示：每页卡池数与每池六星条目上限（防长图无限增长）
+POOL_PAGE_SIZE = 3
+_POOL_SIXES_MAX = 5
+
 _LOGS_NAME = "gacha_logs.json"
 # 历史补拉游标状态（保险丝中断处，按类别记下一页起点）
 _SYNC_STATE_NAME = "gacha_sync_state.json"
@@ -47,6 +52,26 @@ _SYNC_STATE_NAME = "gacha_sync_state.json"
 def _sync_state_path(uid: str) -> Path:
     # 挂在 _logs_path 同目录：测试替换 _logs_path 时状态文件随之隔离
     return _logs_path(uid).parent / _SYNC_STATE_NAME
+
+
+async def _write_gacha_json(path: Path, payload: Any) -> None:
+    """线程写盘无法取消；锁持有者必须等到写完才传播取消。"""
+    write = asyncio.create_task(write_player_json(path, payload))
+    cancelled: asyncio.CancelledError | None = None
+    while True:
+        try:
+            await asyncio.shield(write)
+            break
+        except asyncio.CancelledError as exc:
+            if write.cancelled():
+                raise
+            cancelled = cancelled or exc
+        except Exception as exc:
+            if cancelled is not None:
+                raise cancelled from exc
+            raise
+    if cancelled is not None:
+        raise cancelled
 
 
 async def _load_sync_floors(uid: str) -> dict[str, dict[str, Any]]:
@@ -71,7 +96,7 @@ async def _save_sync_floors(uid: str, floors: dict[str, dict[str, Any]]) -> None
             pass
         return
     try:
-        await write_player_json(_sync_state_path(uid), {"floors": floors})
+        await _write_gacha_json(_sync_state_path(uid), {"floors": floors})
     except Exception as exc:
         logger.warning(
             f"[ArknightsUID·抽卡] 补拉游标写入失败 uid={uid}: {exc.__class__.__name__}"
@@ -124,26 +149,116 @@ def _safe_pos(record: dict[str, Any]) -> int:
         return 0
 
 
-def _record_key(record: dict[str, Any]) -> tuple:
+def _safe_ts_ms_raw(record: dict[str, Any]) -> int:
+    """原始毫秒时间戳（无该字段或脏数据返回 0）。"""
+    try:
+        val = int(record.get("gacha_ts_ms") or 0)
+    except (TypeError, ValueError):
+        return 0
+    return val if val > 10**12 else 0
+
+
+def _safe_ts_ms(record: dict[str, Any]) -> int:
+    """用于排序的毫秒时间戳：有 gacha_ts_ms 用精确值，否则秒×1000。"""
+    raw_ms = _safe_ts_ms_raw(record)
+    return raw_ms if raw_ms else _safe_ts(record) * 1000
+
+
+def _cross_source_key(record: dict[str, Any]) -> tuple:
+    """跨来源/同来源单条抽取的精确身份：pool_name + 秒 + 毫秒 + 位次 + 干员身份。
+
+    不含 category（小黑盒没有官方 category）；官方同秒两次单抽（pos 同为 0
+    但毫秒不同）靠 gacha_ts_ms 区分；跨源（官方有 ms / 小黑盒无 ms）与
+    旧存量（无 ms）在 merge_records 第二阶段一对一归并。
+    """
+    char_id = str(record.get("char_id") or "")
+    identity = char_id or _norm_char_name(str(record.get("name") or ""))
     return (
-        str(record.get("category", "")),
-        str(record.get("gacha_ts", "")),
-        str(record.get("pos", "")),
-        str(record.get("char_id", "")),
+        str(record.get("pool_name") or ""),
+        _safe_ts(record),
+        _safe_ts_ms_raw(record),
+        _safe_pos(record),
+        identity,
     )
 
 
+def _norm_char_name(name: str) -> str:
+    """跨源干员名规范化：去空白。名称级匹配只做这一步轻归一，
+    已知小黑盒别名映射在 heybox 适配器导入时处理（这里不做猜测规则）。"""
+    return "".join(name.split())
+
+
+def _is_official(record: dict[str, Any]) -> bool:
+    """旧记录没有 source 字段时按官方历史记录处理。"""
+    return str(record.get("source") or "official") == "official"
+
+
+def _record_prefer_official(
+    local: dict[str, Any], incoming: dict[str, Any]
+) -> dict[str, Any]:
+    """重复记录的取舍：优先保留官方副本，用另一来源补齐空字段。
+
+    官方记录可能缺 pool_id/is_new 细节，小黑盒记录可能补得上；反向亦然。
+    补齐只填空字段，不覆盖已有值。注意：basis 与本条记录自身的 rarity
+    强绑定，绝不能直接把 0 基记录的 basis="0" 贴到 1 基存量记录（rarity=5
+    五星会被错算成 5+1=6 六星）。
+    """
+    official, other = (
+        (local, incoming) if _is_official(local) else (incoming, local)
+    )
+    if _is_official(local) == _is_official(incoming):
+        # 同为官方（旧/新拉取）或同为小黑盒：取信息更全的一条（字段非空多者）
+        local_full = sum(1 for v in local.values() if v not in ("", None, 0, False))
+        incoming_full = sum(
+            1 for v in incoming.values() if v not in ("", None, 0, False)
+        )
+        base, extra = (local, incoming) if local_full >= incoming_full else (incoming, local)
+    else:
+        base, extra = official, other
+    merged = dict(base)
+    had_rarity = merged.get("rarity") not in ("", None)
+    for key, value in extra.items():
+        if key == "basis":
+            continue
+        if merged.get(key) in ("", None) and value not in ("", None):
+            merged[key] = value
+    if merged.get("basis") in ("", None) and extra.get("basis") in ("0", "1"):
+        if not had_rarity or merged.get("rarity") == extra.get("rarity"):
+            merged["basis"] = extra["basis"]
+        else:
+            try:
+                mr = int(merged.get("rarity") or 0)
+                er = int(extra.get("rarity") or 0)
+                if extra["basis"] == "0" and mr == er + 1:
+                    merged["basis"] = "1"
+                elif extra["basis"] == "1" and mr + 1 == er:
+                    merged["basis"] = "0"
+            except (TypeError, ValueError):
+                pass
+    return merged
+
+
 def _normalize_record(raw: dict[str, Any], category: str) -> dict[str, Any]:
-    return {
+    raw_ts = raw.get("gachaTs")
+    try:
+        raw_ts_int = int(raw_ts)
+    except (TypeError, ValueError):
+        raw_ts_int = 0
+    rec: dict[str, Any] = {
         "category": str(category),
         "char_id": str(raw.get("charId") or raw.get("charIdList") or ""),
         "name": str(raw.get("charName") or raw.get("name") or ""),
         "rarity": int(raw.get("rarity") or 0),
         "is_new": bool(raw.get("isNew")),
-        "gacha_ts": _norm_ts(raw.get("gachaTs")),
+        "gacha_ts": _norm_ts(raw_ts),
         "pos": int(raw.get("pos") or 0),
         "pool_name": str(raw.get("poolName") or raw.get("pool") or ""),
+        "pool_id": str(raw.get("poolId") or raw.get("pool_id") or ""),
+        "source": "official",
     }
+    if raw_ts_int > 10**12:
+        rec["gacha_ts_ms"] = raw_ts_int
+    return rec
 
 
 def _normalize_rarity(record: dict[str, Any], legacy_one_based: bool) -> int:
@@ -152,9 +267,8 @@ def _normalize_rarity(record: dict[str, Any], legacy_one_based: bool) -> int:
     记录带 `basis` 字段（拉取时会话级判定并持久化，审计 #13）：
     - "0"：0 基口径（0-5）→ +1
     - "1"：1 基口径（1-6）→ 原值
-    - 无 basis（历史存量）：按整份日志的全局口径（legacy_one_based，
-      出现过 6 → 1 基）——跨口径混存的旧数据无法逐条判定，全局口径是
-      与旧版一致的最优近似；新拉取的记录从此不再有该歧义。
+    - 无 basis（历史存量）：按无 basis 记录的全局口径（legacy_one_based，
+      出现过 6 → 1 基）。
     """
     rarity = record.get("rarity", 0)
     basis = record.get("basis")
@@ -162,39 +276,191 @@ def _normalize_rarity(record: dict[str, Any], legacy_one_based: bool) -> int:
         return rarity + 1
     if basis == "1":
         return rarity
-    # 存量记录：整份日志同一口径（0 基 +1 / 1 基原值），
-    # 六星判定结果与旧版全局阈值完全一致
     return rarity if legacy_one_based else rarity + 1
 
 
 def _legacy_one_based(records: list[dict[str, Any]]) -> bool:
-    """存量日志（无 basis 字段）的全局量纲推断：出现过 6 → 1 基。"""
-    return any(r.get("rarity") == 6 for r in records)
+    """存量日志（仅统计无显式 basis 字段的记录）的全局量纲推断：出现过 6 → 1 基。"""
+    return any(
+        r.get("rarity") == 6
+        for r in records
+        if r.get("basis") not in ("0", "1")
+    )
 
 
-def _session_basis(records: list[dict[str, Any]]) -> str:
-    """本次拉取批次的量纲判定（会话级）：出现过 0 → 0 基；出现过 6 → 1 基；
-    都无（3-5 集合，两种口径同形）→ 按官方主流量纲 0 基。"""
+def _session_basis(
+    records: list[dict[str, Any]],
+    local: list[dict[str, Any]] | None = None,
+) -> str:
+    """本次拉取批次的量纲判定（会话级）：
+    - 出现 0/1/2（三星在 0 基为 2，1 基寻访最低为 3）→ 必为 0 基
+    - 出现 6 → 必为 1 基
+    - 仅含 3-5（小批量单抽未出三星也未出 6）：若本地官方记录已确认为 1 基则继承 "1"，
+      否则按官方主流量纲 "0"。
+    """
     values = [r.get("rarity", 0) for r in records]
+    if any(isinstance(v, int) and v <= 2 for v in values):
+        return "0"
     if any(v == 6 for v in values):
         return "1"
+    if local:
+        official_local = [r for r in local if _is_official(r)]
+        if official_local and not any(r.get("basis") == "0" for r in official_local):
+            if any(r.get("basis") == "1" for r in official_local) or _legacy_one_based(
+                official_local
+            ):
+                return "1"
     return "0"
 
 
 def merge_records(
-    local: list[dict[str, Any]], incoming: list[dict[str, Any]]
+    local: list[dict[str, Any]], incoming: list[dict[str, Any]], *, truncate: bool = True
 ) -> list[dict[str, Any]]:
-    """按去重键合并，按时间新→旧排序，截断保留上限。
+    """按跨源去重键合并，按时间新→旧排序，截断保留上限。
 
-    键从记录字段现算（本地文件里的记录无 _key，键也不落盘）。
+    先按池名、时间、位次和干员身份精确合并；同池同秒同名但位次或
+    charId 缺失的跨源记录再一对一匹配。重复时优先保留官方副本，
+    用另一来源补齐空字段；不同秒不做未经证实的近似匹配。
     """
-    merged: dict[tuple, dict[str, Any]] = {}
-    for record in local:
-        merged[_record_key(record)] = record
-    for record in incoming:
-        merged[_record_key(record)] = record
-    result = sorted(merged.values(), key=lambda r: (-_safe_ts(r), -_safe_pos(r)))
-    return result[:_KEEP_LIMIT]
+    # 先按精确键合并，并保留每条记录已经匹配过的来源，防止十连中
+    # 同名干员的第二条小黑盒记录再次匹配同一条官方记录。
+    merged: dict[tuple, tuple[dict[str, Any], set[str]]] = {}
+    for record in [*local, *incoming]:
+        key = _cross_source_key(record)
+        source = "official" if _is_official(record) else "heybox"
+        if key in merged:
+            previous, sources = merged[key]
+            merged[key] = (_record_prefer_official(previous, record), sources | {source})
+        else:
+            merged[key] = (record, {source})
+
+    entries = list(merged.values())
+    removed: set[int] = set()
+
+    # 兼容存量官方记录（无 gacha_ts_ms）与全量重拉记录（带 gacha_ts_ms）：
+    # 同池同秒同位次同干员一对一升级合并，避免全量同步重复入库。
+    official_no_ms: dict[tuple[str, int, int, str], list[int]] = defaultdict(list)
+    official_with_ms: dict[tuple[str, int, int, str], list[int]] = defaultdict(list)
+    for index, (record, sources) in enumerate(entries):
+        if "official" not in sources:
+            continue
+        char_id = str(record.get("char_id") or "")
+        identity = char_id or _norm_char_name(str(record.get("name") or ""))
+        sig = (
+            str(record.get("pool_name") or ""),
+            _safe_ts(record),
+            _safe_pos(record),
+            identity,
+        )
+        if _safe_ts_ms_raw(record) == 0:
+            official_no_ms[sig].append(index)
+        else:
+            official_with_ms[sig].append(index)
+    for sig, legacy_indices in official_no_ms.items():
+        ms_indices = official_with_ms.get(sig) or []
+        for leg_idx, ms_idx in zip(legacy_indices, ms_indices):
+            leg_rec, leg_src = entries[leg_idx]
+            ms_rec, ms_src = entries[ms_idx]
+            entries[ms_idx] = (
+                _record_prefer_official(ms_rec, leg_rec),
+                leg_src | ms_src,
+            )
+            removed.add(leg_idx)
+
+    groups: dict[tuple[str, int, str], dict[str, list[int]]] = defaultdict(
+        lambda: {"official": [], "heybox": []}
+    )
+    for index, (record, sources) in enumerate(entries):
+        if index in removed:
+            continue
+        pool = str(record.get("pool_name") or "")
+        name = _norm_char_name(str(record.get("name") or ""))
+        ts = _safe_ts(record)
+        if pool and name and ts and len(sources) == 1:
+            groups[(pool, ts, name)][next(iter(sources))].append(index)
+
+    for group in groups.values():
+        available = set(group["official"])
+        all_indices = list(group["official"])
+        by_pos: dict[int, list[int]] = defaultdict(list)
+        by_id: dict[str, list[int]] = defaultdict(list)
+        by_id_pos: dict[tuple[str, int], list[int]] = defaultdict(list)
+        heapq.heapify(all_indices)
+        for index in group["official"]:
+            record = entries[index][0]
+            char_id = str(record.get("char_id") or "")
+            pos = _safe_pos(record)
+            heapq.heappush(by_pos[pos], index)
+            heapq.heappush(by_id[char_id], index)
+            heapq.heappush(by_id_pos[(char_id, pos)], index)
+
+        def first_available(*heaps: list[int], remaining: set[int] = available) -> int | None:
+            heads = []
+            for heap in heaps:
+                while heap and heap[0] not in remaining:
+                    heapq.heappop(heap)
+                if heap:
+                    heads.append(heap[0])
+            return min(heads) if heads else None
+
+        for imported_index in sorted(
+            group["heybox"], key=lambda index: not bool(entries[index][0].get("char_id"))
+        ):
+            imported = entries[imported_index][0]
+            imported_id = str(imported.get("char_id") or "")
+            # 同一秒内尽量先匹配相同位次，剩余条目一对一匹配；不同秒
+            # 不做猜测，以免把两次真实抽取按宽泛时间窗合并。
+            pos = _safe_pos(imported)
+            if imported_id:
+                chosen = first_available(by_id_pos.get((imported_id, pos), []))
+                if chosen is None:
+                    chosen = first_available(by_id.get(imported_id, []))
+                if chosen is None:
+                    chosen = first_available(by_id_pos.get(("", pos), []))
+                if chosen is None:
+                    chosen = first_available(by_id.get("", []))
+            else:
+                chosen = first_available(by_pos.get(pos, []))
+                if chosen is None:
+                    chosen = first_available(all_indices)
+            if chosen is None:
+                continue
+            official = entries[chosen][0]
+            entries[chosen] = (_record_prefer_official(official, imported), {"official", "heybox"})
+            available.remove(chosen)
+            removed.add(imported_index)
+    result = sorted(
+        (record for index, (record, _) in enumerate(entries) if index not in removed),
+        key=lambda r: (-_safe_ts(r), -_safe_ts_ms(r), -_safe_pos(r)),
+    )
+    return result[:_KEEP_LIMIT] if truncate else result
+
+
+def has_uncertain_cross_source_duplicates(records: list[dict[str, Any]]) -> bool:
+    """不同秒但时间相近的跨源同名记录无法安全判重，提示用户复核。"""
+    official: dict[tuple[str, int, str], set[str]] = defaultdict(set)
+    for record in records:
+        if not _is_official(record):
+            continue
+        pool = str(record.get("pool_name") or "")
+        name = _norm_char_name(str(record.get("name") or ""))
+        ts = _safe_ts(record)
+        if pool and name and ts:
+            official[(pool, ts, name)].add(str(record.get("char_id") or ""))
+    for record in records:
+        if _is_official(record):
+            continue
+        pool = str(record.get("pool_name") or "")
+        name = _norm_char_name(str(record.get("name") or ""))
+        ts = _safe_ts(record)
+        char_id = str(record.get("char_id") or "")
+        if not pool or not name or not ts:
+            continue
+        for delta in (-2, -1, 1, 2):
+            ids = official.get((pool, ts + delta, name), set())
+            if ids and (not char_id or "" in ids or char_id in ids):
+                return True
+    return False
 
 
 async def load_local_logs(uid: str) -> list[dict[str, Any]]:
@@ -212,8 +478,10 @@ async def load_local_logs(uid: str) -> list[dict[str, Any]]:
 
 
 async def save_local_logs(uid: str, records: list[dict[str, Any]]) -> bool:
+    # write_player_json 使用线程写盘：取消等待不会停止线程。调用方持有
+    # UID 锁时必须等线程结束，否则旧写入可能覆盖后续事务。
     try:
-        await write_player_json(_logs_path(uid), records)
+        await _write_gacha_json(_logs_path(uid), records)
     except Exception as exc:
         logger.warning(
             f"[ArknightsUID·抽卡] 本地记录写入失败 uid={uid}: {exc.__class__.__name__}: {exc}"
@@ -409,7 +677,7 @@ async def _sync_gacha_logs_locked(
 
     # 会话级量纲判定并持久化到每条记录（审计 #13）：统计时逐条按 basis
     # 归一化，跨口径混存的日志不再靠全局猜测错算六星
-    basis = _session_basis(incoming)
+    basis = _session_basis(incoming, local)
     for record in incoming:
         record["basis"] = basis
 
@@ -441,10 +709,55 @@ async def _sync_gacha_logs_locked(
     )
 
 
+def _pity_key_resolver(records: list[dict[str, Any]]):
+    """构造保底/垫刀分组键映射：
+    - 常驻标准池（normal / heybox:rule:NORMAL）跨期跨源共享垫刀
+    - 中坚寻访池（classic / heybox:rule:CLASSIC）跨期跨源共享垫刀
+    - 限定/联动/庆典/单池（heybox:rule:LIMITED 等）各池独立保底，绝不跨限定池串联；
+      若同一池同时有官方与小黑盒记录，则归并到同一池保底桶。
+    """
+    official_cate_by_pool: dict[str, set[str]] = defaultdict(set)
+    pools_in_official_cate: dict[str, set[str]] = defaultdict(set)
+    for r in records:
+        if not _is_official(r):
+            continue
+        cate = str(r.get("category") or "")
+        if not cate or cate.lower() in ("normal", "standard", "classic"):
+            continue
+        pid = str(r.get("pool_id") or r.get("pool_name") or "")
+        if pid:
+            official_cate_by_pool[pid].add(cate)
+            pools_in_official_cate[cate].add(pid)
+        pname = str(r.get("pool_name") or "")
+        if pname and pname != pid:
+            official_cate_by_pool[pname].add(cate)
+
+    def _resolve(record: dict[str, Any]) -> str:
+        cate = str(record.get("category") or "")
+        low = cate.lower()
+        if low in ("normal", "standard") or cate == "heybox:rule:NORMAL":
+            return "shared:NORMAL"
+        if low == "classic" or cate == "heybox:rule:CLASSIC":
+            return "shared:CLASSIC"
+        if cate.startswith("heybox:"):
+            # 非跨池继承规则（LIMITED/LINKAGE/ATTAIN/SINGLE/BOOT/未知池）：按单池独立计垫刀
+            pool_key = str(record.get("pool_id") or record.get("pool_name") or "")
+            if pool_key:
+                cates = official_cate_by_pool.get(pool_key)
+                if cates and len(cates) == 1:
+                    only_cate = next(iter(cates))
+                    if len(pools_in_official_cate.get(only_cate, ())) <= 1:
+                        return only_cate
+                return f"heybox:pool:{pool_key}"
+        return cate
+
+    return _resolve
+
+
 def analyze_gacha(records: list[dict[str, Any]]) -> dict[str, Any]:
     """统计：总抽数/六星数/六星率/平均六星/垫刀/最近六星/五星明细。
 
-    五星口径（小黑盒式展示）：两个六星之间（同类别内）出现的五星挂在
+    五星口径（小黑盒式展示）：两个六星之间（同保底组内）出现的五星挂在
     该段末尾的六星条目下（recent[].fives）；当前垫刀段（最新六星之后）
     的五星归入 pity_fives；均按抽取顺序（旧→新）保留，超长截断 +N。
     """
@@ -459,15 +772,16 @@ def analyze_gacha(records: list[dict[str, Any]]) -> dict[str, Any]:
     five_count = sum(1 for r in records if _normalize_rarity(r, legacy_one_based) == 5)
     five_rate = f"{five_count * 100 / total:.2f}" if total else "0.00"
 
-    # 按时间旧→新，按类别计数：六星的垫刀数 = 同类别内上一个六星之后的抽数
-    ordered = sorted(records, key=lambda r: (_safe_ts(r), _safe_pos(r)))
+    # 按时间旧→新，按保底分组键计数：六星的垫刀数 = 同保底桶内上一个六星之后的抽数
+    ordered = sorted(records, key=lambda r: (_safe_ts(r), _safe_ts_ms(r), _safe_pos(r)))
+    pity_key_of = _pity_key_resolver(ordered)
     pulls_in_cate: dict[str, int] = {}
     last_six_in_cate: dict[str, int] = {}
     # 本段（上个六星之后）累积的五星，按类别暂存，遇六星结算挂到该六星
     pending_fives: dict[str, list[dict[str, Any]]] = {}
     pull_of_six: list[tuple[dict[str, Any], int, list[dict[str, Any]]]] = []
     for record in ordered:
-        cate = str(record.get("category", ""))
+        cate = pity_key_of(record)
         pulls_in_cate[cate] = pulls_in_cate.get(cate, 0) + 1
         rarity = _normalize_rarity(record, legacy_one_based)
         if rarity == 5:
@@ -499,11 +813,11 @@ def analyze_gacha(records: list[dict[str, Any]]) -> dict[str, Any]:
         for r, pull, fives in reversed(pull_of_six[-6:])
     ]
 
-    # 垫刀进度：最新有记录的类别里，距最新六星的抽数
+    # 垫刀进度：最新有记录的保底组里，距最新六星的抽数
     pity = 0
     pity_fives: list[dict[str, Any]] = []
     if ordered:
-        latest_cate = str(ordered[-1].get("category", ""))
+        latest_cate = pity_key_of(ordered[-1])
         pity = pulls_in_cate.get(latest_cate, 0) - last_six_in_cate.get(latest_cate, 0)
         pity_fives = pending_fives.get(latest_cate, [])
 
@@ -540,8 +854,260 @@ def build_gacha_context(
     return context
 
 
+# ---------------------------------------------------------------------------
+# 按具体卡池分组（小黑盒式）：每池独立统计 + 六星条目 + 分段五星
+# ---------------------------------------------------------------------------
+
+
+def _pool_groups(
+    records: list[dict[str, Any]], pools: list[Any] | None
+) -> list[dict[str, Any]]:
+    """记录 → 卡池分组（同步核心；pools 为 gamedata.gacha.GachaPoolInfo 列表）。
+
+    分组键优先 pool_id；缺失时按「池名 + 时间」经卡池表补全（同名复刻池
+    得到不同 pool_id，不会被无依据合并）；表不可用/未收录退回池名分组。
+    返回组列表（未排序）：{pool_id, pool_name, rule_type, up_chars, up_char_ids, in_table, records}。
+    """
+    pools = pools or []
+    pools_by_id = {p.pool_id: p for p in pools}
+    pools_by_name: dict[str, list[Any]] = {}
+    for p in pools:
+        pools_by_name.setdefault(p.pool_name, []).append(p)
+    match_memo: dict[tuple[str, int], Any] = {}
+
+    distinct_ids_by_name: dict[str, set[str]] = defaultdict(set)
+    has_idless_by_name: dict[str, bool] = defaultdict(bool)
+    for r in records:
+        pname = str(r.get("pool_name") or "")
+        pid = str(r.get("pool_id") or "")
+        if pname:
+            if pid:
+                distinct_ids_by_name[pname].add(pid)
+            else:
+                has_idless_by_name[pname] = True
+
+    def _match(pool_name: str, ts: int):
+        key = (pool_name, ts)
+        if key in match_memo:
+            return match_memo[key]
+        cands = pools_by_name.get(pool_name) or []
+        hit = None
+        if cands:
+            if ts:
+                in_window = [
+                    p
+                    for p in cands
+                    if p.open_time and p.end_time and p.open_time <= ts <= p.end_time
+                ]
+                if len(in_window) == 1:
+                    hit = in_window[0]
+                elif in_window:
+                    hit = max(in_window, key=lambda p: p.open_time)
+                elif len(cands) == 1:
+                    # 唯一同名池时允许最近邻近似（保留越窗旧单池身份），
+                    # 多期轮换同名池（如常驻标准寻访/复刻池）越窗绝不粘连到旧期
+                    hit = cands[0]
+            else:
+                hit = cands[-1] if len(cands) == 1 else None
+        match_memo[key] = hit
+        return hit
+
+    groups: dict[str, dict[str, Any]] = {}
+    order: list[str] = []
+    for record in records:
+        pool_name = str(record.get("pool_name") or "")
+        pool_id = str(record.get("pool_id") or "")
+        ts = _safe_ts(record)
+        own_meta = pools_by_id.get(pool_id) if pool_id else None
+        meta = own_meta
+        if meta is None and pool_name:
+            fallback = _match(pool_name, ts)
+            if fallback is None:
+                # 仅当该池名下只有唯一未知 pool_id 且同时存在无 id 存量记录时，
+                # 才折叠合并；若同一池名有多个不同 pool_id（如多期常驻标准寻访），
+                # 必须保留各自的 pool_id 独立分组。
+                if (
+                    pool_id
+                    and len(distinct_ids_by_name.get(pool_name, ())) == 1
+                    and has_idless_by_name.get(pool_name, False)
+                ):
+                    pool_id = ""
+            elif not pool_id:
+                # 无 id 存量记录：按「池名+时间」补全分组身份
+                meta = fallback
+            # 自带 id 但表里查不到（新池未入表）且存在同名旧池：保留原
+            # id 分组（复刻同名池不粘连），也不采纳 fallback 的池身份
+        if meta is not None:
+            pool_id = pool_id or meta.pool_id
+            if not pool_name:
+                pool_name = meta.pool_name
+        # UP 名单只认可信来源：自带 id 命中池表（身份精确），或名字+时间
+        # 匹配落在开池时间窗内。越窗最近邻只是分组近似，采纳它的 UP
+        # 名单会把六星误标成非UP（复刻同名池张冠李戴）
+        up_trusted = own_meta is not None or (
+            meta is not None
+            and ts
+            and meta.open_time > 0
+            and meta.end_time > 0
+            and meta.open_time <= ts <= meta.end_time
+        )
+        key = pool_id or f"name:{pool_name}"
+        group = groups.get(key)
+        meta_up_ids = getattr(meta, "up_char_ids", set()) if meta else set()
+        if group is None:
+            group = {
+                "pool_id": pool_id,
+                "pool_name": pool_name,
+                "rule_type": meta.rule_type if meta else "",
+                "up_chars": set(meta.up_chars) if up_trusted else set(),
+                "up_char_ids": set(meta_up_ids) if up_trusted else set(),
+                "in_table": bool(up_trusted),
+                "records": [],
+            }
+            groups[key] = group
+            order.append(key)
+        elif up_trusted and meta is not None:
+            group["up_chars"] |= set(meta.up_chars)
+            group["up_char_ids"] |= set(meta_up_ids)
+            group["in_table"] = True
+        group["records"].append(record)
+    return [groups[key] for key in order]
+
+
+def _pool_stats(group: dict[str, Any], legacy_one_based: bool) -> dict[str, Any]:
+    """单池统计：总抽数/六星/平均/垫刀/首末日期 + 六星条目（含分段五星）。"""
+    recs = group["records"]
+    total = len(recs)
+    ordered = sorted(recs, key=lambda r: (_safe_ts(r), _safe_ts_ms(r), _safe_pos(r)))
+    six_count = 0
+    pull_of_six: list[tuple[dict[str, Any], int, list[dict[str, Any]]]] = []
+    pending_fives: list[dict[str, Any]] = []
+    pulls = 0
+    for record in ordered:
+        pulls += 1
+        rarity = _normalize_rarity(record, legacy_one_based)
+        if rarity == 5:
+            pending_fives.append(
+                {
+                    "name": record.get("name") or record.get("char_id", "?"),
+                    "char_id": str(record.get("char_id") or ""),
+                    "ts": _safe_ts(record),
+                }
+            )
+        elif rarity >= 6:
+            six_count += 1
+            pull_of_six.append((record, pulls, pending_fives))
+            pending_fives = []
+            pulls = 0
+    up_chars = group.get("up_chars") or set()
+    up_char_ids = group.get("up_char_ids") or set()
+    has_up_list = bool(up_chars or up_char_ids)
+
+    def _date(ts: int, fmt: str) -> str:
+        if not ts:
+            return ""
+        try:
+            return beijing_datetime(ts).strftime(fmt)
+        except (OverflowError, OSError, ValueError):
+            return ""
+
+    sixes = []
+    for record, pull, fives in reversed(pull_of_six[-_POOL_SIXES_MAX:]):
+        name = str(record.get("name") or record.get("char_id") or "?")
+        cid = str(record.get("char_id") or "")
+        sixes.append(
+            {
+                "name": name,
+                "char_id": cid,
+                "pull": pull,
+                "ts": _safe_ts(record),
+                "date": _date(_safe_ts(record), "%m-%d"),
+                "is_new": bool(record.get("is_new")),
+                # UP 名单明确才标 UP/非 UP（不按池名或稀有度猜歪没歪）
+                "is_up": (
+                    (cid in up_char_ids or name in up_chars)
+                    if has_up_list
+                    else None
+                ),
+                "fives": fives[:_FIVES_DISPLAY_MAX],
+                "fives_extra": max(0, len(fives) - _FIVES_DISPLAY_MAX),
+            }
+        )
+    return {
+        "pool_id": group["pool_id"],
+        "pool_name": group["pool_name"],
+        "rule_type": group["rule_type"],
+        "in_table": bool(group.get("in_table")),
+        "total": total,
+        "six_count": six_count,
+        "avg_six": f"{total / six_count:.1f}" if six_count else "0.0",
+        "pity": pulls,
+        "pity_max": PITY_DISPLAY_MAX,
+        "first_date": _date(_safe_ts(ordered[0]), "%y-%m-%d"),
+        "last_date": _date(_safe_ts(ordered[-1]), "%y-%m-%d"),
+        "sixes": sixes,
+        "sixes_total": len(pull_of_six),
+        "pity_fives": pending_fives[:_FIVES_DISPLAY_MAX],
+        "pity_fives_extra": max(0, len(pending_fives) - _FIVES_DISPLAY_MAX),
+        "last_ts": _safe_ts(ordered[-1]),
+    }
+
+
+async def analyze_gacha_pools(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """按具体卡池分组的统计（卡池表可用时补 pool_id/UP 名单）。"""
+    if not records:
+        return []
+    pools = []
+    try:
+        from ..gamedata.gacha import load_gacha_pools
+
+        pools = await load_gacha_pools()
+    except Exception:
+        pools = []
+    legacy_one_based = _legacy_one_based(records)
+    stats = [
+        _pool_stats(group, legacy_one_based)
+        for group in _pool_groups(records, pools)
+    ]
+    # 卡池按最近一次抽取时间倒序
+    stats.sort(key=lambda p: -p["last_ts"])
+    return stats
+
+
+async def build_gacha_pools_context(
+    records: list[dict[str, Any]], page: int = 1, per_page: int = POOL_PAGE_SIZE
+) -> dict[str, Any]:
+    """抽卡卡按池区块的上下文：当前页池列表 + 分页信息。"""
+    pools = await analyze_gacha_pools(records)
+    pages = max(1, -(-len(pools) // per_page)) if pools else 1
+    page = max(1, min(page, pages))
+    start = (page - 1) * per_page
+    return {
+        "pools": pools[start : start + per_page],
+        "all_pools": pools,
+        "page": page,
+        "pages": pages,
+        "pool_total": len(pools),
+        "pool_data_hint": (
+            "部分卡池缺少 UP 数据，可尝试 ark刷新。"
+            if any(
+                six["is_up"] is None and not pool.get("in_table", False)
+                for pool in pools
+                for six in pool["sixes"]
+            )
+            else ""
+        ),
+    }
+
+
 def format_gacha_text(
-    name: str, uid_masked: str, records: list[dict[str, Any]], warning: str
+    name: str,
+    uid_masked: str,
+    records: list[dict[str, Any]],
+    warning: str,
+    *,
+    pool_stats: list[dict[str, Any]] | None = None,
+    page: int = 1,
 ) -> str:
     stats = analyze_gacha(records)
     lines = ["「明日方舟」抽卡统计", f"UID：{uid_masked}"]
@@ -554,21 +1120,43 @@ def format_gacha_text(
             f" | 五星 {stats['five_count']}（{stats['five_rate']}%）"
         )
         lines.append(f"当前垫刀：{stats['pity']} 抽")
-        for item in stats["recent"][:4]:
-            ts = (
-                time.strftime("%y-%m-%d", time.localtime(item["ts"]))
-                if item["ts"]
-                else ""
-            )
+        if pool_stats is None:
+            pool_stats = [
+                _pool_stats(group, _legacy_one_based(records))
+                for group in _pool_groups(records, [])
+            ]
+            pool_stats.sort(key=lambda p: -p["last_ts"])
+        per_text_page = 4
+        pages = max(1, -(-len(pool_stats) // per_text_page)) if pool_stats else 1
+        cur_page = max(1, min(page, pages))
+        start = (cur_page - 1) * per_text_page
+        for pool in pool_stats[start : start + per_text_page]:
+            six_bits = []
+            for s in pool["sixes"][:3]:
+                bit = f"{s['name']}（第{s['pull']}抽"
+                if s["date"]:
+                    bit += f"，{s['date']}"
+                fives_total = len(s.get("fives") or []) + int(
+                    s.get("fives_extra") or 0
+                )
+                if fives_total:
+                    names = "、".join(
+                        str(f.get("name", "?")) for f in (s.get("fives") or [])[:4]
+                    )
+                    suffix = "等" if fives_total > 4 else ""
+                    bit += f"，本段五星 ×{fives_total}：{names}{suffix}"
+                six_bits.append(bit + "）")
             lines.append(
-                f"  {item['name']}（{item['pool']}，第 {item['pull']} 抽）{ts}"
+                f"【{pool['pool_name'] or '未知卡池'}】{pool['total']} 抽 | "
+                f"六星 {pool['six_count']}（平均 {pool['avg_six']}）| "
+                f"垫刀 {pool['pity']}"
             )
-            fives = item.get("fives") or []
-            if fives:
-                total_fives = len(fives) + int(item.get("fives_extra") or 0)
-                names = "、".join(str(f.get("name", "?")) for f in fives[:4])
-                suffix = f" 等{total_fives}个" if total_fives > 4 else ""
-                lines.append(f"    本段五星 ×{total_fives}：{names}{suffix}")
+            if six_bits:
+                lines.append(f"  六星：{'、'.join(six_bits)}")
+        if len(pool_stats) > per_text_page:
+            lines.append(
+                f"（第 {cur_page}/{pages} 页，共 {len(pool_stats)} 个卡池，可用 页:2 翻页）"
+            )
     if warning:
         lines.append(f"⚠️ {warning}")
     return "\n".join(lines)

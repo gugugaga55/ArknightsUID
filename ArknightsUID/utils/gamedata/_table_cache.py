@@ -4,7 +4,7 @@ character_table.json（~15MB）的下载与 TTL 缓存逻辑原来只在 recruit
 别名系统（charinfo.py）也需要同源数据——抽到此处做单一事实源：
 
 - 缓存文件：CACHE_PATH/gamedata/character_table.json，格式 {"_cache_time", "payload"}
-- 复核间隔：每日条件 diff（内容近永久，304 零下载仅续期；详见 CHAR_TABLE_TTL 注释）
+- 全量表长期保留，新版本由 ark刷新 显式更新
 - 精简衍生缓存（recruit.json / charindex.json / itemindex.json）由各自模块生成；
   charinfo 系索引按"源表 mtime 覆盖"判鲜（源表刷新即重建，无独立 TTL）
 
@@ -56,6 +56,9 @@ CRISIS_V2_TABLE_URL = f"{GAMEDATA_BASE}/crisis_v2_table.json"
 SKIN_TABLE_URL = f"{GAMEDATA_BASE}/skin_table.json"
 # 关卡目录（~4MB：stages 的 code/name 供地图文件名枚举）
 STAGE_TABLE_URL = f"{GAMEDATA_BASE}/stage_table.json"
+# 寻访卡池表（gachaPoolId/gachaPoolName/openTime/endTime/gachaRuleType，
+# 抽卡记录按池分组与 UP 干员识别用）
+GACHA_TABLE_URL = f"{GAMEDATA_BASE}/gacha_table.json"
 
 GAMEDATA_CACHE_DIR = CACHE_PATH / "gamedata"
 GAMEDATA_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -70,12 +73,34 @@ CRISIS_TABLE_PATH = GAMEDATA_CACHE_DIR / "crisis_table.json"
 CRISIS_V2_TABLE_PATH = GAMEDATA_CACHE_DIR / "crisis_v2_table.json"
 SKIN_TABLE_PATH = GAMEDATA_CACHE_DIR / "skin_table.json"
 STAGE_TABLE_PATH = GAMEDATA_CACHE_DIR / "stage_table.json"
+GACHA_TABLE_PATH = GAMEDATA_CACHE_DIR / "gacha_table.json"
 
-# 复核间隔（非数据寿命）：全量表内容近永久，只在版本更新时变化——
-# 间隔到点走条件 GET（ETag/If-None-Match）diff，上游没变（304）时
-# 零下载零解析仅续期；所以间隔可以比旧 TTL（7 天）激进得多，
-# 新干员/新期数据最长 1 天即可见。
-CHAR_TABLE_TTL = 86400
+# 全量表（干员/技能/基建/皮肤/关卡/危机合约等）是游戏版本数据，内容
+# 近永久——永不过期（is_fresh 对 inf 恒真），不再每日条件复核。
+# 新版本数据靠 ark刷新 显式重建（用户口径：固定数值缓存不掉）。
+CHAR_TABLE_TTL = float("inf")
+
+# 卡池表不过期（用户口径：卡池元数据长期保存，不随 TTL 复核/清理丢失；
+# is_fresh 对 inf 恒真 → memo/磁盘判鲜永命中，不再发起每日条件复核）。
+# 新池元数据靠 ark刷新 显式重建；下载失败时过期兜底逻辑因永新鲜而不可达。
+GACHA_TABLE_TTL = float("inf")
+
+# 表的有效期与清理豁免共用此登记表。路径只在上方定义一次，新增表时
+# 在这里登记其 TTL，清理器据此保护主文件及校验器旁车。
+TABLE_CACHE_TTLS = {
+    CHAR_TABLE_PATH: CHAR_TABLE_TTL,
+    SKILL_TABLE_PATH: CHAR_TABLE_TTL,
+    ITEM_TABLE_PATH: CHAR_TABLE_TTL,
+    UNIEQUIP_TABLE_PATH: CHAR_TABLE_TTL,
+    BATTLE_EQUIP_TABLE_PATH: CHAR_TABLE_TTL,
+    ROGUE_TOPIC_TABLE_PATH: CHAR_TABLE_TTL,
+    BUILDING_TABLE_PATH: CHAR_TABLE_TTL,
+    CRISIS_TABLE_PATH: CHAR_TABLE_TTL,
+    CRISIS_V2_TABLE_PATH: CHAR_TABLE_TTL,
+    SKIN_TABLE_PATH: CHAR_TABLE_TTL,
+    STAGE_TABLE_PATH: CHAR_TABLE_TTL,
+    GACHA_TABLE_PATH: GACHA_TABLE_TTL,
+}
 
 # per-path 下载锁：TTL 过期瞬间的并发调用只触发一次 15-18MB 下载
 # （single-flight：锁内复查缓存新鲜度，等锁的协程直接命中新缓存）
@@ -244,13 +269,17 @@ async def _read_fresh_from_disk(path: Path, ttl: float) -> dict[str, Any] | None
 
 
 async def _ensure_table(
-    url: str, path: Path, ttl: float = CHAR_TABLE_TTL, force: bool = False
+    url: str, path: Path, ttl: float | None = None, force: bool = False
 ) -> dict[str, Any] | None:
     """ensure_* 表的共用策略：memo/新鲜缓存直读 → 下载回写 → 过期缓存兜底。
 
     下载段持 per-path 锁并复查新鲜度，避免 TTL 过期瞬间的并发调用
     重复拉取同一个 15-18MB 全量表。
     """
+    if ttl is None:
+        if path.parent == GAMEDATA_CACHE_DIR and path not in TABLE_CACHE_TTLS:
+            raise ValueError(f"游戏数据表未登记缓存策略: {path.name}")
+        ttl = TABLE_CACHE_TTLS.get(path, CHAR_TABLE_TTL)
     generation = _table_generation
     if not force:
         memo = _memo_get(path, ttl)
@@ -343,21 +372,33 @@ async def ensure_battle_equip_table(force: bool = False) -> dict[str, Any] | Non
 async def ensure_building_table(force: bool = False) -> dict[str, Any] | None:
     """确保 building_data 可用（加工站配方 workshopFormulas，~5MB）。"""
     return await _ensure_table(
-        BUILDING_TABLE_URL, BUILDING_TABLE_PATH, ttl=CHAR_TABLE_TTL, force=force
+        BUILDING_TABLE_URL, BUILDING_TABLE_PATH, force=force
     )
 
 
 async def ensure_skin_table(force: bool = False) -> dict[str, Any] | None:
     """确保 skin_table 可用（charSkins 全皮肤目录，~4MB）。"""
     return await _ensure_table(
-        SKIN_TABLE_URL, SKIN_TABLE_PATH, ttl=CHAR_TABLE_TTL, force=force
+        SKIN_TABLE_URL, SKIN_TABLE_PATH, force=force
     )
 
 
 async def ensure_stage_table(force: bool = False) -> dict[str, Any] | None:
     """确保 stage_table 可用（stages 的 code/name，供地图文件名枚举）。"""
     return await _ensure_table(
-        STAGE_TABLE_URL, STAGE_TABLE_PATH, ttl=CHAR_TABLE_TTL, force=force
+        STAGE_TABLE_URL, STAGE_TABLE_PATH, force=force
+    )
+
+
+async def ensure_gacha_table(force: bool = False) -> dict[str, Any] | None:
+    """确保 gacha_table 可用（寻访卡池元数据，抽卡按池分组/UP 识别用）。
+
+    ttl=inf：下载一次后永久使用本地副本（不发起每日条件复核）；
+    force=True（ark刷新）仍会重新下载。
+    """
+    return await _ensure_table(
+        GACHA_TABLE_URL, GACHA_TABLE_PATH,
+        ttl=TABLE_CACHE_TTLS.get(GACHA_TABLE_PATH, GACHA_TABLE_TTL), force=force
     )
 
 
@@ -370,9 +411,9 @@ async def ensure_crisis_tables(
     crisis_v2_table；任一失败返回该位 None，由调用方降级展示。
     """
     old = await _ensure_table(
-        CRISIS_TABLE_URL, CRISIS_TABLE_PATH, ttl=CHAR_TABLE_TTL, force=force
+        CRISIS_TABLE_URL, CRISIS_TABLE_PATH, force=force
     )
     new = await _ensure_table(
-        CRISIS_V2_TABLE_URL, CRISIS_V2_TABLE_PATH, ttl=CHAR_TABLE_TTL, force=force
+        CRISIS_V2_TABLE_URL, CRISIS_V2_TABLE_PATH, force=force
     )
     return old, new

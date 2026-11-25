@@ -1,7 +1,10 @@
 """抽卡记录 / 礼包码兑换 / 攒抽规划命令（P3，鹰角 OAuth 链）。
 
 命令（前缀 ark/方舟/明日方舟）：
-- 抽卡记录 / 抽卡分析 [序号|UID]：增量拉取官方寻访记录并出统计卡
+- 抽卡记录 / 抽卡分析 [序号|UID] [页:N]：增量拉取官方寻访记录并出
+  按卡池分组的统计卡（每页 3 个池，页:N 翻页）
+- 导入抽卡 / 小黑盒导入 <链接>：私聊导入小黑盒导出链接（与官方
+  增量同步合并去重）
 - 兑换码 <code>：官网礼包码兑换（纯文本回复）
 - 攒抽 / 抽卡规划 [参数]：攒抽规划卡（自动垫刀 + 自动当前卡池，
   参数 玉: 石: 单: 十: 垫刀: 池: 类型:单UP|双UP 天数: 目标抽数）
@@ -10,6 +13,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 from datetime import UTC
 from typing import Any
 
@@ -21,11 +25,13 @@ from gsuid_core.sv import SV
 from ArknightsUID.utils.arg_utils import (
     extract_index,
     extract_uid,
+    split_account,
 )
 from ArknightsUID.utils.card import send_card_or_text
 from ArknightsUID.utils.enduid.adapter import (
     hide_uid,
     hide_uid_for,
+    resolve_accounts,
     resolve_credential,
 )
 from ArknightsUID.utils.gacha_plan import (
@@ -39,13 +45,22 @@ from ArknightsUID.utils.hypergryph.client import (
     login_gacha_chain,
 )
 from ArknightsUID.utils.gamedata.charinfo import load_char_index
+from ArknightsUID.utils.hypergryph import gacha as gacha_service
 from ArknightsUID.utils.hypergryph.gacha import (
-    analyze_gacha,
+    analyze_gacha as analyze_gacha,
     build_gacha_context,
+    build_gacha_pools_context,
     format_gacha_text,
+    has_uncertain_cross_source_duplicates,
     load_local_logs,
+    merge_records,
     save_local_logs,
     sync_gacha_logs,
+    _uid_sync_lock,
+)
+from ArknightsUID.utils.hypergryph.heybox import (
+    convert_heybox_records,
+    fetch_heybox_export,
 )
 from ArknightsUID.utils.player.context import char_avatar_b64
 from ArknightsUID.utils.prts.client import query_gacha_pools
@@ -84,6 +99,67 @@ def _gift_reply(response: dict) -> str:
     return f"兑换失败：code={code}，{message or '无详情'}"
 
 
+# 分页 token：显式 页:2 / 页2 / 页 2 / 第2页（裸数字可能表示 UID/账号序号，不承担分页）
+_RE_PAGE = re.compile(r"(?:页\s*[:：]?\s*(\d+)|第\s*(\d+)\s*页)")
+# 小黑盒导出链接使用 ASCII；中文路径可使用 URL 百分号编码。
+_RE_URL = re.compile(r"https?://[^\s\u3400-\u9fff\u3000-\u303f\uff00-\uffef]+")
+_CROSS_SOURCE_WARNING = "部分小黑盒与官方记录时间相近，可能重复，请核对统计。"
+
+
+def _extract_page(text: str) -> int:
+    match = _RE_PAGE.search(text or "")
+    if not match:
+        return 1
+    return int(match.group(1) or match.group(2))
+
+
+def _extract_url(text: str) -> str:
+    match = _RE_URL.search(text or "")
+    if match is None:
+        return ""
+    return match.group(0).rstrip("，。,.！!？?；;）)】>\"'")
+
+
+async def _bake_avatars(context: dict) -> None:
+    """recent/pity_fives/卡池区块的头像挂载：gamedata 索引精确名反查
+    charId，受限并发批量取（不再逐条串行下载），失败空串降级。"""
+    try:
+        from ArknightsUID.utils.image import gather_b64
+
+        char_index = await load_char_index()
+        if not char_index:
+            return
+        name_to_cid = {
+            str(info.get("name") or ""): cid
+            for cid, info in char_index.items()
+            if isinstance(info, dict) and info.get("name")
+        }
+        rows: list[dict] = list(context.get("recent", [])) + list(
+            context.get("pity_fives", [])
+        )
+        for pool in context.get("pools", []):
+            for six in pool.get("sixes", []):
+                rows.append(six)
+                rows.extend(six.get("fives", []))
+            rows.extend(pool.get("pity_fives", []))
+        targets: list[dict] = []
+        for row in rows:
+            row.setdefault("avatar", "")
+            cid = str(row.get("char_id") or "") or name_to_cid.get(
+                str(row.get("name") or ""), ""
+            )
+            if cid:
+                row["char_id"] = cid
+                targets.append(row)
+        avatars = await gather_b64(
+            char_avatar_b64, [str(row["char_id"]) for row in targets]
+        )
+        for row, avatar in zip(targets, avatars):
+            row["avatar"] = avatar
+    except Exception:
+        logger.debug("[ArknightsUID·抽卡] 头像挂载失败（降级无头像）", exc_info=True)
+
+
 @gacha_sv.on_command(
     (
         "抽卡记录",
@@ -94,50 +170,47 @@ def _gift_reply(response: dict) -> str:
     block=True,
 )
 async def show_gacha_report(bot: Bot, ev: Event) -> None:
-    uid = extract_uid(ev.text)
-    index = extract_index(ev.text)
+    page = _extract_page(ev.text)
+    # 页:N 不参与账号解析（页码数字不是 UID/序号）
+    rest = _RE_PAGE.sub(" ", ev.text or "")
+    uid = extract_uid(rest)
+    index = extract_index(rest)
     credential = await resolve_or_reply(bot, ev, uid, index)
     if credential is None:
         return
 
-    if "全量" in (ev.text or "").split():
+    if "全量" in rest.split():
         records, warning = await sync_gacha_logs(credential, full=True)
     else:
         records, warning = await sync_gacha_logs(credential)
     if not records:
         return await _send_text(bot, ev, warning or "暂无抽卡记录。")
+    if has_uncertain_cross_source_duplicates(records):
+        warning = "\n".join(filter(None, (
+            warning, _CROSS_SOURCE_WARNING
+        )))
 
     nickname = credential.nickname or ""
     shown_uid = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
     context = build_gacha_context(nickname, shown_uid, records, ArknightsUID_version)
-    text = format_gacha_text(nickname, shown_uid, records, warning)
     if context is not None:
-        # 最近六星（含分段五星/垫刀段五星）逐个挂初始头像
-        # （gamedata 索引精确名反查，失败空串降级）
-        try:
-            char_index = await load_char_index()
-            if char_index:
-
-                async def _bake(row: dict) -> None:
-                    hit = next(
-                        (
-                            cid
-                            for cid, info in char_index.items()
-                            if info.get("name") == row.get("name")
-                        ),
-                        "",
-                    )
-                    row["avatar"] = await char_avatar_b64(hit) if hit else ""
-
-                for row in context.get("recent", []):
-                    await _bake(row)
-                    for five in row.get("fives", []):
-                        await _bake(five)
-                for five in context.get("pity_fives", []):
-                    await _bake(five)
-        except Exception:
-            pass
+        # 按具体卡池分组的小黑盒式区块（每页 3 池）+ 分页信息
+        pools_ctx = await build_gacha_pools_context(records, page=page)
+        text = format_gacha_text(
+            nickname,
+            shown_uid,
+            records,
+            warning,
+            pool_stats=pools_ctx.get("all_pools"),
+            page=page,
+        )
+        if pools_ctx.get("pool_data_hint"):
+            text += "\n" + pools_ctx["pool_data_hint"]
+        context.update(pools_ctx)
+        context["warning"] = warning or ""
+        await _bake_avatars(context)
         return await send_card_or_text(bot, ev, "ark_gacha_card.html", context, text)
+    text = format_gacha_text(nickname, shown_uid, records, warning, page=page)
     await _send_text(bot, ev, text)
 
 
@@ -149,29 +222,163 @@ async def show_gacha_report(bot: Bot, ev: Event) -> None:
     block=True,
 )
 async def redeem_gift_code(bot: Bot, ev: Event) -> None:
-    code = ev.text.strip().split()[0] if ev.text.strip() else ""
-    if not code:
-        return await _send_text(bot, ev, "用法：ark兑换码 <礼包码>")
-    # 兑换码本身是敏感输入（防止误转发/回显），群聊不回显码值
-    shown = code if not ev.group_id else "****"
+    try:
+        raw, uid, index = split_account(
+            ev.text or "", legacy_uid=False, legacy_index=False
+        )
+    except ValueError as exc:
+        return await _send_text(bot, ev, str(exc))
+    tokens = raw.split()
+    all_accounts = "全部" in tokens
+    if all_accounts:
+        if uid or index:
+            return await _send_text(bot, ev, "「全部」不能和账号选择器同时使用。")
+        tokens = [token for token in tokens if token != "全部"]
+    elif (
+        not uid and not index and len(tokens) == 2 and "\n" not in raw
+        and re.fullmatch(r"[0-9]{5,}", tokens[1])
+    ):
+        # 保留旧的「一个码 + 裸 UID」，即使 UID 不存在也不能落到默认账号。
+        uid = tokens.pop()
 
-    uid = extract_uid(ev.text.replace(code, "", 1))
-    credential = await resolve_or_reply(bot, ev, uid, 0)
+    codes = list(dict.fromkeys(tokens))
+    if not codes or any(not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", code) for code in codes):
+        return await _send_text(
+            bot, ev, "用法：ark兑换码 码1 [码2 …] [2号|UID:数字|全部]（空格或换行分隔）"
+        )
+    if len(codes) > 10:
+        return await _send_text(bot, ev, "一次最多兑换 10 个不同的码，请分批发送。")
+    if all_accounts:
+        result = await resolve_accounts(ev.user_id, ev.bot_id)
+        targets = list(enumerate(result.accounts, 1))
+        if not targets:
+            return await _send_text(bot, ev, result.reason or "没有可兑换的账号，请先 ark登录。")
+        if sum(account.usable for _, account in targets) * len(codes) > 30:
+            return await _send_text(bot, ev, "一次最多提交 30 个账号与兑换码组合，请分批发送。")
+    else:
+        credential = await resolve_or_reply(bot, ev, uid, index)
+        if credential is None:
+            return
+        targets = [(index, credential)]
+
+    batch = all_accounts or len(codes) > 1
+    redact_codes = (
+        re.compile("|".join(map(re.escape, sorted(codes, key=len, reverse=True))), re.IGNORECASE)
+        if ev.group_id else None
+    )
+    lines = ["「明日方舟」兑换结果"] if batch else []
+    for number, credential in targets:
+        if batch:
+            name = credential.nickname or await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
+            lines.append(f"{number}号 · {name}" if number else name)
+        if not credential.usable:
+            lines.append("跳过（登录失效）")
+            continue
+        try:
+            auth = await login_gacha_chain(credential)
+        except Exception as exc:
+            logger.warning(f"[ArknightsUID·兑换] 登录失败: {type(exc).__name__}")
+            auth = "登录失败，请稍后重试。"
+        if isinstance(auth, str):
+            lines.append(safe_external_message(redact_codes.sub("****", auth) if redact_codes else auth))
+            continue
+        for position, code in enumerate(codes, 1):
+            try:
+                response = await exchange_gift_code(credential, auth, code)
+            except Exception as exc:
+                logger.warning(f"[ArknightsUID·兑换] 兑换请求异常: {type(exc).__name__}")
+                response = None
+            if response and redact_codes:
+                response = {
+                    **response,
+                    "message": redact_codes.sub(
+                        "****", str(response.get("message") or response.get("msg") or ""),
+                    ),
+                    "msg": "",
+                }
+            outcome = _gift_reply(response) if response else "兑换请求失败，请稍后重试。"
+            if batch:
+                outcome = " · ".join(outcome.splitlines())
+                lines.append(f"第 {position} 个码：{outcome}")
+            else:
+                lines.append(outcome)
+    await _send_text(bot, ev, "\n".join(lines))
+
+
+@gacha_sv.on_command(("导入抽卡", "小黑盒导入", "小黑盒抽卡导入"), block=True)
+async def import_heybox_gacha(bot: Bot, ev: Event) -> None:
+    """小黑盒导出链接导入：下载 → 校验 → 转换 → 与本地合并去重 → 官方增量同步。
+
+    链接含 UID 与完整抽卡历史，仅限私聊；不在任何日志/回复中回显链接，
+    也不保存链接本身。官方同步失败不回滚已保存的小黑盒记录。
+    """
+    if ev.group_id:
+        return await _send_text(
+            bot,
+            ev,
+            "导入链接包含完整 UID 与抽卡历史，请在私聊中使用：ark导入抽卡 <链接>",
+        )
+    url = _extract_url(ev.text or "")
+    if not url:
+        return await _send_text(
+            bot,
+            ev,
+            "用法：ark导入抽卡 <链接>\n"
+            "链接来自小黑盒 App → 抽卡分析 → 数据管理 → 导出数据并复制链接。",
+        )
+    # 先分离 URL，再从剩余文本解析账号——URL 里的数字不能被当成 UID/序号
+    rest = (ev.text or "").replace(url, "", 1)
+    credential = await resolve_or_reply(
+        bot, ev, extract_uid(rest), extract_index(rest)
+    )
     if credential is None:
         return
 
-    auth = await login_gacha_chain(credential)
-    if isinstance(auth, str):
-        return await _send_text(bot, ev, auth)
+    payload = await fetch_heybox_export(url)
+    if isinstance(payload, str):
+        return await _send_text(bot, ev, payload)
+    records = await convert_heybox_records(payload, credential.uid)
+    if isinstance(records, str):
+        return await _send_text(bot, ev, records)
 
+    read_count = len(records)
+    async with await _uid_sync_lock(credential.uid):
+        local = await load_local_logs(credential.uid)
+        local_count = len(merge_records(local, [], truncate=False))
+        all_records = merge_records(local, records, truncate=False)
+        added = max(0, len(all_records) - local_count)
+        evicted = max(0, len(all_records) - gacha_service._KEEP_LIMIT)
+        merged = all_records[:gacha_service._KEEP_LIMIT]
+        saved = await save_local_logs(credential.uid, merged)
+    if not saved:
+        return await _send_text(
+            bot, ev, "本地记录保存失败，本次导入未落盘，请稍后重试。"
+        )
+
+    # 小黑盒历史较老时官方增量可能拉不到对应时段：失败不影响已导入数据
+    sync_note = "官方增量同步完成。"
+    final_records = merged
     try:
-        response = await exchange_gift_code(credential, auth, code)
+        synced_records, warning = await sync_gacha_logs(credential)
+        if synced_records:
+            final_records = synced_records
+        if warning:
+            sync_note = f"官方增量同步未完全成功：{warning}"
     except Exception as exc:
-        logger.warning(f"[ArknightsUID·兑换] 兑换请求异常: {exc.__class__.__name__}")
-        response = None
-    if response is None:
-        return await _send_text(bot, ev, f"兑换请求失败（{shown}），请稍后重试。")
-    await _send_text(bot, ev, _gift_reply(response))
+        logger.warning(
+            f"[ArknightsUID·抽卡] 小黑盒导入后官方同步异常: {exc.__class__.__name__}"
+        )
+        sync_note = "官方增量同步失败（小黑盒记录已保存，可稍后 ark抽卡记录 重试同步）。"
+    if has_uncertain_cross_source_duplicates(final_records):
+        sync_note += "\n" + _CROSS_SOURCE_WARNING
+    await _send_text(
+        bot,
+        ev,
+        f"已读取 {read_count} 条小黑盒记录，实际新增 {added} 条"
+        f"（重复 {max(0, read_count - added)} 条已合并），"
+        f"{f'因保存上限淘汰 {evicted} 条较旧记录，' if evicted else ''}"
+        f"合并后共 {len(final_records)} 条。\n{sync_note}",
+    )
 
 
 async def _auto_pity(credential, pool_name: str = "") -> int:
@@ -179,10 +386,28 @@ async def _auto_pity(credential, pool_name: str = "") -> int:
     if not pool_name:
         return 0
     try:
-        records = await load_local_logs(credential.uid)
-        records = [r for r in records if r.get("pool_name") == pool_name]
-        stats = analyze_gacha(records)
-        return int(stats.get("pity") or 0)
+        all_records = await load_local_logs(credential.uid)
+        if not all_records:
+            return 0
+        legacy_one_based = gacha_service._legacy_one_based(all_records)
+        pool_records = [r for r in all_records if r.get("pool_name") == pool_name]
+        if not pool_records:
+            return 0
+        ordered = sorted(
+            pool_records,
+            key=lambda r: (
+                gacha_service._safe_ts(r),
+                gacha_service._safe_ts_ms(r),
+                gacha_service._safe_pos(r),
+            ),
+        )
+        pity = 0
+        for record in ordered:
+            if gacha_service._normalize_rarity(record, legacy_one_based) >= 6:
+                pity = 0
+            else:
+                pity += 1
+        return pity
     except Exception:
         return 0
 
@@ -287,8 +512,10 @@ def _annual_report(records: list[dict], year: str) -> str | None:
     from ArknightsUID.utils.hypergryph.gacha import (
         _legacy_one_based,
         _normalize_rarity,
+        _pity_key_resolver,
         _safe_pos,
         _safe_ts,
+        _safe_ts_ms,
     )
 
     _legacy = _legacy_one_based(records)
@@ -303,7 +530,7 @@ def _annual_report(records: list[dict], year: str) -> str | None:
         except (OverflowError, OSError, ValueError):
             return ""
 
-    ordered = sorted(records, key=lambda r: (_safe_ts(r), _safe_pos(r)))
+    ordered = sorted(records, key=lambda r: (_safe_ts(r), _safe_ts_ms(r), _safe_pos(r)))
     year_records = [r for r in ordered if _year_of(_safe_ts(r)) == year]
     if not year_records:
         return None
@@ -313,7 +540,8 @@ def _annual_report(records: list[dict], year: str) -> str | None:
     six_count = len(sixes)
     new_chars = [r for r in sixes if r.get("is_new")]
 
-    # 垫刀 = 同 category 内上一个六星后的抽数；跨年界沿用同规则
+    # 垫刀 = 同保底桶内上一个六星后的抽数；跨年界沿用同规则
+    pity_key_of = _pity_key_resolver(ordered)
     pity_by_cate: dict[str, int] = {}
     worst_pity = 0
     worst_record: dict | None = None
@@ -321,7 +549,7 @@ def _annual_report(records: list[dict], year: str) -> str | None:
         record_year = _year_of(_safe_ts(record))
         if not record_year or record_year > year:
             continue
-        cate = str(record.get("category", ""))
+        cate = pity_key_of(record)
         pity_by_cate[cate] = pity_by_cate.get(cate, 0) + 1
         if _normalize_rarity(record, _legacy) >= 6:
             pity = pity_by_cate[cate]
@@ -485,6 +713,7 @@ def build_export_payload(uid: str, records: list[dict[str, Any]]) -> dict[str, A
     from ArknightsUID.utils.hypergryph.gacha import (
         _safe_pos,
         _safe_ts,
+        _safe_ts_ms,
     )
 
     def _safe_int(raw: Any) -> int:
@@ -493,7 +722,7 @@ def build_export_payload(uid: str, records: list[dict[str, Any]]) -> dict[str, A
         except (TypeError, ValueError):
             return 0
 
-    ordered = sorted(records, key=lambda r: (_safe_ts(r), _safe_pos(r)))
+    ordered = sorted(records, key=lambda r: (_safe_ts(r), _safe_ts_ms(r), _safe_pos(r)))
     export_records = []
     for record in ordered:
         ts = _safe_ts(record)
@@ -514,7 +743,10 @@ def build_export_payload(uid: str, records: list[dict[str, Any]]) -> dict[str, A
                 "rarity": _safe_int(record.get("rarity")),
                 "is_new": bool(record.get("is_new")),
                 "pool": str(record.get("pool_name") or ""),
+                "pool_id": str(record.get("pool_id") or ""),
                 "category": str(record.get("category") or ""),
+                "source": str(record.get("source") or "official"),
+                "basis": str(record.get("basis") or ""),
                 "pos": _safe_pos(record),
             }
         )
@@ -526,7 +758,8 @@ def build_export_payload(uid: str, records: list[dict[str, Any]]) -> dict[str, A
             "exported_at": datetime.now(tz=UTC).isoformat(timespec="seconds"),
             "count": len(export_records),
             # rarity 为官方 inquiry 接口原始量纲（0 基或 1 基并存，
-            # 见 utils/hypergryph/gacha._normalize_rarity 的说明）
+            # 见 utils/hypergryph/gacha._normalize_rarity 的说明）；
+            # 逐条量纲与来源见 records[].basis / records[].source
             "rarity_basis": "official-inquiry-raw",
         },
         "records": export_records,
@@ -543,10 +776,13 @@ async def delete_gacha_records(bot: Bot, ev: Event) -> None:
         return
 
     shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
-    records = await load_local_logs(credential.uid)
+    async with await _uid_sync_lock(credential.uid):
+        records = await load_local_logs(credential.uid)
+        saved = await save_local_logs(credential.uid, []) if records else True
     if not records:
         return await _send_text(bot, ev, f"UID {shown} 本地没有抽卡记录。")
-    await save_local_logs(credential.uid, [])
+    if not saved:
+        return await _send_text(bot, ev, "本地抽卡记录删除失败，请稍后重试。")
     await _send_text(
         bot,
         ev,

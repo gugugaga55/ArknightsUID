@@ -15,8 +15,31 @@ from gsuid_core.logger import logger
 
 from .path import CACHE_BASE
 
-# 保留天数（头像等体积小但数量多，30 天与 gamedata 静态缓存 TTL 对齐）
+# 普通缓存保留天数；无限期游戏数据表另由下方策略保护。
 CACHE_DAYS_TO_KEEP = 30
+
+
+def _protected_cache_files() -> set[Path]:
+    """从表 TTL 推导清理豁免，路径为相对 CACHE_BASE 的路径。"""
+    from .disk_cache import _validators_path
+    from .gamedata._table_cache import GAMEDATA_CACHE_DIR, TABLE_CACHE_TTLS
+
+    protected: set[Path] = set()
+    for path, ttl in TABLE_CACHE_TTLS.items():
+        if ttl == float("inf"):
+            protected.add(Path("gamedata") / path.relative_to(GAMEDATA_CACHE_DIR))
+            protected.add(
+                Path("gamedata") / _validators_path(path).relative_to(GAMEDATA_CACHE_DIR)
+            )
+    return protected
+
+
+# 永久保留的缓存目录（相对 CACHE_BASE，含其下全部文件）：关卡解包数据
+# 与卡池表同口径"永不过期"（rogue_map / is_enemy），30 天清理误删只会换来重复下载。
+_PROTECTED_CACHE_DIRS = {
+    Path("gamedata/levels"),
+    Path("gamedata/is_enemy"),
+}
 
 
 def _clean_dir_sync(directory: Path, cutoff: float) -> tuple[int, int]:
@@ -24,13 +47,27 @@ def _clean_dir_sync(directory: Path, cutoff: float) -> tuple[int, int]:
     removed, freed = 0, 0
     if not directory.exists():
         return 0, 0
+    protected = _protected_cache_files()
     for path in directory.rglob("*"):
         try:
-            if path.is_file() and path.stat().st_mtime < cutoff:
-                size = path.stat().st_size
-                path.unlink()
-                removed += 1
-                freed += size
+            if not path.is_file() or path.stat().st_mtime >= cutoff:
+                continue
+            try:
+                rel = path.relative_to(CACHE_BASE)
+            except ValueError:
+                rel = None
+            if rel is not None and (
+                rel in protected
+                or any(
+                    parent == keep for keep in _PROTECTED_CACHE_DIRS
+                    for parent in rel.parents
+                )
+            ):
+                continue
+            size = path.stat().st_size
+            path.unlink()
+            removed += 1
+            freed += size
         except OSError:
             continue
     return removed, freed

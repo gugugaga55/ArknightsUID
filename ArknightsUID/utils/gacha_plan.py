@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import math
+import re
 from functools import lru_cache
 from dataclasses import dataclass, field
 
@@ -210,17 +211,22 @@ _PLAN_ARG_LIMITS = {
 }
 
 
+_ACCOUNT_INDEX_TOKEN_RE = re.compile(r"^(?:#\d{1,2}|第\d{1,2}号?|\d{1,2}号)$")
+
+
 def parse_plan_args(text: str) -> PlanArgs:
     """解析 `key:value` 参数串（空格分隔，key 支持别名）。
 
     独立纯数字视为目标抽数（`ark攒抽 300`）。5 位以上的纯数字 token
-    是 UID（命令层 extract_uid 的口径）——不当抽数也不当池关键词，
+    （UID）与显式账号序号（`#2` / `第2号` / `2号`）不当抽数也不当池关键词，
     留给账号解析（审计 #23：`ark攒抽 玉:60000 149809765` 不得把 UID
     吃成 1.5 亿抽目标）。
     """
     args = PlanArgs()
     for token in (text or "").split():
         if ":" not in token and "：" not in token:
+            if _ACCOUNT_INDEX_TOKEN_RE.fullmatch(token):
+                continue
             # isascii 守卫：`①`/`²` 等 isdigit() 为 True 但 int() 抛 ValueError
             if token.isascii() and token.isdigit():
                 if len(token) <= 4:
