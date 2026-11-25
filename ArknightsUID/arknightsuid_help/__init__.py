@@ -223,11 +223,11 @@ HELP_GROUPS = [
     {
         "name": "卫戍",
         "en": "STRONGHOLD",
-        "blurb": "总览 / 图鉴 / 攻略",
+        "blurb": "战绩 / 图鉴 / 攻略",
         "cmds": [
             {
-                "cmd": "ark卫戍",
-                "desc": "卫戍协议模式总览与图鉴攻略查询入口（兼容 卫戎 / 自走棋）",
+                "cmd": "ark卫戍 [序号]",
+                "desc": "卫戍协议战绩卡（通关/最速/升金/击杀统计，兼容 卫戎 / 自走棋）",
                 "eg": "ark卫戍",
                 "keywords": "ark卫戎 ark自走棋 ark卫戍战绩",
             },

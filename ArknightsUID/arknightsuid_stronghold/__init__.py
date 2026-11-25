@@ -57,8 +57,8 @@ from ArknightsUID.version import ArknightsUID_version
 stronghold_guide_sv = SV("ArknightsUID卫戍攻略", priority=5)
 stronghold_sv = SV("ArknightsUID卫戍", priority=5)
 
-# 战绩端点（arknights/auto-chess）门控：待真实凭据 stronghold_dump.json 实装校对后再开启
-_STRONGHOLD_RECORDS_ENABLED = False
+# 战绩端点（arknights/auto-chess）门控：已通过真号 stronghold_dump.json 实测校对
+_STRONGHOLD_RECORDS_ENABLED = True
 _RECORDS_GATED_HINT = (
     "卫戍战绩接口待实装校对，当前可使用 ark卫戍攻略 <盟约|策略|干员|道具> 查询图鉴与社区攻略。"
 )
@@ -118,6 +118,10 @@ def _build_team_rows(teams: list) -> list[dict]:
     )
     rows: list[dict] = []
     for team in ranked[:_TEAM_TOP_N]:
+        active_defeats = sorted(
+            (d for d in team.defeats if int(d.get("defeat", 0)) > 0),
+            key=lambda d: -int(d.get("defeat", 0)),
+        )
         rows.append(
             {
                 "name": team.name,
@@ -129,7 +133,7 @@ def _build_team_rows(teams: list) -> list[dict]:
                 ),
                 "is_most_pass": team.is_most_pass,
                 "is_fastest": team.is_fastest,
-                "defeats": team.defeats[:_DEFEAT_TOP_N],
+                "defeats": active_defeats[:_DEFEAT_TOP_N],
             }
         )
     return rows

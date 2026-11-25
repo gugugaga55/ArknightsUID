@@ -11,9 +11,10 @@
 
 统计非实时：官方页提示「以下统计非实时数据，将于每日更新一次」。
 
-响应 schema 是从 H5 渲染代码逐字段还原的（首版未经真实凭据联调），
-字段口径以 tools/real_smoke.py 的 stronghold_dump.json 校对为准；
-解析全部防御式 .get()，上游加字段/改嵌套层级时降级为 0/空而非抛错。
+响应 schema 已通过真实凭据 stronghold_dump.json 实测校对（2026-11）：
+userInfo 各数值字段与 teams[].passCount / shortestRound / defeats[].defeat
+线上返回数字字符串，均由 _to_int 统一规整；teams[] 自带 name 且 defeats 固定按
+5 个敌方阵营全量列出（含 0 击杀项），解析与展示层分别做优先取名与零值过滤。
 """
 
 from __future__ import annotations
@@ -237,7 +238,7 @@ def _parse_team(
         )
     return StrongholdTeam(
         id=team_id,
-        name=band_name(team_id, strategies),
+        name=_to_str(raw.get("name")) or band_name(team_id, strategies),
         pass_count=_to_int(raw.get("passCount")),
         shortest_round=_to_int(raw.get("shortestRound")),
         is_most_pass=bool(raw.get("isMostPass")),
