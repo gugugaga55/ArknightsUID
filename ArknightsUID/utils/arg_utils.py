@@ -6,7 +6,21 @@ arknightsuid_account 的 _extract_uid/_extract_index 为本模块别名
 
 from __future__ import annotations
 
+import copy
 import re
+from typing import Any
+
+
+def clone_event_with_text(ev: Any, new_text: str) -> Any:
+    """构造仅替换 text 的事件浅拷贝（兼容 msgspec.Struct / Pydantic / SimpleNamespace）。"""
+    try:
+        cloned = copy.copy(ev)
+        cloned.text = new_text
+        return cloned
+    except Exception:
+        import msgspec
+
+        return msgspec.structs.replace(ev, text=new_text)
 
 
 def extract_uid(text: str) -> str:
@@ -32,10 +46,27 @@ def extract_index(text: str) -> int:
 
 
 _EXPLICIT_ACCOUNT = re.compile(
-    r"(?<!\S)(?:uid\s*[:：]\s*([0-9]{5,})|第\s*([0-9]{1,2})\s*号|([0-9]{1,2})\s*号)(?!\S)",
+    r"(?<!\S)(?:uid\s*[:：]\s*([0-9]{5,})|账号\s*[:：]?\s*([0-9]{1,2})|第\s*([0-9]{1,2})\s*号|([0-9]{1,2})\s*号)(?!\S)",
     re.IGNORECASE,
 )
 _LEGACY_ACCOUNT_UID = re.compile(r"(?<!\S)[0-9]{5,}(?!\S)")
+_PAGE_TOKEN = re.compile(r"(?<!\S)(?:页\s*[:：]?\s*(\d+)|第\s*(\d+)\s*页)(?!\S)")
+
+
+def split_page(text: str, *, default: int = 1) -> tuple[str, int]:
+    """拆出显式分页参数（页2 / 页:2 / 页 2 / 第2页），返回 (剥掉页码后的文本, page)。"""
+    raw = (text or "").strip()
+    matches = list(_PAGE_TOKEN.finditer(raw))
+    if not matches:
+        return raw, default
+    if len(matches) > 1:
+        raise ValueError("一次只能指定一个页码。")
+    match = matches[0]
+    page = int(match.group(1) or match.group(2))
+    if page < 1:
+        raise ValueError("页码必须大于 0。")
+    rest = re.sub(r"\s+", " ", f"{raw[:match.start()]} {raw[match.end():]}").strip()
+    return rest, page
 
 
 def split_account(
@@ -48,8 +79,8 @@ def split_account(
         if len(matches) != 1:
             raise ValueError("一次只能指定一个账号。")
         match = matches[0]
-        uid, first, second = match.groups()
-        index = int(first or second or 0)
+        uid, acct_idx, first, second = match.groups()
+        index = int(acct_idx or first or second or 0)
         if not uid and index == 0:
             raise ValueError("账号序号从 1 开始，可用账号见 ark账号。")
         return (text[:match.start()] + text[match.end():]).strip(), uid or "", index

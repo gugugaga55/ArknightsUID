@@ -9,6 +9,7 @@ from gsuid_core.bot import Bot
 from gsuid_core.models import Event
 from gsuid_core.sv import SV
 
+from ArknightsUID.utils.arg_utils import split_account, split_page
 from ArknightsUID.utils.card import resolve_or_reply, send_card_or_text, send_text
 from ArknightsUID.utils.enduid.adapter import hide_uid, hide_uid_for
 from ArknightsUID.utils.image import data_uri_bytes, gather_b64
@@ -31,33 +32,46 @@ def parse_friend_args(text: str) -> tuple[str, int, int, str]:
     """账号参数与本地页码分开；搜索内容不会被识别为另一个账号 UID。
 
     显式 UID/账号前缀优先于位数启发式（"UID:1234" 是 UID，"账号:100000000"
-    是序号）；裸数字沿用"5 位以上=UID"的既有启发式。
+    是序号）；其余账号与分页选择统一复用 arg_utils.split_page / split_account。
     """
-    page = 1
-    match = re.search(r"(?:^|\s)(?:页[:：]?\s*(\d+)|第\s*(\d+)\s*页)(?=\s|$)", text)
-    if match:
-        page = int(match.group(1) or match.group(2))
-        text = (text[: match.start()] + text[match.end() :]).strip()
+    usage = "用法：ark好友 [账号序号|UID] [页N] [搜索:关键词]"
     keyword = ""
     search = re.search(r"(?:^|\s)搜索[:：](.*)$", text)
     if search:
-        keyword = search.group(1).strip()
+        raw_after_search = search.group(1).strip()
+        # 允许页码写在搜索词前后任一侧
+        try:
+            keyword, page_in_search = split_page(raw_after_search, default=0)
+        except ValueError as exc:
+            raise ValueError(usage) from exc
         text = text[: search.start()].strip()
-    stripped = text.strip()
-    prefix_match = re.match(r"^(账号|UID)[:：]?\s*", stripped, flags=re.IGNORECASE)
-    prefix = prefix_match.group(1).upper() if prefix_match else ""
-    selector = stripped[prefix_match.end() :] if prefix_match else stripped
-    if page < 1 or (selector and (not selector.isdigit() or int(selector) < 1)):
-        raise ValueError("用法：ark好友 [账号序号|UID] [页N] [搜索:关键词]")
-    if not selector:
-        uid, index = "", 0
-    elif prefix == "UID":
-        uid, index = selector, 0
-    elif prefix == "账号":
-        uid, index = "", int(selector)
     else:
-        uid = selector if len(selector) >= 5 else ""
-        index = int(selector) if selector and not uid else 0
+        page_in_search = 0
+    try:
+        stripped, page = split_page(text)
+    except ValueError as exc:
+        raise ValueError(usage) from exc
+    if page_in_search:
+        if page != 1:
+            raise ValueError(usage)
+        page = page_in_search
+    if not stripped:
+        return "", 0, page, keyword
+    prefix_match = re.match(r"^(账号|UID)[:：]?\s*(\S+)$", stripped, flags=re.IGNORECASE)
+    if prefix_match:
+        prefix = prefix_match.group(1).upper()
+        selector = prefix_match.group(2)
+        if not selector.isdigit() or int(selector) < 1:
+            raise ValueError(usage)
+        if prefix == "UID":
+            return selector, 0, page, keyword
+        return "", int(selector), page, keyword
+    try:
+        rest, uid, index = split_account(stripped)
+    except ValueError as exc:
+        raise ValueError(usage) from exc
+    if rest or (not uid and index < 1):
+        raise ValueError(usage)
     return uid, index, page, keyword
 
 

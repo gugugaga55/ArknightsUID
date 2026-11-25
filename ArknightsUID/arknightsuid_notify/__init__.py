@@ -34,7 +34,7 @@ from gsuid_core.subscribe import GsCoreSubscribe, gs_subscribe
 from gsuid_core.sv import SV
 from gsuid_core.utils.database.models import Subscribe
 
-from ArknightsUID.utils.arg_utils import split_account
+from ArknightsUID.utils.arg_utils import clone_event_with_text, split_account
 from ArknightsUID.utils.async_locks import KeyedLocks
 from ArknightsUID.utils.time_utils import BEIJING_TZ, beijing_datetime
 
@@ -621,15 +621,16 @@ def save_push_state(state: dict[str, dict], merge_from=None) -> None:
 
 
 def _extract_target(text: str) -> tuple[str, int]:
-    """订阅命令参数 → (uid, 序号)。与 account 模块同规则：长数字=UID，短数字=序号。"""
-    query = text.strip()
-    uid_match = re.search(r"\d{5,}", query)
-    if uid_match:
-        return uid_match.group(0), 0
-    index_match = re.fullmatch(r"第?(\d{1,2})号?", query)
-    if index_match:
-        return "", int(index_match.group(1))
-    return "", 0
+    """订阅命令参数 → (uid, 序号)。复用公共 split_account 口径（含 账号:2 / UID:数字 / 2号 / 裸数字）。"""
+    try:
+        rest, uid, index = split_account(text or "")
+    except ValueError:
+        return "", 0
+    if uid:
+        return uid, 0
+    if rest:
+        return "", 0
+    return "", index
 
 
 # 文本回复公共实现在 utils.card.send_text；保留模块级别名供调用点/测试 patch
@@ -793,6 +794,7 @@ async def subscribe_sanity_push(
         "取消订阅理智",
         "取消理智推送",
         "退订理智推送",
+        "退订理智",
     ),
     block=True,
 )
@@ -1155,6 +1157,7 @@ async def subscribe_training_push(
         "取消订阅训练",
         "取消训练推送",
         "退订训练推送",
+        "退订训练",
     ),
     block=True,
 )
@@ -1388,7 +1391,7 @@ async def subscribe_campaign_push(
     return True
 
 
-@notify_sv.on_command(("取消订阅剿灭", "退订剿灭推送"), block=True)
+@notify_sv.on_command(("取消订阅剿灭", "退订剿灭推送", "退订剿灭"), block=True)
 async def unsubscribe_campaign_push(bot: Bot, ev: Event) -> None:
     uid, index = _extract_target(ev.text)
     if uid or index:
@@ -1632,6 +1635,7 @@ async def subscribe_building_push(
         "取消订阅基建",
         "取消基建推送",
         "退订基建推送",
+        "退订基建",
     ),
     block=True,
 )
@@ -1958,6 +1962,7 @@ async def subscribe_sign_push(
         "取消订阅签到",
         "取消自动签到",
         "退订签到推送",
+        "退订签到",
     ),
     block=True,
 )
@@ -2035,9 +2040,105 @@ def _subscription_destination(row: Subscribe, ev: Event) -> str:
     return "私聊"
 
 
+def _check_cross_sv_auth(target_sv: SV, ev: Event) -> str:
+    """跨 SV 子命令转发时校验目标 SV 权限与启用状态（防借 notify_sv 绕过 pm=3 等限制）。"""
+    user_pm = getattr(ev, "user_pm", None)
+    if user_pm is not None and user_pm > target_sv.pm:
+        return "该订阅操作需要群管理员权限。"
+    if user_pm is not None and hasattr(ev, "user_type"):
+        try:
+            from gsuid_core.handler import _sv_authorized
+
+            if not _sv_authorized(target_sv, ev, user_pm):
+                return "当前会话或权限不允许执行该订阅操作。"
+        except Exception:
+            pass
+    return ""
+
+
+async def _dispatch_subscribe_subcommand(
+    bot: Bot, ev: Event, *, enable: bool
+) -> bool:
+    """解析 `ark订阅/退订 <子项> ...` 的首词子命令并转发；未命中子命令返回 False。"""
+    stripped = (ev.text or "").strip()
+    if not stripped:
+        return False
+    parts = stripped.split(maxsplit=1)
+    head = parts[0]
+    tail = parts[1].strip() if len(parts) > 1 else ""
+    retext = clone_event_with_text(ev, tail)
+
+    if enable:
+        personal_map: dict[str, Callable[[Bot, Event], Awaitable[Any]]] = {
+            "理智": subscribe_sanity_push,
+            "训练": subscribe_training_push,
+            "专精": subscribe_training_push,
+            "专精训练": subscribe_training_push,
+            "基建": subscribe_building_push,
+            "剿灭": subscribe_campaign_push,
+            "签到": subscribe_sign_push,
+            "自动签到": subscribe_sign_push,
+            "日常": subscribe_daily,
+        }
+    else:
+        personal_map = {
+            "理智": unsubscribe_sanity_push,
+            "训练": unsubscribe_training_push,
+            "专精": unsubscribe_training_push,
+            "专精训练": unsubscribe_training_push,
+            "基建": unsubscribe_building_push,
+            "剿灭": unsubscribe_campaign_push,
+            "签到": unsubscribe_sign_push,
+            "自动签到": unsubscribe_sign_push,
+            "日常": unsubscribe_daily,
+        }
+    if head in personal_map:
+        await personal_map[head](bot, retext)
+        return True
+
+    from ArknightsUID import arknightsuid_push as push_mod
+
+    if head in ("公告", "方舟公告"):
+        if err := _check_cross_sv_auth(push_mod.push_sv, ev):
+            await _send_text(bot, ev, err)
+            return True
+        fn = (
+            push_mod.subscribe_ark_announcements
+            if enable
+            else push_mod.unsubscribe_ark_announcements
+        )
+        await fn(bot, retext)
+        return True
+
+    if head in ("活动", "方舟活动"):
+        if tail:
+            await _send_text(
+                bot,
+                ev,
+                "用法：ark订阅方舟活动 / ark取消订阅方舟活动（不带额外参数）",
+            )
+            return True
+        if err := _check_cross_sv_auth(push_mod.push_sub_sv, ev):
+            await _send_text(bot, ev, err)
+            return True
+        fn = (
+            push_mod.subscribe_ark_activities
+            if enable
+            else push_mod.unsubscribe_ark_activities
+        )
+        await fn(bot, retext)
+        return True
+
+    return False
+
+
 @notify_sv.on_fullmatch(("订阅",), block=True)
 @notify_sv.on_command(("订阅 ", "订阅总览", "我的订阅"), block=True)
 async def show_subscriptions(bot: Bot, ev: Event) -> None:
+    if getattr(ev, "command", "订阅 ") in ("订阅 ", "订阅") and await _dispatch_subscribe_subcommand(
+        bot, ev, enable=True
+    ):
+        return
     from ArknightsUID.arknightsuid_push import ANN_TASK_NAME, TASK_NAME as ACT_TASK
 
     try:
@@ -2089,6 +2190,17 @@ async def subscribe_daily(bot: Bot, ev: Event) -> None:
 @notify_sv.on_command(("退订日常", "取消订阅日常"), block=True)
 async def unsubscribe_daily(bot: Bot, ev: Event) -> None:
     await _change_daily_subscriptions(bot, ev, enable=False)
+
+
+@notify_sv.on_command(("取消订阅 ", "退订 "), block=True)
+async def unsubscribe_subcommand(bot: Bot, ev: Event) -> None:
+    if await _dispatch_subscribe_subcommand(bot, ev, enable=False):
+        return
+    await _send_text(
+        bot,
+        ev,
+        "用法：ark退订 <理智|训练|基建|剿灭|签到|日常|公告|活动> [2号]",
+    )
 
 
 async def _change_daily_subscriptions(bot: Bot, ev: Event, *, enable: bool) -> None:

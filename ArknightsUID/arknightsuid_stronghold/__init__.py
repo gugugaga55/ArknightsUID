@@ -598,6 +598,11 @@ async def send_stronghold_guide(bot: Bot, ev: Event) -> None:
 
 
 async def _send_stronghold_guide(bot: Bot, ev: Event, query: str) -> None:
+    query = query.strip()
+    if query == "攻略":
+        query = ""
+    elif query.startswith("攻略") and (query[2:3].isspace() or query[2:3] in ":："):
+        query = query[2:].lstrip(" \t\r\n\u3000:：")
     if not query:
         guide = await fetch_stronghold_guide()
         if guide is None:

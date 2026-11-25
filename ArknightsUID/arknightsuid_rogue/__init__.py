@@ -40,6 +40,7 @@ from ArknightsUID.version import ArknightsUID_version
 # startswith 分发，否则「肉鸽别名/肉鸽别名删除」会被「肉鸽」命令抢走
 # （别名命令的 handler 定义在文件末尾，SV 创建序即分发序）。
 # 凭据解析 + 失败即回复的统一入口（原各处四行样板）
+from ArknightsUID.utils.arg_utils import clone_event_with_text
 from ArknightsUID.utils.card import resolve_or_reply  # noqa: E402
 
 rogue_alias_sv = SV("ArknightsUID肉鸽别名", priority=5)
@@ -1683,9 +1684,47 @@ async def send_rogue_records(bot: Bot, ev: Event) -> None:
     await _send_text(bot, ev, text)
 
 
+async def _dispatch_rogue_subcommand(bot: Bot, ev: Event, raw: str) -> bool:
+    """解析 `ark肉鸽 <子命令> ...` 显式空格子命令转发；未命中返回 False。"""
+    stripped = raw.strip()
+    if not stripped:
+        return False
+    parts = stripped.split(maxsplit=1)
+    head = parts[0]
+    tail = parts[1].strip() if len(parts) > 1 else ""
+    retext = clone_event_with_text(ev, tail)
+    sub_map = {
+        "战绩": send_rogue_records,
+        "详情": send_rogue_detail,
+        "敌人": send_rogue_enemy,
+        "关卡": send_rogue_stage,
+        "结局": send_rogue_ending,
+    }
+    if head in sub_map:
+        await sub_map[head](bot, retext)
+        return True
+    if head == "藏品":
+        from ArknightsUID import arknightsuid_wiki as wiki_mod
+
+        await wiki_mod.send_relic_query(bot, retext)
+        return True
+    if head == "别名":
+        if not tail or tail == "列表":
+            await list_rogue_theme_alias(bot, retext)
+        elif tail.startswith(("删除", "移除")):
+            del_tail = re.sub(r"^(?:删除|移除)\s*", "", tail)
+            await delete_rogue_theme_alias(bot, clone_event_with_text(ev, del_tail))
+        else:
+            await set_rogue_theme_alias(bot, retext)
+        return True
+    return False
+
+
 @rogue_sv.on_command(("肉鸽", "集成战略", "rg"), block=True)
 async def send_rogue_info(bot: Bot, ev: Event) -> None:
     raw = ev.text or ""
+    if await _dispatch_rogue_subcommand(bot, ev, raw):
+        return
     # #N / 第N局 始终是局号；旧的尾部裸数字在总览、战绩里仍是账号。
     if _DETAIL_SELECTOR.search(raw) or any(word in ("收藏", "fav") for word in raw.split()):
         return await send_rogue_detail(bot, ev)

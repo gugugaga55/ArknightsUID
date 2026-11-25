@@ -26,6 +26,7 @@ from ArknightsUID.utils.arg_utils import (
     extract_index,
     extract_uid,
     split_account,
+    split_page,
 )
 from ArknightsUID.utils.card import send_card_or_text
 from ArknightsUID.utils.enduid.adapter import (
@@ -107,10 +108,12 @@ _CROSS_SOURCE_WARNING = "部分小黑盒与官方记录时间相近，可能重�
 
 
 def _extract_page(text: str) -> int:
-    match = _RE_PAGE.search(text or "")
-    if not match:
-        return 1
-    return int(match.group(1) or match.group(2))
+    try:
+        _, page = split_page(text or "")
+        return page
+    except ValueError:
+        match = _RE_PAGE.search(text or "")
+        return int(match.group(1) or match.group(2)) if match else 1
 
 
 def _extract_url(text: str) -> str:
@@ -170,16 +173,25 @@ async def _bake_avatars(context: dict) -> None:
     block=True,
 )
 async def show_gacha_report(bot: Bot, ev: Event) -> None:
-    page = _extract_page(ev.text)
-    # 页:N 不参与账号解析（页码数字不是 UID/序号）
-    rest = _RE_PAGE.sub(" ", ev.text or "")
-    uid = extract_uid(rest)
-    index = extract_index(rest)
+    try:
+        rest, page = split_page(ev.text or "")
+    except ValueError as exc:
+        return await _send_text(bot, ev, str(exc))
+    tokens = rest.split()
+    full = "全量" in tokens
+    acct_text = " ".join(tok for tok in tokens if tok != "全量")
+    try:
+        extra, uid, index = split_account(acct_text)
+    except ValueError as exc:
+        return await _send_text(bot, ev, str(exc))
+    if extra:
+        uid = extract_uid(acct_text)
+        index = extract_index(acct_text)
     credential = await resolve_or_reply(bot, ev, uid, index)
     if credential is None:
         return
 
-    if "全量" in rest.split():
+    if full:
         records, warning = await sync_gacha_logs(credential, full=True)
     else:
         records, warning = await sync_gacha_logs(credential)

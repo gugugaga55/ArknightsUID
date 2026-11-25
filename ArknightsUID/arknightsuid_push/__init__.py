@@ -1074,7 +1074,7 @@ async def subscribe_ark_activities(bot: Bot, ev: Event) -> None:
     )
 
 
-@push_sub_sv.on_fullmatch(("取消订阅方舟活动", "取消订阅活动", "退订方舟活动"))
+@push_sub_sv.on_fullmatch(("取消订阅方舟活动", "取消订阅活动", "退订方舟活动", "退订活动"))
 async def unsubscribe_ark_activities(bot: Bot, ev: Event) -> None:
     if ev.group_id is None:
         return await bot.send("请在群聊中取消订阅")
@@ -1146,6 +1146,7 @@ async def subscribe_ark_announcements(bot: Bot, ev: Event) -> None:
         "取消方舟公告",
         "退订公告推送",
         "退订方舟公告",
+        "退订公告",
     ),
     block=True,
 )
