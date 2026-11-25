@@ -395,12 +395,14 @@ def _as_int_or_none(raw) -> int | None:
 
 
 def effective_ap(data: PlayerData, now: float | None = None) -> int:
-    """当前理智：优先用实时公式，无恢复时间戳时退回 dump 里的 current。"""
+    """当前理智：优先用实时公式，无恢复时间戳或溢出上限时取接口 current。"""
     if data.ap_max <= 0:
         return 0
+    if data.ap_current is not None and data.ap_current > data.ap_max:
+        return data.ap_current
     if data.ap_complete_recovery_time > 0:
         return compute_ap_current(data.ap_max, data.ap_complete_recovery_time, now)
     if data.ap_current is not None:
-        # 字段存在即信接口值——0 理智是真 0，不再当"缺失"回退成满理智（审计 #29）
-        return min(max(0, data.ap_current), data.ap_max)
+        # 字段存在即信接口值——0 理智是真 0
+        return max(0, data.ap_current)
     return data.ap_max

@@ -73,6 +73,10 @@ CULTIVATE_PLAYER_URL = f"{MAIN_URL}api/{API_VERSION}/game/cultivate/player"
 # 期号换算的唯一事实源见 utils/gamedata/rogue_registry.py），
 # 空串由服务端返回默认期（响应 topics[].isSelected 标记当前期）
 ARK_ROGUE_URL = f"{MAIN_URL}api/{API_VERSION}/game/arknights/rogue"
+# 卫戍协议战绩（森空岛 App「卫戍协议数据」H5 同源；路径是 auto-chess——
+# 官方 H5 的服务函数名 getArknightsStrongholdInfo 也用 stronghold 指同一特性，
+# 两套代号并存是上游自己的命名混用）。GET + uid 参数，签名口径同 rogue。
+ARK_STRONGHOLD_URL = f"{MAIN_URL}api/{API_VERSION}/game/arknights/auto-chess"
 GAME_FRIEND_LIST_URL = f"{MAIN_URL}api/{API_VERSION}/game/friend/list"
 
 # 明日方舟在 Skland 的"游戏 ID"实际是 channelMasterId（官服渠道 ID）。
@@ -709,4 +713,22 @@ async def get_rogue_records(
             "targetUserId": target_user_id,
             "topicId": topic_id,
         },
+    )
+
+
+async def get_stronghold_info(credential: ArkCredential) -> dict[str, Any] | None:
+    """查询卫戍协议战绩（森空岛 App「卫戍协议数据」页同源）。
+
+    端点/参数形态来自 Skland 2.3.0 官方 H5（game.skland.com
+    /arknights/stronghold）逆向：GET auto-chess，仅 uid 一个查询参数。
+    响应结构口径见 utils/gamedata/stronghold.py 的 parse_stronghold_info
+    （该页统计非实时，官方提示每日更新一次）。
+    """
+    return await _signed_request(
+        credential,
+        url=ARK_STRONGHOLD_URL,
+        method="GET",
+        uid=credential.uid,
+        game_id=ARKNIGHTS_CHANNEL_OFFICIAL,
+        params={"uid": credential.uid},
     )

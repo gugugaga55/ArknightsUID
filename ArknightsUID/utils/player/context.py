@@ -59,6 +59,8 @@ _HYCDN = "https://web.hycdn.cn/arknights/game/assets"
 def format_dt(ts: int, now: float | None = None) -> str:
     if ts <= 0:
         return ""
+    if now is not None and ts <= now:
+        return ""
     return beijing_datetime(ts).strftime("%m-%d %H:%M")
 
 
@@ -107,6 +109,23 @@ def skill_icon_url(skill_id: str) -> str:
     if not skill_id:
         return ""
     return f"{_HYCDN}/char_skill/{quote(skill_id, safe='')}.png"
+
+
+async def skill_icon_b64(skill_id: str) -> str:
+    """按真实 skillId 取技能图标 base64（磁盘缓存，失败空串降级）。
+
+    训练详情卡与基建总览共用；直接用接口给出的 skillId，不按技能名
+    反查，避免同名技能误配。"""
+    url = skill_icon_url(skill_id)
+    if not url:
+        return ""
+    try:
+        from ..path import SKILL_CACHE_PATH
+        from ..render import get_image_b64_with_cache
+
+        return await get_image_b64_with_cache(url, SKILL_CACHE_PATH)
+    except Exception:
+        return ""
 
 
 def skin_portrait_url(skin_id: str) -> str:
@@ -220,7 +239,7 @@ def build_status_context(
         "uid": _mask_uid(uid_masked, data.uid),
         "ap_current": ap_current,
         "ap_max": data.ap_max,
-        "ap_pct": round(ap_current * 100 / data.ap_max) if data.ap_max else 0,
+        "ap_pct": min(100, round(ap_current * 100 / data.ap_max)) if data.ap_max else 0,
         "ap_full_at": format_dt(full_at, now) or "已回满",
         "ap_recover_in": format_remaining(full_at, now) or "已回满",
         "reg_days": data.register_days(now),
@@ -384,17 +403,42 @@ def _mastery_target(
 ) -> tuple[CharEntry | None, int, int]:
     """受训干员与专精目标档（接口 targetSkill=技能序号；目标档=当前专精+1）。
 
-    返回 (char_entry|None, mastery_from, mastery_to)；推不出 → (char|None, 0, 0)。
+    返回 (char_entry|None, mastery_from, mastery_to)；空闲或已满专精 → (char|None, 0, 0)。
     """
     char = next(
         (c for c in data.chars if c.char_id == building.training_trainee_id),
         None,
     )
+    if training_remaining_secs(building) < 0:
+        return char, 0, 0
     idx = building.training_target_skill
     if char is not None and 0 <= idx < len(char.skills):
         cur = char.skills[idx].specialize_level
-        return char, cur, min(3, cur + 1)
+        if cur >= 3:
+            return char, 0, 0
+        return char, cur, cur + 1
     return char, 0, 0
+
+
+async def _training_skill_info(
+    data: PlayerData, building: BuildingData
+) -> tuple[str, str]:
+    """在训技能 (skill_id, 技能名)：接口 targetSkill 直取真实 skillId
+    （图标按 skillId 取，不按技能名反查，避免同名技能误配）；任一环节
+    缺失返回 ("", "")。"""
+    char, _, _ = _mastery_target(data, building)
+    idx = building.training_target_skill
+    if char is None or not 0 <= idx < len(char.skills):
+        return "", ""
+    skill_id = char.skills[idx].skill_id
+    name = ""
+    try:
+        from ..gamedata.charinfo import load_skill_names
+
+        name = (await load_skill_names()).get(skill_id, "")
+    except Exception:
+        name = ""
+    return skill_id, name
 
 
 async def build_building_context(
@@ -488,6 +532,17 @@ async def build_building_context(
         training_slots.append(_empty_slot("受训位"))
     if not building.training_trainer_id:
         training_slots.append(_empty_slot("协助位"))
+
+    # 在训技能图标/名称（仅非空闲时按真实 skillId 取图标；空闲时不挂残留技能信息）
+    if training_state != "空闲":
+        training_skill_id, training_skill_name = await _training_skill_info(
+            data, building
+        )
+        training_skill_icon = (
+            await skill_icon_b64(training_skill_id) if training_skill_id else ""
+        )
+    else:
+        training_skill_id, training_skill_name, training_skill_icon = "", "", ""
 
     control = {
         "level": building.control_level,
@@ -658,6 +713,8 @@ async def build_building_context(
         "training": {
             "state": training_state,
             "level": building.training_level,
+            "skill_name": training_skill_name,
+            "skill_icon": training_skill_icon,
             "members": training_members,
             "slots": training_slots,
             "remain": (
@@ -697,34 +754,32 @@ async def build_training_context(
         return None
     trainee_id = building.training_trainee_id
     remaining = training_remaining_secs(building)
+    is_idle = not trainee_id or remaining < 0
     char, mastery_from, mastery_to = _mastery_target(data, building)
     rarity = char.rarity_display if char is not None else 0
     target_idx = building.training_target_skill
-    skill_label = f"{target_idx + 1}技能" if 0 <= target_idx <= 2 else ""
-    skill_name = ""
-    if char is not None and 0 <= target_idx < len(char.skills):
-        try:
-            from ..gamedata.charinfo import load_skill_names
-
-            skill_name = (await load_skill_names()).get(
-                char.skills[target_idx].skill_id, ""
-            )
-        except Exception:
-            skill_name = ""
+    skill_label = (
+        f"{target_idx + 1}技能" if not is_idle and 0 <= target_idx <= 2 else ""
+    )
+    if not is_idle:
+        skill_id, skill_name = await _training_skill_info(data, building)
+        skill_icon = await skill_icon_b64(skill_id) if skill_id else ""
+        portrait = await char_portrait_b64(trainee_id, rarity) if trainee_id else ""
+        avatar = await char_avatar_b64(trainee_id) if trainee_id else ""
+    else:
+        skill_id, skill_name, skill_icon, portrait, avatar = "", "", "", "", ""
     base_hours = TRAINING_BASE_HOURS_BY_LEVEL.get(mastery_to or 0)
-    portrait = await char_portrait_b64(trainee_id, rarity) if trainee_id else ""
-    avatar = await char_avatar_b64(trainee_id) if trainee_id else ""
     trainer_avatar = (
         await char_avatar_b64(building.training_trainer_id)
-        if building.training_trainer_id
+        if building.training_trainer_id and not is_idle
         else ""
     )
     finish_at = ""
-    if remaining > 0:
+    if remaining > 0 and not is_idle:
         finish_at = beijing_datetime(time.time() + remaining).strftime(
             "%m-%d %H:%M"
         )
-    if not trainee_id or remaining < 0:
+    if is_idle:
         # remaining=-1 是接口哨兵（空闲/未知）：trainee 只是残留指派，
         # 不能当"受训中"渲染（空闲期的常态查询此前全部误标）
         state2, state_en = "空闲", "IDLE"
@@ -732,6 +787,13 @@ async def build_training_context(
         state2, state_en = "已完成", "DONE"
     else:
         state2, state_en = "受训中", "TRAINING"
+    # 专精档位官方图标（专精_N.png）；失败空串，模板降级为文字
+    from ..prts.client import mastery_icon_b64
+
+    mastery_from_icon = (
+        await mastery_icon_b64(mastery_from) if mastery_from else ""
+    )
+    mastery_to_icon = await mastery_icon_b64(mastery_to) if mastery_to else ""
     return {
         "name": data.name or "博士",
         "uid": _mask_uid(uid_masked, data.uid),
@@ -739,22 +801,25 @@ async def build_training_context(
         "portrait": portrait,
         "avatar": avatar,
         "skill_name": skill_name,
+        "skill_icon": skill_icon,
         "skill_label": skill_label,
         "mastery_from": mastery_from,
+        "mastery_from_icon": mastery_from_icon,
         "mastery_to": mastery_to,
+        "mastery_to_icon": mastery_to_icon,
         "trainer": building.training_trainer,
         "trainer_avatar": trainer_avatar,
         "state": state2,
         "state_en": state_en,
         "remain_text": (
             format_training_remaining(remaining)
-            if trainee_id and remaining >= 0
+            if not is_idle
             else ""
         ),
         "finish_at": finish_at,
         "pct": (
             training_progress_pct(building, base_hours=base_hours)
-            if trainee_id
+            if not is_idle
             else None
         ),
         "base_exact": base_hours is not None,

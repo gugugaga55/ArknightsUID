@@ -15,10 +15,13 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import re
 
 from gsuid_core.logger import logger
 
 __all__ = ["user_avatar_b64"]
+
+_OPENID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 # qlogo 企鹅占位图 md5（EndUID at_help.py 实测名单）
 _QQ_DEFAULT_AVATAR_MD5 = frozenset(
@@ -32,11 +35,15 @@ _QQ_DEFAULT_AVATAR_MD5 = frozenset(
 
 def _avatar_url(bot_id: str, user_id: str, bot_self_id: str = "") -> str:
     """按平台组头像 URL；无来源返回空串。"""
-    if not user_id or not user_id.isdigit():
+    if not user_id:
         return ""
     if bot_id == "onebot":
-        return f"http://q1.qlogo.cn/g?b=qq&nk={user_id}&s=640"
+        if not user_id.isdigit():
+            return ""
+        return f"https://q1.qlogo.cn/g?b=qq&nk={user_id}&s=640"
     if bot_id == "qqgroup":
+        if not bot_self_id or not _OPENID_RE.fullmatch(user_id) or not _OPENID_RE.fullmatch(bot_self_id):
+            return ""
         return f"https://q.qlogo.cn/qqapp/{bot_self_id}/{user_id}/100"
     return ""
 
@@ -48,7 +55,9 @@ def _sniff_mime(raw: bytes) -> str:
         return "image/png"
     if raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
         return "image/webp"
-    return "image/jpeg"
+    if raw.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    return ""
 
 
 async def user_avatar_b64(bot_id: str, user_id: str, bot_self_id: str = "") -> str:
@@ -63,10 +72,15 @@ async def user_avatar_b64(bot_id: str, user_id: str, bot_self_id: str = "") -> s
         response = await client.get(url, timeout=10.0, follow_redirects=True)
         response.raise_for_status()
         raw = response.content
-        # 企鹅占位（无头像号）与异常小响应都视为无头像
-        if len(raw) < 400 or hashlib.md5(raw).hexdigest() in _QQ_DEFAULT_AVATAR_MD5:
+        mime = _sniff_mime(raw)
+        # 企鹅占位（无头像号）、非图片响应与异常小响应都视为无头像
+        if (
+            not mime
+            or len(raw) < 400
+            or hashlib.md5(raw).hexdigest() in _QQ_DEFAULT_AVATAR_MD5
+        ):
             return ""
-        return f"data:{_sniff_mime(raw)};base64,{base64.b64encode(raw).decode()}"
+        return f"data:{mime};base64,{base64.b64encode(raw).decode()}"
     except Exception:
         logger.debug("[ArknightsUID·头像] 获取失败", exc_info=True)
         return ""

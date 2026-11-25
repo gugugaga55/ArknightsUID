@@ -9,7 +9,9 @@
     remain_text: str      剩余时长文案（约X小时Y分；已完成="已完成"，未知/空闲=空）
     finish_at: str        预计完成时刻（MM-dd HH:mm；未知/空闲=空）
     skill_name/skill_label: str   在训技能名 / "N技能"（接口 targetSkill 反查，可空）
+    skill_icon: str               在训技能图标 b64（按真实 skillId 取，失败空串隐藏）
     mastery_from/mastery_to: int  专精目标档（当前+1；0 = 未知）
+    mastery_from_icon/mastery_to_icon: str  专精档位官方图标 b64（专精_N.png，失败空串降级文字）
     trainer/trainer_avatar: str   协助干员名/头像（可空）
     pct: int|None         进度估算（按目标档基准 8/16/24h；空闲/未知 None）
     base_exact: bool      目标档是否识别（False = 按 24h 兜底口径）
@@ -35,7 +37,7 @@
             <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_mastery.b64" %}" alt="">
         </div>
 
-        {% if trainee %}
+        {% if trainee and state != "空闲" %}
         <div class="sect">
             <span class="sect-label bk">{{ trainee }}</span>
             <span class="sect-en">{{ state_en }} // {{ state }}</span>
@@ -63,13 +65,13 @@
             {% if skill_name or mastery_to %}
             <div class="row">
                 <span class="row-label">在训技能 SKILL</span>
-                <span class="row-value" style="font-size: 13px;">{{ skill_name or skill_label }}{% if mastery_to %}<span class="u-mute" style="font-size: 10px; font-weight: 400; margin-left: 6px;">专精{{ mastery_from }} → 专精{{ mastery_to }}</span>{% endif %}</span>
+                <span class="row-value" style="display: inline-flex; align-items: center; font-size: 13px;">{% if skill_icon %}<img src="{{ skill_icon }}" alt="" style="width: 22px; height: 22px; object-fit: cover; margin-right: 6px; border: 1px solid var(--hairline); flex-shrink: 0;">{% endif %}<span>{{ skill_name or skill_label }}</span>{% if mastery_to %}<span class="u-mute" style="display: inline-flex; align-items: center; font-size: 10px; font-weight: 400; margin-left: 6px;">{% if mastery_from_icon %}<img src="{{ mastery_from_icon }}" alt="" style="width: 15px; height: 13px; object-fit: contain; margin: 0 2px;">{% else %}专精{{ mastery_from }}{% endif %} → {% if mastery_to_icon %}<img src="{{ mastery_to_icon }}" alt="" style="width: 15px; height: 13px; object-fit: contain; margin: 0 2px;">{% else %}专精{{ mastery_to }}{% endif %}</span>{% endif %}</span>
             </div>
             {% endif %}
             {% if trainer %}
             <div class="row">
                 <span class="row-label">协助干员 TRAINER</span>
-                <span class="row-value" style="font-size: 13px;">{% if trainer_avatar %}<img src="{{ trainer_avatar }}" alt="" style="width: 18px; height: 18px; object-fit: cover; vertical-align: -4px; margin-right: 5px; border: 1px solid var(--hairline);">{% endif %}{{ trainer }}</span>
+                <span class="row-value" style="display: inline-flex; align-items: center; font-size: 13px;">{% if trainer_avatar %}<img src="{{ trainer_avatar }}" alt="" style="width: 18px; height: 18px; object-fit: cover; margin-right: 5px; border: 1px solid var(--hairline); flex-shrink: 0;">{% endif %}<span>{{ trainer }}</span></span>
             </div>
             {% endif %}
             <div class="row">
@@ -86,8 +88,14 @@
         <div class="rows" style="margin-top: var(--space-5);">
             <div class="row">
                 <span class="row-label">训练室状态</span>
-                <span class="row-value" style="font-size: 13px;">空闲——当前没有干员在受训</span>
+                <span class="row-value" style="font-size: 13px;">{% if trainee %}空闲——{{ trainee }} 驻留中，当前没有技能在受训{% else %}空闲——当前没有干员在受训{% endif %}</span>
             </div>
+            {% if trainer %}
+            <div class="row">
+                <span class="row-label">协助干员</span>
+                <span class="row-value" style="font-size: 13px;">{{ trainer }}</span>
+            </div>
+            {% endif %}
         </div>
         <div class="prose">派干员进训练室专精技能后，这里会显示剩余时间与预计完成时刻；ark基建 查看基建总览。</div>
         {% endif %}

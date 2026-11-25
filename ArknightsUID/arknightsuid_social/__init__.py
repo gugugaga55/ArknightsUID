@@ -33,16 +33,16 @@ def parse_friend_args(text: str) -> tuple[str, int, int, str]:
     显式 UID/账号前缀优先于位数启发式（"UID:1234" 是 UID，"账号:100000000"
     是序号）；裸数字沿用"5 位以上=UID"的既有启发式。
     """
+    page = 1
+    match = re.search(r"(?:^|\s)(?:页[:：]?\s*(\d+)|第\s*(\d+)\s*页)(?=\s|$)", text)
+    if match:
+        page = int(match.group(1) or match.group(2))
+        text = (text[: match.start()] + text[match.end() :]).strip()
     keyword = ""
     search = re.search(r"(?:^|\s)搜索[:：](.*)$", text)
     if search:
         keyword = search.group(1).strip()
         text = text[: search.start()].strip()
-    page = 1
-    match = re.search(r"(?:^|\s)(?:页(\d+)|第(\d+)页)(?=\s|$)", text)
-    if match:
-        page = int(match.group(1) or match.group(2))
-        text = (text[: match.start()] + text[match.end() :]).strip()
     stripped = text.strip()
     prefix_match = re.match(r"^(账号|UID)[:：]?\s*", stripped, flags=re.IGNORECASE)
     prefix = prefix_match.group(1).upper() if prefix_match else ""
@@ -69,7 +69,7 @@ def parse_avatar_args(text: str, *, detail: bool = False) -> tuple[int, int]:
         if token.startswith("分类"):
             category = int(token[2:].lstrip(":："))
         elif not detail and token.startswith("页"):
-            number = int(token[1:])
+            number = int(token[1:].lstrip(":："))
         elif token.isdigit() and not positional:
             number = int(token)
             positional = True

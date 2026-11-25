@@ -32,6 +32,7 @@ except ImportError:  # pragma: no cover - 仅 core 内部重构时触发
     modify_func = None
 
 from ArknightsUID.utils.card import send_text as _send_text
+from ArknightsUID.utils.registration import register_sensitive_alias
 
 alias_sv = SV("ArknightsUID指令别名", priority=5)
 
@@ -76,12 +77,41 @@ def _runtime_ok() -> bool:
     return True
 
 
+def _is_own_forwarder(func) -> bool:
+    return (
+        getattr(func, "__wrapped__", None) is forward_command
+        or func is forward_command
+    )
+
+
+def _resolve_target_chain(target: str, max_hops: int = 8) -> tuple[str, bool]:
+    """沿 _alias_map 解引用到最终指令词；返回 (canonical, is_cycle)。"""
+    cur = target
+    visited: set[str] = set()
+    for _ in range(max_hops):
+        if cur not in _alias_map:
+            return cur, False
+        if cur in visited:
+            return "", True
+        visited.add(cur)
+        nxt = _alias_map.get(cur, "")
+        if not nxt:
+            return cur, False
+        cur = nxt
+    return "", True
+
+
 def _find_target_trigger(target: str):
-    """按命令词在本插件范围内找已注册的 command Trigger；找不到返回 None。"""
-    for sv in SL.lst.values():
-        for trigger in sv.TL.get("command", {}).values():
-            if trigger.keyword == target and _func_belongs_to_plugin(trigger.func):
-                return trigger
+    """按命令词在本插件范围内找已注册的 command/fullmatch Trigger；找不到返回 None。"""
+    for trig_type in ("command", "fullmatch"):
+        for sv in SL.lst.values():
+            for trigger in sv.TL.get(trig_type, {}).values():
+                if (
+                    trigger.keyword == target
+                    and _func_belongs_to_plugin(trigger.func)
+                    and not _is_own_forwarder(trigger.func)
+                ):
+                    return trigger
     return None
 
 
@@ -98,16 +128,36 @@ def _all_registered_keys() -> set[str]:
     own_forward_keys = {
         key
         for key, trigger in alias_sv.TL.get("command", {}).items()
-        if getattr(trigger.func, "__wrapped__", None) is forward_command
+        if _is_own_forwarder(trigger.func)
     }
     keys -= own_forward_keys
     return keys
 
 
+def _plugin_command_keys() -> set[str]:
+    """本插件自身的非转发 command/prefix 展开键，用于前缀遮蔽检测。"""
+    keys: set[str] = set()
+    for sv in SL.lst.values():
+        for trig_type in ("command", "prefix"):
+            for key, trigger in sv.TL.get(trig_type, {}).items():
+                if _func_belongs_to_plugin(trigger.func) and not _is_own_forwarder(
+                    trigger.func
+                ):
+                    keys.add(key)
+    return keys
+
+
 def _alias_conflicts(alias: str) -> bool:
-    """别名的任一前缀展开键是否与现存触发词冲突（防抢其他命令）。"""
+    """别名的任一前缀展开键是否与现存触发词冲突（含成为本插件指令的短前缀）。"""
     expanded = {p + alias for p in _plugin_prefixes()}
-    return bool(expanded & _all_registered_keys())
+    if expanded & _all_registered_keys():
+        return True
+    plugin_keys = _plugin_command_keys()
+    return any(
+        existing != exp and existing.startswith(exp)
+        for exp in expanded
+        for existing in plugin_keys
+    )
 
 
 def _install_alias_trigger(alias: str) -> None:
@@ -132,9 +182,17 @@ async def forward_command(bot: Bot, ev: Event) -> None:
     if not _runtime_ok():
         await _send_text(bot, ev, "别名转发与当前 core 版本不兼容，请联系维护者。")
         return
-    target = _alias_map.get(ev.command)
-    if not target:
+    raw_target = _alias_map.get(ev.command)
+    if not raw_target:
         await _send_text(bot, ev, f"指令别名「{ev.command}」已失效，请主人重新设置。")
+        return
+    target, is_cycle = _resolve_target_chain(raw_target)
+    if is_cycle or not target:
+        await _send_text(
+            bot,
+            ev,
+            f"指令别名「{ev.command}」存在循环指向，请主人用 ark删除指令别名 清理。",
+        )
         return
     trigger = _find_target_trigger(target)
     if trigger is None:
@@ -145,6 +203,8 @@ async def forward_command(bot: Bot, ev: Event) -> None:
             "（可能被禁用或改名），请主人用 ark删除指令别名 清理。",
         )
         return
+    if getattr(trigger, "type", "") == "fullmatch" and (ev.text or "").strip():
+        return
     from gsuid_core.handler import _sv_authorized
 
     target_sv = next(
@@ -153,7 +213,8 @@ async def forward_command(bot: Bot, ev: Event) -> None:
             for service in SL.lst.values()
             if any(
                 candidate is trigger
-                for candidate in service.TL.get("command", {}).values()
+                for ttype in ("command", "fullmatch")
+                for candidate in service.TL.get(ttype, {}).values()
             )
         ),
         None,
@@ -179,8 +240,14 @@ async def ensure_aliases_installed() -> None:
         for row in await ArkCommandAlias.list_aliases():
             merged[row.alias] = row.target  # tombstone（target=""）= 停用
         _alias_map = {a: t for a, t in merged.items() if t}
-        for alias in _alias_map:
+        for alias, target in list(_alias_map.items()):
+            canonical, is_cycle = _resolve_target_chain(target)
+            if is_cycle:
+                _alias_map.pop(alias, None)
+                continue
+            _alias_map[alias] = canonical
             _install_alias_trigger(alias)
+            register_sensitive_alias(alias, canonical)
         _installed = True
     except Exception:
         logger.debug(
@@ -211,13 +278,17 @@ async def register_command_alias(alias: str, target: str) -> str | None:
         return "别名不能包含「=」或空白字符。"
     if len(alias) > 12:
         return "别名过长（≤12 字符）。"
+    if alias == target:
+        return "别名与目标相同，无需设置。"
+    canonical, is_cycle = _resolve_target_chain(target)
+    if is_cycle or canonical == alias:
+        return "别名存在循环指向，请直接指向目标指令。"
+    target = canonical
     if _find_target_trigger(target) is None:
         return (
             f"未找到本插件指令「{target}」。目标必须是 ArknightsUID 已注册的"
             "命令词（不带 ark/方舟 前缀，如 公招推荐 / 干员 / 练度卡）。"
         )
-    if alias == target:
-        return "别名与目标相同，无需设置。"
     if _alias_conflicts(alias):
         return f"「{alias}」与现有指令/别名冲突，请换一个词。"
     from ArknightsUID.utils.database.models import ArkCommandAlias
@@ -225,6 +296,7 @@ async def register_command_alias(alias: str, target: str) -> str | None:
     await ArkCommandAlias.set_alias(alias, target)
     _alias_map[alias] = target
     _install_alias_trigger(alias)
+    register_sensitive_alias(alias, target)
     return None
 
 
@@ -251,7 +323,7 @@ async def remove_command_alias(alias: str) -> str | None:
 # 短词会抢走「ark指令别名列表/删除」——与练度卡/练度 同款踩坑）。
 
 
-@alias_sv.on_command(("指令别名列表", "别名列表"), block=True)
+@alias_sv.on_command(("指令别名列表", "命令别名列表"), block=True)
 async def list_command_aliases(bot: Bot, ev: Event) -> None:
     await ensure_aliases_installed()
     if not _alias_map:

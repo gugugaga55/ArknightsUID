@@ -19,7 +19,7 @@ from ArknightsUID.utils.account_switch import (
 )
 from ArknightsUID.utils.arg_utils import extract_uid
 from ArknightsUID.utils.config import ArkConfig
-from ArknightsUID.utils.enduid.adapter import hide_uid
+from ArknightsUID.utils.enduid.adapter import hide_uid, hide_uid_for
 from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
 from ArknightsUID.utils.skland import auth as ark_auth
 from ArknightsUID.utils.skland import store as ark_store
@@ -58,20 +58,32 @@ async def _send_login_success(bot: Bot, ev: Event, roles: list[dict]) -> None:
     from ArknightsUID.version import ArknightsUID_version
 
     default_uid = get_default_uid(ev.bot_id, ev.user_id)
+    shown_uids: dict[str, str] = {}
+    for role in roles:
+        raw_id = str(role.get("role_id") or "")
+        if raw_id and raw_id not in shown_uids:
+            shown_uids[raw_id] = await hide_uid_for(raw_id, ev.user_id, ev.bot_id)
     context = {
         "version": ArknightsUID_version,
         "roles": [
             {
                 "index": index,
                 "nickname": role.get("nickname") or "未记录昵称",
-                "uid": hide_uid(str(role.get("role_id") or "")),
+                "uid": shown_uids.get(
+                    str(role.get("role_id") or ""),
+                    hide_uid(str(role.get("role_id") or "")),
+                ),
                 "is_default": str(role.get("role_id") or "") == default_uid,
             }
             for index, role in enumerate(roles, start=1)
         ],
     }
     await send_card_or_text(
-        bot, ev, "ark_login.html", context, _format_bind_success(roles)
+        bot,
+        ev,
+        "ark_login.html",
+        context,
+        _format_bind_success(roles, shown_uids=shown_uids),
     )
 
 
@@ -79,6 +91,15 @@ async def _send_login_success(bot: Bot, ev: Event, roles: list[dict]) -> None:
 async def bind_credential(bot: Bot, ev: Event) -> None:
     if ev.group_id:
         return await _send_text(bot, ev, _PRIVATE_ONLY_HINT)
+    if not (ev.text or "").strip():
+        return await _send_text(
+            bot, ev,
+            "绑定明日方舟账号：\n"
+            "• ark登录：网页登录\n"
+            "• ark扫码登录：用森空岛扫码\n"
+            "• ark绑定 <32 位 cred 或 24 位 token>：仅私聊发送\n"
+            "已登录的账号用 ark账号 查看。",
+        )
 
     kind, value = ark_auth.parse_credential(ev.text)
     if kind is None:
@@ -212,6 +233,7 @@ async def remove_login(bot: Bot, ev: Event) -> None:
 
     uid = extract_uid(ev.text)
     if uid:
+        shown_uid = await hide_uid_for(uid, ev.user_id, ev.bot_id)
         removed = await ark_store.remove_ark_login(ev.user_id, ev.bot_id, uid=uid)
         if removed is None:
             return await _send_text(bot, ev, "读取或保存账号来源失败，未解除，请稍后重试。")
@@ -219,22 +241,23 @@ async def remove_login(bot: Bot, ev: Event) -> None:
             return await _send_text(
                 bot,
                 ev,
-                f"未找到 UID {hide_uid(uid)} 的登录记录（可用账号见 ark绑定列表）。",
+                f"未找到 UID {shown_uid} 的登录记录（可用账号见 ark绑定列表）。",
             )
         # 默认账号恰好指向被删 UID 时一并清除，防止 resolve 落到不存在的默认
-        if clear_default_uid(ev.bot_id, ev.user_id, uid=uid):
+        # （完整读-改-写事务下放线程：锁等待不再阻塞事件循环）
+        if await asyncio.to_thread(clear_default_uid, ev.bot_id, ev.user_id, uid=uid):
             await _send_text(
                 bot,
                 ev,
-                f"已解除本插件 UID {hide_uid(uid)} 的登录，默认账号已重置；重新登录可恢复。",
+                f"已解除本插件 UID {shown_uid} 的登录，默认账号已重置；重新登录可恢复。",
             )
         else:
-            await _send_text(bot, ev, f"已解除本插件 UID {hide_uid(uid)} 的登录；EndUID 原记录不变，重新登录可恢复。")
+            await _send_text(bot, ev, f"已解除本插件 UID {shown_uid} 的登录；EndUID 原记录不变，重新登录可恢复。")
     else:
         count = await ark_store.remove_ark_login(ev.user_id, ev.bot_id)
         if count is None:
             return await _send_text(bot, ev, "读取或保存账号来源失败，未解除，请稍后重试。")
-        clear_default_uid(ev.bot_id, ev.user_id)
+        await asyncio.to_thread(clear_default_uid, ev.bot_id, ev.user_id)
         await _send_text(
             bot, ev,
             f"已解除本插件的 {count} 个明日方舟登录（含 EndUID 复用）；"
@@ -244,21 +267,11 @@ async def remove_login(bot: Bot, ev: Event) -> None:
 
 @bind_sv.on_fullmatch(("查看绑定", "我的绑定"), block=True)
 async def show_bind(bot: Bot, ev: Event) -> None:
-    try:
-        users = await ark_store.list_local_accounts(ev.user_id, ev.bot_id)
-    except Exception:
-        return await _send_text(bot, ev, "读取本地账号失败，请稍后重试。")
-    if not users:
-        return await _send_text(
-            bot, ev, "本地未绑定明日方舟账号。请私聊使用 ark绑定 或 ark扫码登录。"
-        )
-    lines = ["「明日方舟」本地绑定账号："]
-    for index, row in enumerate(users, start=1):
-        nick = (row.nickname or "") or "未记录"
-        usable = bool(row.cookie) and (row.cookie_status or "") != "无效"
-        status = "可用" if usable else "凭据失效/缺失"
-        lines.append(f"{index}. {nick} | UID {hide_uid(row.uid)} | {status}")
-    await _send_text(bot, ev, "\n".join(lines))
+    if ev.group_id:
+        return await _send_text(bot, ev, "请在私聊中查看绑定。")
+    from ArknightsUID.arknightsuid_account import show_ark_accounts
+
+    await show_ark_accounts(bot, ev)
 
 
 # ---------------------------------------------------------------------------
@@ -268,32 +281,30 @@ async def show_bind(bot: Bot, ev: Event) -> None:
 alias_sv = SV("ArknightsUID别名", priority=5)
 
 
-def _parse_alias_text(text: str) -> tuple[str, str] | None:
-    """「别名 目标」「别名=目标」「别名 → 目标」→ (alias, target)。"""
-    raw = (text or "").strip()
-    if not raw:
-        return None
-    for sep in ("=", "＝", "→", "->"):
-        if sep in raw:
-            left, _, right = raw.partition(sep)
-            alias, target = left.strip(), right.strip()
-            if alias and target:
-                return alias, target
-    parts = raw.split()
-    if len(parts) == 2:
-        return parts[0].strip(), parts[1].strip()
-    return None
+from ArknightsUID.utils.user_alias import parse_alias_pair as _parse_alias_text
 
 
 @alias_sv.on_fullmatch(("别名列表", "我的别名"), block=True)
 async def list_user_alias(bot: Bot, ev: Event) -> None:
     from ArknightsUID.utils.database.models import ArkAlias
 
-    rows = await ArkAlias.list_aliases(bot_id=ev.bot_id, user_id=ev.user_id)
+    from ArknightsUID.utils.gamedata.rogue_enemy import THEME_DIRS
+
+    rows = await ArkAlias.list_aliases(bot_id=ev.bot_id, user_id=ev.user_id) or []
     if not rows:
-        return await _send_text(bot, ev, "你还没有设置别名。用法：ark别名 银羽毛=银灰")
-    lines = ["「明日方舟」你的干员别名："]
-    lines.extend(f"- {row.alias} → {row.target}" for row in rows)
+        return await _send_text(bot, ev, "还没有设置别名。用法：ark别名 银羽毛=银灰")
+    operators, themes = [], []
+    for row in rows:
+        if row.target.startswith("rogue:"):
+            theme = row.target.removeprefix("rogue:")
+            themes.append(f"- {row.alias} → {THEME_DIRS.get(theme, theme)}")
+        else:
+            operators.append(f"- {row.alias} → {row.target}")
+    lines = ["「明日方舟」我的别名"]
+    if operators:
+        lines.extend(["【干员】", *operators])
+    if themes:
+        lines.extend(["【肉鸽期名】", *themes])
     await _send_text(bot, ev, "\n".join(lines))
 
 
@@ -313,14 +324,25 @@ async def delete_user_alias(bot: Bot, ev: Event) -> None:
         await _send_text(bot, ev, f"没有这个别名：{alias}")
 
 
-@alias_sv.on_command(("别名", "干员别名"), block=True)
+@alias_sv.on_command(("别名",), block=True)
 async def set_user_alias(bot: Bot, ev: Event) -> None:
+    if not (ev.text or "").strip():
+        return await list_user_alias(bot, ev)
+    await _set_alias(bot, ev, automatic=True)
+
+
+@alias_sv.on_command(("干员别名",), block=True)
+async def set_operator_alias(bot: Bot, ev: Event) -> None:
+    await _set_alias(bot, ev, automatic=False)
+
+
+async def _set_alias(bot: Bot, ev: Event, *, automatic: bool) -> None:
     parsed = _parse_alias_text(ev.text)
     if not parsed:
         return await _send_text(
             bot,
             ev,
-            "用法：ark别名 银羽毛=银灰（或「ark别名 银羽毛 银灰」）；"
+            "用法：ark别名 银羽毛=银灰，或 ark别名 小园=界园；"
             "ark别名列表 查看；ark别名删除 银羽毛 删除。",
         )
     alias, target = parsed
@@ -338,6 +360,25 @@ async def set_user_alias(bot: Bot, ev: Event) -> None:
             bot, ev, "干员索引不可用（首次使用需下载游戏数据），请稍后再试。"
         )
     candidates = match_entries(target, index)
+    if automatic:
+        from ArknightsUID.utils.gamedata.rogue_enemy import resolve_theme_dir
+
+        theme = resolve_theme_dir(target)
+        if theme and candidates:
+            return await _send_text(
+                bot, ev, f"「{target}」也可匹配干员，请用 ark干员别名 或 ark肉鸽别名 明确类型。"
+            )
+        existing = await ArkAlias.resolve_alias(
+            bot_id=ev.bot_id, user_id=ev.user_id, alias=alias.lower(),
+        )
+        if (theme or candidates) and existing and existing.startswith("rogue:") != bool(theme):
+            return await _send_text(
+                bot, ev, f"「{alias}」已有另一类目标，请先用 ark别名删除 {alias} 删除旧别名。"
+            )
+        if theme:
+            from ArknightsUID.arknightsuid_rogue import save_rogue_theme_alias
+
+            return await save_rogue_theme_alias(bot, ev, alias, target)
     if not candidates:
         return await _send_text(bot, ev, f"未找到干员：{target}")
     if len(candidates) > 1:

@@ -24,14 +24,13 @@
 workTime（累计工时）同理。低心情干员从四个工作房间（制造/贸易/发电/控制）
 聚合，宿舍（休息回复）不计入。
 
-training.remainSecs 训练中语义尚无一手样本（dump 为空闲态 -1），按
-「lastUpdateTime 快照时刻的剩余秒」折算（见 training_remaining_secs），
-与 labor.remainSecs 同款倒计时模式；展示文案统一带「约」。
+training.remainSecs 即接口返回时刻的实时剩余秒（多实现一手口径，与
+labor.remainSecs 的快照语义不同），见 training_remaining_secs；
+展示文案统一带「约」，预计完成时刻 = 当前时间 + remainSecs。
 """
 
 from __future__ import annotations
 
-import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -99,19 +98,15 @@ def morale_points(ap: Any) -> float:
 
 
 def training_remaining_secs(building: BuildingData, now: int | None = None) -> int:
-    """训练剩余秒数（折算到 now 时刻）；-1 = 空闲/未知，0 = 已到点待结算。
+    """训练剩余秒数（本次请求时刻口径）；-1 = 空闲/未知，0 = 已到点待结算。
 
-    remainSecs 视为 lastUpdateTime 快照时刻的剩余（labor.remainSecs 同款），
-    往后流逝的时间要扣掉；lastUpdateTime 缺失（0）时直接当作当前剩余。
+    remainSecs 是接口返回时刻的实时剩余（多个森空岛实现的一手口径，
+    与 labor.remainSecs 的快照语义不同），不能再减 now - lastUpdateTime，
+    否则重复扣除已流逝的时间（2 小时被错算成 1 小时）。now 仅为签名
+    兼容保留，不参与计算；预计完成时刻由调用方 now + 剩余秒得出。
     """
     if building.training_remain_secs < 0:
         return -1
-    if now is None:
-        now = int(time.time())
-    if building.training_last_update > 0:
-        return max(
-            0, building.training_remain_secs - (now - building.training_last_update)
-        )
     return building.training_remain_secs
 
 

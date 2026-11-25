@@ -133,7 +133,12 @@ class WebSessionStore:
 
     def _cleanup(self, connection: sqlite3.Connection, now: float) -> None:
         # 已开始的账号写入可以完成，但过期/被顶替的会话不能再获得新提交权。
-        connection.execute("DELETE FROM web_sessions WHERE expires_at <= ?", (now,))
+        # finalizing 租约有效期内不得提前删行，否则持久化成功后 complete() 会失配。
+        connection.execute(
+            "DELETE FROM web_sessions WHERE expires_at <= ? "
+            "AND NOT (phase = 'finalizing' AND claim_until IS NOT NULL AND claim_until > ?)",
+            (now, now),
+        )
 
     def _read(
         self, connection: sqlite3.Connection, auth_hash: str, now: float
@@ -168,29 +173,60 @@ class WebSessionStore:
 
     def create(self, token: str, state: dict[str, Any]) -> None:
         # 只接收回执元数据，不让调用方误把验证码/凭据塞进持久会话。
+        # ws_bot_id：发起登录命令的 WS 连接 id（Event.WS_BOT_ID）——回执
+        # 按它精确路由回原连接，缺失时走 web_login 的旧 payload 兼容策略。
         payload = {
             key: state.get(key)
-            for key in ("flow", "user_id", "bot_id", "bot_self_id", "group_id")
+            for key in (
+                "flow",
+                "user_id",
+                "bot_id",
+                "bot_self_id",
+                "ws_bot_id",
+                "group_id",
+            )
         }
         encrypted = self._encode(payload)
         now = self.clock()
-        # 沿用原行为：同 flow/user 新链接撤销旧链接（不按群建立独立登录）。
-        owner_hash = self._hash(f"{payload['flow']}:{payload['user_id']}")
+        # 同 flow/bot/user 新链接撤销旧链接（按机器人隔离，避免跨适配器互相撤销）。
+        owner_hash = self._hash(
+            f"{payload['flow']}:{payload.get('bot_id') or ''}:{payload['user_id']}"
+        )
         with self._transaction() as connection:
             self._cleanup(connection, now)
+            prev = connection.execute(
+                "SELECT COALESCE(MAX(sms_count), 0) AS max_sms, MAX(last_sms_at) AS max_ts "
+                "FROM web_sessions WHERE owner_hash=? AND expires_at > ?",
+                (owner_hash, now),
+            ).fetchone()
+            carry_sms = int(prev["max_sms"] or 0) if prev is not None else 0
+            carry_last_ts = prev["max_ts"] if prev is not None else None
             connection.execute(
-                "DELETE FROM web_sessions WHERE owner_hash=?", (owner_hash,)
+                "DELETE FROM web_sessions WHERE owner_hash=? "
+                "AND NOT (phase = 'finalizing' AND claim_until IS NOT NULL AND claim_until > ?)",
+                (owner_hash, now),
             )
             connection.execute(
-                "INSERT INTO web_sessions(auth_hash,owner_hash,payload,created_at,expires_at,phase) "
-                "VALUES(?,?,?,?,?,'init')",
-                (self._hash(token), owner_hash, encrypted, now, now + self.ttl),
+                "INSERT INTO web_sessions("
+                "auth_hash,owner_hash,payload,created_at,expires_at,phase,sms_count,last_sms_at"
+                ") VALUES(?,?,?,?,?,'init',?,?)",
+                (
+                    self._hash(token),
+                    owner_hash,
+                    encrypted,
+                    now,
+                    now + self.ttl,
+                    carry_sms,
+                    carry_last_ts,
+                ),
             )
             connection.execute(
                 "DELETE FROM web_sessions WHERE auth_hash IN ("
-                "SELECT auth_hash FROM web_sessions ORDER BY created_at DESC, rowid DESC "
+                "SELECT auth_hash FROM web_sessions "
+                "WHERE NOT (phase = 'finalizing' AND claim_until IS NOT NULL AND claim_until > ?) "
+                "ORDER BY created_at DESC, rowid DESC "
                 "LIMIT -1 OFFSET ?)",
-                (self.maxsize,),
+                (now, self.maxsize),
             )
 
     def get(self, token: str) -> dict[str, Any] | None:

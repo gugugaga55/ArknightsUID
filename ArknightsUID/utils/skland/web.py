@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from datetime import datetime
@@ -68,6 +69,7 @@ PAGE_SIZE_MAX = 10
 # 进程内公共 token 缓存（25 分钟，服务端短期）
 _token_cache: dict[str, Any] = {"token": "", "ts": 0.0}
 _TOKEN_TTL = 25 * 60
+_token_refresh_lock = asyncio.Lock()
 
 # web 端设备 ID：进程内保持稳定（对应浏览器 localStorage 里的 dId）
 _web_did: str = ""
@@ -129,42 +131,51 @@ async def refresh_public_web_token(force: bool = False) -> str:
     if not force and _token_cache["token"] and now - _token_cache["ts"] < _TOKEN_TTL:
         return str(_token_cache["token"])
 
-    async def do_request(did: str) -> dict[str, Any] | None:
-        sign_data = skland_client._generate_sign(
-            token="", path=WEB_REFRESH_PATH, query_or_body="", did=did
-        )
-        return await _http_get_json(
-            f"{WEB_BASE}{WEB_REFRESH_PATH}", _web_headers(sign_data, did)
-        )
+    async with _token_refresh_lock:
+        now = time.time()
+        if (
+            not force
+            and _token_cache["token"]
+            and now - _token_cache["ts"] < _TOKEN_TTL
+        ):
+            return str(_token_cache["token"])
 
-    did = _get_web_did()
-    if not did:
-        return ""
-    data = await do_request(did)
+        async def do_request(did: str) -> dict[str, Any] | None:
+            sign_data = skland_client._generate_sign(
+                token="", path=WEB_REFRESH_PATH, query_or_body="", did=did
+            )
+            return await _http_get_json(
+                f"{WEB_BASE}{WEB_REFRESH_PATH}", _web_headers(sign_data, did)
+            )
 
-    # 设备 ID 被服务端判定无效（10001 设备信息无效）时，换新设备 ID 重试一次
-    if isinstance(data, dict) and data.get("code") == _CRED_INVALID_CODE:
-        logger.warning(
-            "[ArknightsUID·公告] web 设备 ID 被拒，重新生成后重试: "
-            f"{data.get('message')}"
-        )
-        did = _get_web_did(force=True)
+        did = _get_web_did()
         if not did:
             return ""
         data = await do_request(did)
 
-    if (
-        require_envelope(
-            data, action="web token 刷新失败", log_prefix="[ArknightsUID·公告]"
-        )
-        is None
-    ):
-        return ""
-    token = str((data.get("data") or {}).get("token") or "")
-    if token:
-        _token_cache["token"] = token
-        _token_cache["ts"] = time.time()
-    return token
+        # 设备 ID 被服务端判定无效（10001 设备信息无效）时，换新设备 ID 重试一次
+        if isinstance(data, dict) and data.get("code") == _CRED_INVALID_CODE:
+            logger.warning(
+                "[ArknightsUID·公告] web 设备 ID 被拒，重新生成后重试: "
+                f"{data.get('message')}"
+            )
+            did = _get_web_did(force=True)
+            if not did:
+                return ""
+            data = await do_request(did)
+
+        if (
+            require_envelope(
+                data, action="web token 刷新失败", log_prefix="[ArknightsUID·公告]"
+            )
+            is None
+        ):
+            return ""
+        token = str((data.get("data") or {}).get("token") or "")
+        if token:
+            _token_cache["token"] = token
+            _token_cache["ts"] = time.time()
+        return token
 
 
 async def web_public_get(path: str, params: dict[str, Any]) -> dict[str, Any] | None:

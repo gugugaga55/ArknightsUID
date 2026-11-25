@@ -74,6 +74,16 @@ def hide_uid(uid: str, user_pref: str = "") -> str:
 async def get_hide_uid_pref(uid: str, user_id: str, bot_id: str) -> str:
     """读 ArkUser.hide_uid_self_value；无记录/异常回空（跟随全局）。"""
     try:
+        from gsuid_core.utils.database.base_models import User, async_maker
+
+        if (
+            async_maker is None
+            and getattr(ArkUser.base_select_data, "__func__", None)
+            is getattr(User.base_select_data, "__func__", None)
+            and getattr(ArkUser.select_rows, "__func__", None)
+            is getattr(User.select_rows, "__func__", None)
+        ):
+            return ""
         user = await ArkUser.base_select_data(uid=uid, user_id=user_id, bot_id=bot_id)
         return (getattr(user, "hide_uid_self_value", "") or "") if user else ""
     except Exception:
@@ -264,18 +274,21 @@ async def resolve_credential(
     user_id: str,
     bot_id: str,
     uid: str = "",
-    index: int = 0,
+    index: int | None = 0,
 ) -> ArkCredential | str:
     result = await resolve_accounts(user_id, bot_id)
     if not result.installed:
         return result.reason
     if not result.accounts:
         if result.uids:
-            shown = "、".join(hide_uid(item) for item in result.uids)
+            shown_list = [
+                await hide_uid_for(item, user_id, bot_id) for item in result.uids
+            ]
+            shown = "、".join(shown_list)
             return f"已找到明日方舟 UID：{shown}，但没有找到可用凭据，请重新 ark绑定 登录。"
         return result.reason
 
-    if index > 0:
+    if index is not None and index > 0:
         if index > len(result.accounts):
             return f"未找到第 {index} 个明日方舟账号，请使用 ark绑定列表 查看可用账号。"
         account = result.accounts[index - 1]
@@ -289,7 +302,7 @@ async def resolve_credential(
                 if account.usable:
                     return account
                 return result.reason or _unusable_hint(account)
-        return f"未找到 UID {hide_uid(uid)} 的可用凭据。"
+        return f"未找到 UID {await hide_uid_for(uid, user_id, bot_id)} 的可用凭据。"
 
     # ark切换 设置的用户级默认账号（未显式指定 uid/序号时生效）
     from ..account_switch import get_default_uid
@@ -359,4 +372,12 @@ async def fetch_rogue_records(
     response = await local_skland.get_rogue_records(credential, topic_id)
     if response is None:
         return "森空岛肉鸽战绩接口请求失败。"
+    return response
+
+
+async def fetch_stronghold_info(credential: ArkCredential) -> dict[str, Any] | str:
+    """卫戍协议战绩（森空岛 App「卫戍协议数据」页同源；统计每日更新一次）。"""
+    response = await local_skland.get_stronghold_info(credential)
+    if response is None:
+        return "森空岛卫戍协议接口请求失败。"
     return response

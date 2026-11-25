@@ -10,6 +10,7 @@ game/player/info 返回 1w+ 行 JSON，直接打森空岛接口既慢又有风�
 from __future__ import annotations
 
 import asyncio
+import math
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -87,6 +88,19 @@ async def read_cached_player_info(
         return None
     data = await read_player_json(path)
     if isinstance(data, dict) and data.get("code") == 0:
+        # remainSecs 是接口返回时刻的实时值；磁盘快照再次被消费时，
+        # 只减去缓存年龄，不能减 training.lastUpdateTime。
+        body = data.get("data")
+        building = body.get("building") if isinstance(body, dict) else None
+        training = building.get("training") if isinstance(building, dict) else None
+        remaining = training.get("remainSecs") if isinstance(training, dict) else None
+        if (
+            isinstance(remaining, (int, float))
+            and not isinstance(remaining, bool)
+            and math.isfinite(remaining)
+            and remaining >= 0
+        ):
+            training["remainSecs"] = max(0, int(remaining) - int(age))
         return data
     return None
 

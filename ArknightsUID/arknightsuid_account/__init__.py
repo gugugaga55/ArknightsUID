@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from typing import Any
 
@@ -56,6 +57,7 @@ _safe_external_message = safe_external_message
 from ArknightsUID.utils.arg_utils import (
     extract_index as _extract_index,
     extract_uid as _extract_uid,
+    split_account,
 )  # noqa: E402
 
 
@@ -77,10 +79,15 @@ async def send_activity_records(bot: Bot, ev: Event) -> None:
 
 
 async def _send_personal_activity(bot: Bot, ev: Event, *, records: bool) -> None:
-    credential = await resolve_or_reply(bot, ev)
+    try:
+        keyword, uid, index = split_account(ev.text or "")
+    except ValueError as exc:
+        return await _send_text(bot, ev, str(exc))
+    credential = await resolve_or_reply(bot, ev, uid, index)
     if credential is None:
         return
-    response = await fetch_cached_player_info(credential)
+    # 用户主动查询：强制刷新，不吃 300 秒缓存（与 _load_player_data 同口径）
+    response = await fetch_cached_player_info(credential, force=True)
     if isinstance(response, str):
         await _send_text(bot, ev, _safe_external_message(response))
         return
@@ -90,7 +97,7 @@ async def _send_personal_activity(bot: Bot, ev: Event, *, records: bool) -> None
     from ArknightsUID.utils.player.activity import format_activity_progress, format_activity_records
 
     formatter = format_activity_records if records else format_activity_progress
-    await _send_text(bot, ev, formatter(response["data"], (ev.text or "").strip()))
+    await _send_text(bot, ev, formatter(response["data"], keyword))
 
 
 def _clip(text: Any, limit: int) -> str:
@@ -410,7 +417,8 @@ async def switch_ark_account(bot: Bot, ev: Event) -> None:
             )
         target = result.accounts[index - 1]
 
-    if set_default_uid(ev.bot_id, ev.user_id, target.uid):
+    # 完整读-改-写事务（含跨进程文件锁等待）下放线程，不阻塞事件循环
+    if await asyncio.to_thread(set_default_uid, ev.bot_id, ev.user_id, target.uid):
         shown = await hide_uid_for(target.uid, ev.user_id, ev.bot_id)
         await _send_text(
             bot,
@@ -423,8 +431,13 @@ async def switch_ark_account(bot: Bot, ev: Event) -> None:
 
 
 async def _load_player_data(credential: ArkCredential) -> PlayerData | str:
-    """带缓存的 player_info 获取 + 解析。失败返回中文错误文案。"""
-    response = await fetch_cached_player_info(credential)
+    """player_info 获取 + 解析。失败返回中文错误文案。
+
+    账号模块的查询全部由用户主动发起（ark理智/基建/训练室/干员卡…），
+    force=True 跳过 300 秒缓存、每次重新请求并回写新缓存（single-flight
+    锁内执行）；后台轮询与 Wiki 练度增强仍走 TTL 缓存。
+    """
+    response = await fetch_cached_player_info(credential, force=True)
     if isinstance(response, str):
         return response
     data = parse_player_info(response)
@@ -887,8 +900,15 @@ def _parse_char_query(text: str) -> tuple[str, str, int]:
     block=True,
 )
 async def send_ark_attendance(bot: Bot, ev: Event) -> None:
-    uid = _extract_uid(ev.text)
-    index = _extract_index(ev.text)
+    text = (ev.text or "").strip()
+    if text == "全部":
+        return await _sign_own_accounts(bot, ev)
+    try:
+        remaining, uid, index = split_account(text)
+    except ValueError as exc:
+        return await _send_text(bot, ev, str(exc))
+    if remaining:
+        return await _send_text(bot, ev, "用法：ark签到 [账号序号|UID] / ark签到 全部")
     credential = await resolve_or_reply(bot, ev, uid, index)
     if credential is None:
         return
@@ -902,6 +922,34 @@ async def send_ark_attendance(bot: Bot, ev: Event) -> None:
     await _send_text(
         bot, ev, _format_attendance(credential, response, uid_display=shown)
     )
+
+
+async def _sign_own_accounts(bot: Bot, ev: Event) -> None:
+    result = await resolve_accounts(ev.user_id, ev.bot_id)
+    if not result.accounts:
+        return await _send_text(bot, ev, result.reason or "没有可签到的账号，请先 ark登录。")
+    lines = ["「明日方舟」我的账号签到"]
+    for index, credential in enumerate(result.accounts, 1):
+        shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
+        label = f"{index}号 · {credential.nickname or shown}"
+        if not credential.usable:
+            lines.append(f"{label}：跳过（登录失效）")
+            continue
+        try:
+            response = await ark_attendance(credential)
+            if isinstance(response, str):
+                outcome = _safe_external_message(response)
+            else:
+                await drop_cached_player_info(credential.uid)
+                formatted = _format_attendance(credential, response, uid_display=shown)
+                outcome = formatted.split("\n", 2)[-1]
+                if response.get("code") == 0:
+                    outcome = f"成功 · {outcome}"
+        except Exception as exc:
+            logger.warning(f"[ArknightsUID·签到] 个人账号签到失败: {type(exc).__name__}")
+            outcome = "请求失败，请稍后重试。"
+        lines.append(f"{label}：{outcome}")
+    await _send_text(bot, ev, "\n".join(lines))
 
 
 def _format_building(
@@ -934,9 +982,13 @@ def _format_building(
         board = "、".join(building.clue_board) if building.clue_board else "空"
         lines.append(f"会客室：线索 {building.clue_own} · 线索板：{board}")
     if building.training_trainee:
-        status = training_status_text(training_remaining_secs(building))
-        suffix = f"（{status}）" if status else ""
-        lines.append(f"训练室：{building.training_trainee} 专精训练中{suffix}")
+        rem = training_remaining_secs(building)
+        if rem < 0:
+            lines.append(f"训练室：{building.training_trainee} 驻留（空闲）")
+        else:
+            status = training_status_text(rem)
+            suffix = f"（{status}）" if status else ""
+            lines.append(f"训练室：{building.training_trainee} 专精训练中{suffix}")
     if data.recruit_slots:
         done = recruit_done_count(data.recruit_slots)
         nxt = recruit_next_remaining(data.recruit_slots)
@@ -993,12 +1045,15 @@ async def show_ark_building(bot: Bot, ev: Event) -> None:
         )
 
     context = await build_building_context(data, building, ArknightsUID_version, shown)
+    fallback_text = _format_building(credential, data, building, uid_display=shown)
+    if context is None:
+        return await _send_text(bot, ev, fallback_text)
     await send_card_or_text(
         bot,
         ev,
         "ark_building.html",
-        context or {},
-        _format_building(credential, data, building, uid_display=shown),
+        context,
+        fallback_text,
     )
 
 
@@ -1021,7 +1076,7 @@ async def show_ark_training(bot: Bot, ev: Event) -> None:
 
     context = await build_training_context(data, building, ArknightsUID_version, shown)
     lines = [f"「明日方舟」训练室（UID：{shown}）"]
-    if context and context.get("trainee"):
+    if context and context.get("trainee") and context.get("state") != "空闲":
         lines.append(f"受训干员：{context['trainee']}（{context['state']}）")
         if context.get("skill_name") or context.get("mastery_to"):
             lines.append(
@@ -1045,10 +1100,15 @@ async def show_ark_training(bot: Bot, ev: Event) -> None:
             basis = "目标档基准" if context.get("base_exact") else "24h 档兜底估算"
             lines.append(f"进度：约 {context['pct']}%（{basis}）")
         lines.append("ark订阅训练：完成前 1 小时预警 + 完成提醒。")
+    elif context and context.get("trainee"):
+        lines.append(f"训练室空闲——{context['trainee']} 驻留中，当前没有技能在受训。")
     else:
         lines.append("训练室空闲——当前没有干员在受训。")
+    fallback_text = "\n".join(lines)
+    if context is None:
+        return await _send_text(bot, ev, fallback_text)
     await send_card_or_text(
-        bot, ev, "ark_training.html", context or {}, "\n".join(lines)
+        bot, ev, "ark_training.html", context, fallback_text
     )
 
 

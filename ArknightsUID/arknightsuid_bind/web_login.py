@@ -151,7 +151,9 @@ async def web_login_entry(bot: Bot, ev: Event) -> None:
                 "flow": LOGIN_FLOW,
                 "user_id": ev.user_id,
                 "bot_id": ev.bot_id,
-                "bot_self_id": getattr(ev, "bot_self_id", "") or "",
+                "bot_self_id": ev.bot_self_id,
+                # 来源 WS 连接 id：回执按它精确路由回发起聊天
+                "ws_bot_id": ev.WS_BOT_ID or "",
                 "group_id": ev.group_id,
             },
         )
@@ -196,10 +198,23 @@ async def _await_completion(bot: Bot, ev: Event, token: str) -> None:
 
 
 async def _push_text(state: dict, text: str) -> None:
-    """经 gss 把网页登录结果主动推回发起会话（群/私聊）。
+    """经 gss 把网页登录结果推回发起会话（按来源 WS 连接路由）。
 
-    网页请求上下文没有 bot/ev，登录完成的回执只能走这条链路；
-    失败只打异常类名（message 可能带会话信息）。
+    宿主 target_send 从「当前 _Bot 实例自己的 websocket」发送，不按传入
+    bot_id 重新选择连接——旧实现遍历 active_bot 在首个无异常连接就返回，
+    多 adapter / 同平台多 bot 时成功回执可能发进无关聊天。路由规则：
+
+    - 新会话带 ws_bot_id（发起 ark登录 命令的 WS 连接 id）：精确取该连接，
+      仅当同键仍在 active_ws 且实例 bot 非 None 才发送；来源失联即跳过并
+      告警，绝不转投其他在线连接（即使恰有唯一在线连接）。
+    - 旧 payload 无 ws_bot_id：先按 state['bot_id'] 与在线 WS 键精确相等
+      兼容匹配（与宿主 Subscribe.send 的旧约定同源，仅在 WS 键命名约定
+      成立时有意义）；无匹配时「恰有一个在线连接」才作为启发式回退发送
+      （不能证明是原发起连接），多在线歧义/零在线一律跳过——不取首项、
+      不广播。
+
+    网页请求上下文没有 bot/ev，回执只能走这条链路；target_send 入队不
+    等于送达 ACK。失败只打异常类名（message 可能带会话信息）。
     """
     from gsuid_core.gss import gss
 
@@ -207,25 +222,63 @@ async def _push_text(state: dict, text: str) -> None:
     bot_id = state.get("bot_id")
     group_id = state.get("group_id")
     bot_self_id = state.get("bot_self_id") or ""
-    for active_id in list(gss.active_bot):
+    ws_bot_id = str(state.get("ws_bot_id") or "")
+    target_type = "group" if group_id else "direct"
+    target_id = group_id or user_id
+
+    def _online(wid: str) -> bool:
+        bot = gss.active_bot.get(wid)
+        return wid in gss.active_ws and bot is not None and bot.bot is not None
+
+    async def _send(bot) -> bool:
         try:
-            if group_id:
-                await gss.active_bot[active_id].target_send(
-                    text, "group", group_id, bot_id, bot_self_id, ""
-                )
-            else:
-                await gss.active_bot[active_id].target_send(
-                    text, "direct", user_id, bot_id, bot_self_id, ""
-                )
-            return
+            await bot.target_send(text, target_type, target_id, bot_id, bot_self_id, "")
+            return True
         except Exception as exc:
             logger.warning(
                 f"[ArknightsUID·网页登录] 结果推送失败: {exc.__class__.__name__}"
             )
+        return False
+
+    if ws_bot_id:
+        if not _online(ws_bot_id):
+            logger.warning(
+                "[ArknightsUID·网页登录] 来源连接已失联，跳过结果推送"
+                "（不转投其他连接；成功回执可由用户重发命令查看绑定确认）"
+            )
+            return
+        await _send(gss.active_bot[ws_bot_id])
+        return
+
+    # 旧 payload 兼容：bot_id 与在线 WS 键精确相等（单连接平台命名约定）
+    if _online(str(bot_id or "")):
+        await _send(gss.active_bot[bot_id])
+        return
+    online_ids = [wid for wid in gss.active_bot if _online(wid)]
+    if len(online_ids) == 1:
+        logger.info(
+            "[ArknightsUID·网页登录] 旧会话无来源标识，按唯一在线连接"
+            "启发式回退发送（不保证为原发起连接）"
+        )
+        await _send(gss.active_bot[online_ids[0]])
+        return
+    logger.warning(
+        f"[ArknightsUID·网页登录] 无法确定回执来源连接（在线 {len(online_ids)} 个），"
+        "跳过结果推送，不取首项/不广播"
+    )
 
 
 async def _notify_success(state: dict, roles: list[dict]) -> None:
-    await _push_text(state, format_bind_success(roles))
+    from ..utils.enduid.adapter import hide_uid_for
+
+    user_id = str(state.get("user_id") or "")
+    bot_id = str(state.get("bot_id") or "")
+    shown_uids: dict[str, str] = {}
+    for role in roles:
+        raw_id = str(role.get("role_id") or "")
+        if raw_id and raw_id not in shown_uids:
+            shown_uids[raw_id] = await hide_uid_for(raw_id, user_id, bot_id)
+    await _push_text(state, format_bind_success(roles, shown_uids=shown_uids))
 
 
 class SendCodeRequest(BaseModel):

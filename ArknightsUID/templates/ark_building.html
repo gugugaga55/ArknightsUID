@@ -21,7 +21,7 @@
     dormitories: [{label, level, comfort, comfort_pct, slots[]}]
     meeting: {level, slots[]} | None      会客室（无数据时 None）
     hire: {level, slots[]} | None         办公室（无数据时 None）
-    training: {state, level, remain, pct, slots[]}   训练室（state 受训中/已完成/空闲）
+    training: {state, level, skill_name, skill_icon, remain, pct, slots[]}   训练室（state 受训中/已完成/空闲；skill_* 有目标技能时非空）
     slot（干员）: {name, char_id, avatar, prof_icon, morale, morale_pct, tired}
       morale=None 表示该位无心情口径（训练位），不出心情条
     slot（空位）: {empty: True, label, face}
@@ -215,7 +215,7 @@
                 <div class="op{% if s.empty %} op--empty{% elif s.tired %} tired{% endif %}">
                     <div class="op-face">
                         {% if s.empty %}
-                        {% if s.face %}<span class="auto">{{ s.face }}</span>{% endif %}
+                        <span class="auto">{{ s.face if s.face else "&nbsp;" | safe }}</span>
                         {% else %}
                         {% if s.avatar %}<img src="{{ s.avatar }}" alt="{{ s.name }}">{% endif %}
                         {% if s.prof_icon %}<span class="cls"><img src="{{ s.prof_icon }}" alt=""></span>{% endif %}
@@ -345,14 +345,14 @@
                         <span class="room-meta">{{ training.state }}</span>
                     </div>
                     {% if training.state == "受训中" %}
-                    <div class="room-sub">专精训练中{% if training.remain %} · {{ training.remain }}{% endif %}</div>
+                    <div class="room-sub" style="display: flex; align-items: center; gap: 4px;">{% if training.skill_icon %}<img src="{{ training.skill_icon }}" alt="" style="width: 16px; height: 16px; object-fit: cover; flex-shrink: 0;">{% endif %}<span>{% if training.skill_name %}{{ training.skill_name }}{% else %}专精训练中{% endif %}{% if training.remain %} · {{ training.remain }}{% endif %}</span></div>
                     {% if training.pct is not none %}
                     <div class="b-bar"><i style="width: {{ training.pct }}%;"></i></div>
                     {% endif %}
                     {% elif training.state == "已完成" %}
-                    <div class="room-sub">专精训练已完成 · 待收取</div>
+                    <div class="room-sub" style="display: flex; align-items: center; gap: 4px;">{% if training.skill_icon %}<img src="{{ training.skill_icon }}" alt="" style="width: 16px; height: 16px; object-fit: cover; flex-shrink: 0;">{% endif %}<span>{% if training.skill_name %}{{ training.skill_name }} · {% endif %}已完成 · 待收取</span></div>
                     {% else %}
-                    <div class="room-sub dim">暂无受训干员</div>
+                    <div class="room-sub dim">暂无进行中的训练</div>
                     {% endif %}
                     <div class="ops">{% for s in training.slots %}{{ opslot(s) }}{% endfor %}</div>
                 </div>
