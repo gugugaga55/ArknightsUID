@@ -402,20 +402,27 @@ def _format_operator(op: OperatorInfo, owner: dict | None = None) -> str:
     return "\n".join(lines)
 
 
-def _format_mastery(op: OperatorInfo) -> str:
-    """专精材料清单纯文本（聚焦材料，按技能分组列专1/专2/专3）。"""
-    lines = [f"「明日方舟」{op.name or op.title} 专精材料"]
-    has_any = False
-    for s in op.skills:
-        if not s.mastery_costs:
-            continue
-        has_any = True
-        lines.append(f"\n【{s.name}】")
-        for mc in s.mastery_costs:
-            lines.append(f"  {mc.mastery}：{'、'.join(mc.materials)}")
-    if not has_any:
-        lines.append("该干员无专精材料数据。")
-    _append_source(lines, op.source_url)
+def _format_mastery(context: dict) -> str:
+    """专精卡纯文本回退：技能 + 专精档 + 效果 + 材料（与卡片同口径）。"""
+    lines = [f"「明日方舟」{context['name']} 技能专精"]
+    skills = context.get("skills") or []
+    if not skills:
+        lines.append("该干员无专精数据。")
+    for s in skills:
+        lines.append(f"\n【{s['name']}】")
+        effect = s.get("effect") or {}
+        if effect.get("description"):
+            meta = f"（{effect['meta']}）" if effect.get("meta") else ""
+            lines.append(
+                f"  {s.get('effect_label') or ''}：{_clip(effect['description'], 160)}{meta}"
+            )
+        for mc in s.get("mastery_costs") or []:
+            mats = "、".join(
+                f"{m['name']}×{m['count']}" if m.get("count") else str(m.get("name") or "?")
+                for m in mc.get("materials") or []
+            )
+            lines.append(f"  {mc['mastery']}材料：{mats or '无'}")
+    _append_source(lines, str(context.get("source_url") or ""))
     return "\n".join(lines)
 
 

@@ -3,14 +3,13 @@ from __future__ import annotations
 import re
 
 from gsuid_core.bot import Bot
+from gsuid_core.logger import logger
 from gsuid_core.models import Event
 from gsuid_core.sv import SV
 
-from ArknightsUID.utils.arg_utils import (
-    extract_index,
-    extract_uid,
-)
+from ArknightsUID.utils.arg_utils import split_account
 from ArknightsUID.utils.dict_utils import path
+from ArknightsUID.utils.config import ArkConfig
 from ArknightsUID.utils.enduid.adapter import (
     fetch_player_info,
     fetch_rogue_records,
@@ -20,6 +19,8 @@ from ArknightsUID.utils.gamedata.rogue_enemy import (
     STAT_LABELS,
     THEME_ALIASES,
     THEME_DIRS,
+    base_enemy_id,
+    db_entry_for,
     resolve_theme_dir,
 )
 from ArknightsUID.utils.reply_safety import safe_external_message
@@ -779,11 +780,14 @@ async def _build_rogue_enemy_context(
     stage_label = ""
     if stage_hit is not None:
         # 关卡出场形态块 + 紧急作战效果
+        # 出怪表常引用波次实例 id（enemy_x_02），敌库按基础 id 命中 → 回退
         stage_enemy = next(
             (
                 e
                 for e in (stage_data.get("enemies") or [])
-                if isinstance(e, dict) and str(e.get("id") or "") == enemy_key
+                if isinstance(e, dict)
+                and base_enemy_id(str(e.get("id") or ""))
+                == base_enemy_id(enemy_key)
             ),
             None,
         )
@@ -1034,7 +1038,9 @@ async def _build_rogue_stage_context(
         "row_count": len(rows),
         "skipped": sum(
             1 for item in stage_data.get("enemies") or []
-            if not (db.get(str(item.get("id") or "")) or {}).get("stats")
+            if not (
+                db_entry_for(db, str(item.get("id") or "")) or {}
+            ).get("stats")
         ),
         "floor_note": floor_note,
         "maps": maps,
@@ -1183,6 +1189,24 @@ async def send_rogue_stage(bot: Bot, ev: Event) -> None:
     if isinstance(result, str):
         return await _send_text(bot, ev, result)
 
+    extra_images: list[bytes] = []
+    if ArkConfig.get_config("RogueSchematicEnable").data:
+        try:
+            from gsuid_core.logger import logger
+
+            from ArknightsUID.utils.gamedata.rogue_map import render_stage_schematic
+
+            schematic = await render_stage_schematic(
+                result["level_id"], result["name"], result["code"]
+            )
+            if schematic:
+                extra_images.append(schematic)
+        except Exception as exc:
+            logger.warning(
+                f"[ArknightsUID·肉鸽] 敌人路线示意图生成失败（降级单图）: "
+                f"{exc.__class__.__name__}: {exc}"
+            )
+
     img = None
     try:
         from ArknightsUID.utils.render import (
@@ -1194,8 +1218,27 @@ async def send_rogue_stage(bot: Bot, ev: Event) -> None:
     except Exception:
         img = None
     if img:
-        return await bot.send(img, at_sender=bool(ev.group_id))
+        # 统计卡 + 示意图：多图按 ForwardMultiImageEnable 以转发形式发送
+        return await _send_stage_images(bot, ev, img, extra_images)
     await _send_text(bot, ev, _format_rogue_stage(result))
+
+
+async def _send_stage_images(
+    bot: Bot, ev: Event, img: bytes, extra_images: list[bytes]
+) -> None:
+    """统计卡 + 示意图统一发送：多图按 ForwardMultiImageEnable 转发/逐张。"""
+    images = [img, *extra_images]
+    if len(images) > 1 and ArkConfig.get_config("ForwardMultiImageEnable").data:
+        try:
+            from gsuid_core.segment import MessageSegment
+
+            return await bot.send(
+                MessageSegment.node(images), at_sender=bool(ev.group_id)
+            )
+        except Exception:
+            logger.debug("[ArknightsUID·肉鸽] 合并转发发送失败，回退逐张发送")
+    for image in images:
+        await bot.send(image, at_sender=bool(ev.group_id))
 
 
 async def _render_enemy_skill_card(name: str) -> str | None:
@@ -1303,6 +1346,9 @@ _DETAIL_CHARS_LIMIT = 12
 _DETAIL_RELICS_LIMIT = 24
 
 
+_DETAIL_SELECTOR = re.compile(r"(?<!\S)(?:第\s*([0-9]+)\s*局|#([0-9]+))(?!\S)")
+
+
 def _parse_detail_args(
     text: str, extra_aliases: dict[str, str]
 ) -> tuple[str, str, int, bool] | str:
@@ -1310,9 +1356,15 @@ def _parse_detail_args(
 
     期名解析与战绩命令同源；序号缺省 1（最近一局）；「收藏」前缀查收藏战绩。
     """
-    tokens = (text or "").split()
+    text = text or ""
+    matches = list(_DETAIL_SELECTOR.finditer(text))
+    if len(matches) > 1:
+        return "一次只能指定一个局号。"
+    run_no = int(matches[0][1] or matches[0][2]) if matches else 0
+    if matches and run_no <= 0:
+        return "局号从 1 开始。"
+    tokens = _DETAIL_SELECTOR.sub(" ", text).split()
     favour = False
-    run_no = 0
     theme_tokens: list[str] = []
     for tok in tokens:
         if tok in ("收藏", "fav"):
@@ -1513,19 +1565,19 @@ def _format_run_detail(
 async def send_rogue_detail(bot: Bot, ev: Event) -> None:
     """ark肉鸽详情 [期名] [序号] [收藏]：单局战况（阵容/藏品/结局回顾）。
 
-    序号是局号（战绩卡上的 #N），不是账号序号；多账号用 UID 指定。
+    序号是局号（战绩卡上的 #N），不是账号序号；多账号用「2号」或 UID 指定。
     """
-    raw = ev.text.strip()
-    uid = extract_uid(raw)
-    # 期名 = 剔除 UID 后的剩余词（局号/收藏在 _parse_detail_args 内消化）
-    text_no_uid = raw.replace(uid, " ", 1) if uid else raw
+    try:
+        text_no_uid, uid, index = split_account(ev.text or "", legacy_index=False)
+    except ValueError as exc:
+        return await _send_text(bot, ev, str(exc))
     aliases = await _load_user_theme_aliases(ev.bot_id, ev.user_id)
     parsed = _parse_detail_args(text_no_uid, aliases)
     if isinstance(parsed, str):
         return await _send_text(bot, ev, parsed)
     topic_id, theme_display, run_no, favour = parsed
 
-    credential = await resolve_or_reply(bot, ev, uid=uid)
+    credential = await resolve_or_reply(bot, ev, uid=uid, index=index)
     if credential is None:
         return
     response = await fetch_rogue_records(credential, topic_id)
@@ -1580,17 +1632,10 @@ async def send_rogue_records(bot: Bot, ev: Event) -> None:
     与 ark肉鸽（player_info 进度卡）不同源：走森空岛 App 战绩查询端点，
     期名缺省时由服务端返回默认期（响应 topics[].isSelected 标记）。
     """
-    raw = ev.text.strip()
-    uid = extract_uid(raw)
-    index = extract_index(raw)
-    # 期名 = 原文剔除 UID/序号后的剩余词（序号只在词尾，与 extract_index 同口径）
-    theme_text = raw
-    if uid:
-        theme_text = theme_text.replace(uid, " ", 1)
-    if index:
-        theme_text = re.sub(r"第|号", "", theme_text)
-        theme_text = re.sub(r"(?:^|\s|#)\d{1,2}\s*$", "", theme_text)
-
+    try:
+        theme_text, uid, index = split_account(ev.text or "")
+    except ValueError as exc:
+        return await _send_text(bot, ev, str(exc))
     aliases = await _load_user_theme_aliases(ev.bot_id, ev.user_id)
     resolved = _resolve_record_theme(theme_text, aliases)
     if isinstance(resolved, str):
@@ -1640,8 +1685,16 @@ async def send_rogue_records(bot: Bot, ev: Event) -> None:
 
 @rogue_sv.on_command(("肉鸽", "集成战略", "rg"), block=True)
 async def send_rogue_info(bot: Bot, ev: Event) -> None:
-    uid = extract_uid(ev.text)
-    index = extract_index(ev.text)
+    raw = ev.text or ""
+    # #N / 第N局 始终是局号；旧的尾部裸数字在总览、战绩里仍是账号。
+    if _DETAIL_SELECTOR.search(raw) or any(word in ("收藏", "fav") for word in raw.split()):
+        return await send_rogue_detail(bot, ev)
+    try:
+        theme, uid, index = split_account(raw)
+    except ValueError as exc:
+        return await _send_text(bot, ev, str(exc))
+    if theme:
+        return await send_rogue_records(bot, ev)
     credential = await resolve_or_reply(bot, ev, uid=uid, index=index)
     if credential is None:
         return
@@ -1695,21 +1748,7 @@ async def _load_user_theme_aliases(bot_id: str, user_id: str) -> dict[str, str]:
         return {}
 
 
-def _parse_alias_pair(text: str) -> tuple[str, str] | None:
-    """「别名 目标」「别名=目标」「别名 → 目标」→ (alias, target)。"""
-    raw = (text or "").strip()
-    if not raw:
-        return None
-    for sep in ("=", "＝", "→", "->"):
-        if sep in raw:
-            left, _, right = raw.partition(sep)
-            alias, target = left.strip(), right.strip()
-            if alias and target:
-                return alias, target
-    parts = raw.split()
-    if len(parts) == 2:
-        return parts[0].strip(), parts[1].strip()
-    return None
+from ArknightsUID.utils.user_alias import parse_alias_pair as _parse_alias_pair
 
 
 @rogue_alias_sv.on_fullmatch(("肉鸽别名列表", "我的肉鸽别名"), block=True)
@@ -1761,8 +1800,10 @@ async def set_rogue_theme_alias(bot: Bot, ev: Event) -> None:
             "用法：ark肉鸽别名 <别名>=<期名>（如 ark肉鸽别名 树海=沉沦者的黑流树海）；"
             "ark肉鸽别名列表 查看；ark肉鸽别名删除 <别名> 删除。",
         )
-    alias, target_text = parsed
+    await save_rogue_theme_alias(bot, ev, *parsed)
 
+
+async def save_rogue_theme_alias(bot: Bot, ev: Event, alias: str, target_text: str) -> None:
     from ArknightsUID.utils.gamedata.rogue_enemy import (
         THEME_ALIASES,
         THEME_DIRS,

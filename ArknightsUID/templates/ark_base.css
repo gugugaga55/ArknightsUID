@@ -386,6 +386,7 @@ body {
     color: var(--tx-3);
     text-transform: uppercase;
     white-space: nowrap;
+    margin-left: auto;
     order: 3;
 }
 
@@ -558,6 +559,7 @@ body {
 }
 
 .grid-2 { grid-template-columns: repeat(2, 1fr); }
+.grid-3 { grid-template-columns: repeat(3, 1fr); }
 .grid-4 { grid-template-columns: repeat(4, 1fr); }
 
 .cell {

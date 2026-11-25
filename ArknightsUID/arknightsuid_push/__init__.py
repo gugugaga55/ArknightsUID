@@ -18,6 +18,9 @@ import inspect
 import math
 import os
 import random
+import re
+import time
+from collections.abc import Callable
 
 from gsuid_core.aps import scheduler
 from gsuid_core.bot import Bot
@@ -26,8 +29,13 @@ from gsuid_core.models import Event
 from gsuid_core.subscribe import gs_subscribe
 from gsuid_core.sv import SV
 
+from ArknightsUID.utils.arg_utils import split_account
 from ArknightsUID.utils.card import send_card_or_text
+from ArknightsUID.utils.cultivate import parse_inventory
+from ArknightsUID.utils.enduid.adapter import fetch_cultivate_player, resolve_credential
+from ArknightsUID.utils.gamedata.craft import craft_vs_farm, format_craft_tree, load_formulas
 from ArknightsUID.utils.config import ArkConfig
+from ArknightsUID.utils.file_lock import LockTimeoutError, file_locked
 from ArknightsUID.utils.gamedata.charinfo import load_item_index
 from ArknightsUID.utils.gamedata.itemicon import item_icon_b64
 from ArknightsUID.utils.image import data_uri_bytes
@@ -35,6 +43,7 @@ from ArknightsUID.utils.path import MAIN_PATH
 from ArknightsUID.utils.prts.client import (
     query_activities,
     query_gacha_pools,
+    query_page,
 )
 from ArknightsUID.utils.skland.web import (
     get_ann_detail,
@@ -82,16 +91,27 @@ _push_state_lock = asyncio.Lock()
 
 
 def _session_key(subscribe) -> str:
-    """订阅会话标识：群聊按群、私聊按用户。
+    """订阅会话标识：群聊按群、私聊按用户（存在 bot_id 时按机器人隔离）。
 
     私聊必须用 user_id：session 模式订阅不写 uid（恒 None），
     按 uid 拼键会让所有私聊订阅者共用 "direct:None"，首个用户投递
     成功后其余私聊订阅者对该公告永久跳过（审计 #39）。
     """
+    bot_id = str(getattr(subscribe, "bot_id", "") or "")
+    prefix = f"{bot_id}:" if bot_id else ""
     if getattr(subscribe, "group_id", None):
-        return f"group:{subscribe.group_id}"
+        return f"{prefix}group:{subscribe.group_id}"
     user_id = str(getattr(subscribe, "user_id", "") or "")
-    return f"direct:{user_id or getattr(subscribe, 'uid', '') or 'unknown'}"
+    return f"{prefix}direct:{user_id or getattr(subscribe, 'uid', '') or 'unknown'}"
+
+
+def _same_bot(subscribe, ev: Event) -> bool:
+    """多机器人部署隔离：两侧都有 bot_id 时必须一致；单测缺省时不阻断。"""
+    ev_bot = str(getattr(ev, "bot_id", "") or "")
+    sub_bot = str(getattr(subscribe, "bot_id", "") or "")
+    if ev_bot and sub_bot:
+        return sub_bot == ev_bot
+    return True
 
 
 async def _deliver_per_session(
@@ -150,7 +170,11 @@ def _merge_seen_state(current_state: dict, incoming: dict) -> dict:
     merged = dict(current_state) if isinstance(current_state, dict) else {}
     if isinstance(incoming, dict):
         merged.update(
-            {k: v for k, v in incoming.items() if k not in ("seen", "delivered")}
+            {
+                k: v
+                for k, v in incoming.items()
+                if k not in ("seen", "delivered", "touch")
+            }
         )
         # delivered（per-session 投递进度，审计 #9）：按条目并集合并
         incoming_delivered = incoming.get("delivered")
@@ -173,6 +197,15 @@ def _merge_seen_state(current_state: dict, incoming: dict) -> dict:
                 if str(key) not in seen_set:
                     seen_set.add(str(key))
                     seen_list.append(key)
+            touch = incoming.get("touch")
+            if isinstance(touch, list) and touch:
+                touch_set = {str(k) for k in touch if str(k) in seen_set}
+                if touch_set:
+                    kept = [k for k in seen_list if str(k) not in touch_set]
+                    refreshed = [
+                        k for k in dict.fromkeys(str(k) for k in touch) if k in touch_set
+                    ]
+                    seen_list = kept + refreshed
             merged["seen"] = seen_list
         # delivered 只对"未晋升 seen"的条目有意义；已见键的进度是死数据。
         # 并集合并无法表达删除——调用方"清掉 done 键进度"的意图会被磁盘
@@ -192,73 +225,205 @@ def _merge_seen_state(current_state: dict, incoming: dict) -> dict:
     return merged
 
 
-def load_push_state() -> dict:
+class PushStateUnavailable(RuntimeError):
+    """状态文件瞬时不可读（权限/IO/等锁超时）：调用方跳过本轮，不得当首次基线重建。"""
+
+
+def _valid_seen_state(state) -> bool:
+    """状态形状校验：顶层 dict；seen（若有）为 list；delivered（若有）为 dict。"""
+    if not isinstance(state, dict):
+        return False
+    if not isinstance(state.get("seen"), list) and "seen" in state:
+        return False
+    if not isinstance(state.get("delivered"), dict) and "delivered" in state:
+        return False
+    return True
+
+
+def _sanitize_seen_state(state: dict) -> dict:
+    """delivered 值级容错：非 list 的进度项丢弃（仅投递进度，可重建）。"""
+    delivered = state.get("delivered")
+    if isinstance(delivered, dict):
+        bad = [k for k, v in delivered.items() if not isinstance(v, list)]
+        for k in bad:
+            delivered.pop(k)
+        if bad:
+            logger.warning(
+                f"[ArknightsUID·推送] delivered 含 {len(bad)} 个非列表进度项，已丢弃"
+            )
+    return state
+
+
+def _quarantine_corrupt(path: Path, label: str, reason: str) -> bool:
+    """隔离损坏的状态文件（须在 file_locked 内调用）；备份失败返回 False。"""
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    backup = path.with_name(f"{path.name}.corrupt-{stamp}-{os.getpid()}")
     try:
-        return json.loads(_STATE_PATH.read_text(encoding="utf-8"))
+        os.replace(path, backup)
+    except OSError as exc:
+        logger.error(
+            f"[ArknightsUID·{label}] 损坏文件备份失败（{reason}），"
+            f"保留原件不覆盖，下轮重试: {exc.__class__.__name__}"
+        )
+        return False
+    logger.warning(
+        f"[ArknightsUID·{label}] 状态文件损坏（{reason}），已隔离为 {backup.name}，"
+        "按首次运行重建基线——产品取舍：损坏期间的新条目可能漏推，"
+        "不做从损坏文件的无损恢复"
+    )
+    return True
+
+
+def _decode_seen_state(raw: str) -> tuple[dict | None, str]:
+    """已成功读到的文本 → (有效状态, "")；内容损坏 → (None, 原因)。
+
+    内容损坏 = JSON 语法 / 结构形状 / 非法 UTF-8 解码结果；读取本身的
+    OSError 不经过这里（那是瞬时错误，不等于文件损坏）。
+    """
+    try:
+        state = json.loads(raw)
+    except ValueError:
+        return None, "非合法 JSON"
+    if not _valid_seen_state(state):
+        return None, "结构不符（非对象或 seen/delivered 形状错误）"
+    return _sanitize_seen_state(state), ""
+
+
+def _load_seen_state(path: Path, label: str) -> dict:
+    """推送状态三态读取：
+
+    - 缺文件 → {}（首次运行建基线，不推送）
+    - 读取 OSError（权限/IO，首次与锁内复核同口径）→ 抛
+      PushStateUnavailable：调用方跳过本轮，绝不能当首次基线去覆盖
+      （那会丢 seen 造成漏推/重推），也**不隔离**——读失败不等于损坏
+    - 内容损坏（非法 UTF-8 / JSON 语法 / []/null/数字逃出 dict 契约）
+      → 锁内复核仍损坏才隔离原件（.corrupt-*），返回 {} 重建有效基线；
+      复核发现其他进程已重建好文件则直接采用；备份失败抛
+      PushStateUnavailable（不破坏原件，下轮重试）
+    """
+    try:
+        raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         return {}
-    except Exception as exc:
-        # 损坏（半文件/手改出错）：按空态重建基线，代价是可能重推一轮——
-        # 留 warning 便于事后从日志定位为什么重推
+    except UnicodeDecodeError as exc:
+        state, reason = None, f"非法 UTF-8（{exc.__class__.__name__}）"
+    except OSError as exc:
         logger.warning(
-            f"[ArknightsUID·推送] 状态文件损坏，按空态重建: {exc.__class__.__name__}"
+            f"[ArknightsUID·{label}] 状态读取失败（本轮跳过，不重建基线）: "
+            f"{exc.__class__.__name__}"
         )
+        raise PushStateUnavailable(str(path)) from exc
+    else:
+        state, reason = _decode_seen_state(raw)
+    if state is not None:
+        return state
+
+    # 损坏处理与隔离同受文件事务互斥保护；锁竞争视同瞬时不可用
+    try:
+        with file_locked(path):
+            # 锁内复核：读到加锁之间其他进程可能已重建好文件；
+            # 复核读取的 OSError 是瞬时错误——不隔离、保留原件、跳过本轮
+            try:
+                fresh_raw = path.read_text(encoding="utf-8")
+            except FileNotFoundError:
+                return {}
+            except UnicodeDecodeError:
+                fresh_state = None
+            except OSError as exc:
+                logger.warning(
+                    f"[ArknightsUID·{label}] 损坏复核读取失败"
+                    f"（不隔离、保留原件，本轮跳过）: {exc.__class__.__name__}"
+                )
+                raise PushStateUnavailable(str(path)) from exc
+            else:
+                fresh_state, _fresh_reason = _decode_seen_state(fresh_raw)
+            if fresh_state is not None:
+                return fresh_state
+            if not _quarantine_corrupt(path, label, reason):
+                raise PushStateUnavailable(str(path))
         return {}
+    except PushStateUnavailable:
+        raise
+    except LockTimeoutError:
+        logger.warning(f"[ArknightsUID·{label}] 损坏处理等锁超时，本轮跳过")
+        raise PushStateUnavailable(str(path)) from None
 
 
-def save_push_state(state: dict) -> None:
-    from ArknightsUID.utils.file_lock import (
-        file_locked,
-        unique_tmp,
-    )
+def _save_seen_state(path: Path, state: dict, label: str) -> bool:
+    """锁内"三态重读 → 合并 → 原子写"；返回是否落盘成功。
+
+    瞬时不可读/隔离失败/等锁超时 → False（不覆盖磁盘，不报成功）。
+    """
+    from ArknightsUID.utils.file_lock import unique_tmp
 
     try:
         # 读-合并-写三步全在跨进程文件锁内（审计 #10：多 worker 部署
         # 下另一进程的旧快照不能再整文件覆盖；合并语义见 _merge_seen_state）
-        with file_locked(_STATE_PATH):
-            state = _merge_seen_state(load_push_state(), state)
-            seen = state.get("seen")
+        with file_locked(path):
+            try:
+                fresh = _load_seen_state(path, label)
+            except PushStateUnavailable:
+                return False
+            merged = _merge_seen_state(fresh, state)
+            seen = merged.get("seen")
             if isinstance(seen, list) and len(seen) > _STATE_LIMIT:
-                state["seen"] = seen[-_STATE_LIMIT:]
-            _STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-            # 唯一 tmp + os.replace 原子写：崩溃不留半文件（半文件会被当
-            # 无基线，下轮重建 seen 基线漏推一轮）
-            tmp = unique_tmp(_STATE_PATH)
-            tmp.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
-            os.replace(tmp, _STATE_PATH)
+                merged["seen"] = seen[-_STATE_LIMIT:]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            # 唯一 tmp + os.replace 原子写：崩溃不留半文件（半文件会被
+            # 隔离重建基线，见 _load_seen_state）
+            tmp = unique_tmp(path)
+            tmp.write_text(json.dumps(merged, ensure_ascii=False), encoding="utf-8")
+            os.replace(tmp, path)
+            return True
+    except LockTimeoutError:
+        logger.warning(
+            f"[ArknightsUID·{label}] 等锁超时，本轮不落盘（事务失败不报成功）"
+        )
+        return False
     except Exception as exc:
-        logger.warning(f"[ArknightsUID·推送] 状态写入失败: {exc.__class__.__name__}")
+        logger.warning(
+            f"[ArknightsUID·{label}] 状态写入失败: {exc.__class__.__name__}: {exc}"
+        )
+        return False
+
+
+def load_push_state() -> dict:
+    return _load_seen_state(_STATE_PATH, "推送")
+
+
+def save_push_state(state: dict) -> bool:
+    return _save_seen_state(_STATE_PATH, state, "推送")
 
 
 def _load_ann_state() -> dict:
-    try:
-        state = json.loads(_ANN_STATE_PATH.read_text(encoding="utf-8"))
-        return state if isinstance(state, dict) else {}
-    except Exception:
-        return {}
+    return _load_seen_state(_ANN_STATE_PATH, "公告推送")
 
 
-def _save_ann_state(state: dict) -> None:
-    from ArknightsUID.utils.file_lock import (
-        file_locked,
-        unique_tmp,
-    )
+def _save_ann_state(state: dict) -> bool:
+    return _save_seen_state(_ANN_STATE_PATH, state, "公告推送")
 
-    try:
-        # 读-合并-写三步全在跨进程文件锁内（审计 #10，语义同 save_push_state）
-        with file_locked(_ANN_STATE_PATH):
-            state = _merge_seen_state(_load_ann_state(), state)
-            seen = state.get("seen")
-            if isinstance(seen, list) and len(seen) > _STATE_LIMIT:
-                state["seen"] = seen[-_STATE_LIMIT:]
-            _ANN_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
-            tmp = unique_tmp(_ANN_STATE_PATH)
-            tmp.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
-            os.replace(tmp, _ANN_STATE_PATH)
-    except Exception as exc:
-        logger.warning(
-            f"[ArknightsUID·公告推送] 状态写入失败: {exc.__class__.__name__}"
-        )
+
+async def _await_commit(write_op: Callable[[], bool]) -> bool:
+    """等待线程内落盘事务真正结束；协程被取消也先持锁等它提交。
+
+    to_thread 的线程不可取消：直接 await 时协程取消会立刻退出
+    ``async with _push_state_lock``，而迟到线程仍在等锁/写盘——下一轮
+    检查得以读到旧 seen 重复发送。这里 shield 持锁等待底层事务完成
+    （期间重复取消同样等待），结束后再传播取消。
+    """
+    task = asyncio.ensure_future(asyncio.to_thread(write_op))
+    pending_cancel: asyncio.CancelledError | None = None
+    while True:
+        try:
+            result = await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            pending_cancel = pending_cancel or exc
+            if task.done():
+                raise pending_cancel from None
+            continue
+        if pending_cancel is not None:
+            raise pending_cancel from None
+        return result
 
 
 def diff_new_announcements(
@@ -359,22 +524,6 @@ async def build_ann_push_payload(
 
 # 文本回复公共实现在 utils.card.send_text；保留模块级别名供调用点/测试 patch
 from ArknightsUID.utils.card import send_text as _send_text  # noqa: E402
-
-
-def _format_activities(activities: list, pools: list) -> str:
-    lines = ["「明日方舟」进行中 / 即将开始"]
-    if activities:
-        lines.append("— 限时活动 —")
-        for act in activities:
-            lines.append(f"  {act.title}（{act.start} ~ {act.end}）")
-    if pools:
-        lines.append("— 限定卡池 —")
-        for pool in pools:
-            lines.append(f"  {pool.title}（{pool.start} ~ {pool.end}）")
-    if len(lines) == 1:
-        lines.append("暂无进行中的活动或卡池。")
-    lines.append("数据：PRTS Wiki")
-    return "\n".join(lines)
 
 
 def _format_ann_list(anns: list[dict[str, str]]) -> str:
@@ -654,47 +803,9 @@ async def _activity_banner_b64(url: str) -> str:
     block=True,
 )
 async def show_ark_activities(bot: Bot, ev: Event) -> None:
-    activities = await query_activities()
-    pools = await query_gacha_pools()
-    # 官方标题图（PRTS 活动页信息框，批量两次 API；失败按无图降级）
-    banner_urls: dict[str, str] = {}
-    try:
-        from ArknightsUID.utils.prts.client import activity_banner_urls
+    from ArknightsUID.arknightsuid_wiki import send_calendar
 
-        banner_urls = await activity_banner_urls([a.title for a in activities])
-    except Exception as e:
-        logger.debug(f"[ArknightsUID] 活动标题图拉取失败: {e}")
-    activity_rows = []
-    for act in activities:
-        activity_rows.append(
-            {
-                "title": act.title,
-                "start": act.start,
-                "end": act.end,
-                "image": await _activity_banner_b64(banner_urls.get(act.title, "")),
-            }
-        )
-    context = {
-        "version": ArknightsUID_version,
-        "activities": activity_rows,
-        "pools": [
-            {
-                "title": pool.title,
-                "start": pool.start,
-                "end": pool.end,
-                # 卡池横幅：SMW 结果键即文件页（文件:xxx.jpg）→ md5 散列直链
-                "image": await _activity_banner_b64(pool.image_url),
-            }
-            for pool in pools
-        ],
-    }
-    await send_card_or_text(
-        bot,
-        ev,
-        "ark_activity.html",
-        context,
-        _format_activities(activities, pools),
-    )
+    await send_calendar(bot, ev)
 
 
 @push_sv.on_command(
@@ -917,84 +1028,7 @@ async def show_stage_recommend(bot: Bot, ev: Event) -> None:
 
 @push_sv.on_command(("材料掉率", "掉率"), block=True)
 async def show_drop_rate(bot: Bot, ev: Event) -> None:
-    query = ev.text.strip()
-    if not query:
-        return await _send_text(
-            bot, ev, "用法：ark材料掉率 <材料名>（如 ark材料掉率 固源岩组）"
-        )
-
-    item_index = await load_item_index()
-    item_id = ""
-    if item_index:
-        # 精确名 → 唯一前缀
-        exact = [iid for iid, info in item_index.items() if info.get("name") == query]
-        if len(exact) == 1:
-            item_id = exact[0]
-        else:
-            prefix = [
-                iid
-                for iid, info in item_index.items()
-                if str(info.get("name", "")).startswith(query)
-            ]
-            if len(prefix) == 1:
-                item_id = prefix[0]
-            elif len(prefix) > 1:
-                names = "、".join(
-                    str(item_index[i].get("name", "")) for i in prefix[:8]
-                )
-                return await _send_text(
-                    bot, ev, f"「{query}」匹配到多种材料：{names}，请写全名。"
-                )
-    if not item_id:
-        return await _send_text(
-            bot,
-            ev,
-            f"未找到材料「{query}」（物品数据首次使用需联网下载，可稍后重试）。",
-        )
-
-    matrix = await fetch_drop_matrix()
-    stages = await fetch_stage_info()
-    if not matrix or not stages:
-        return await _send_text(bot, ev, "掉落数据获取失败（一图流），请稍后重试。")
-
-    stage_meta = {str(s.get("stageId", "")): s for s in stages}
-    stats = item_drop_stats(item_id, latest_matrix_by_item(matrix), stage_meta, top=8)
-    item_name = str((item_index.get(item_id) or {}).get("name", "") or query)
-    if not stats:
-        return await _send_text(
-            bot, ev, f"「{item_name}」没有样本充足的掉落关卡（样本>300 才收录）。"
-        )
-
-    lines = [
-        f"「明日方舟」{item_name} · 掉落关卡（一图流，按掉率降序）",
-        "  关卡 · 每把期望 · 单件理智 · 样本",
-    ]
-    for row in stats:
-        lines.append(
-            f"  {row['stage_code']} {row['zone'][:8]} · "
-            f"{row['rate']:.3f} 件 · {row['ap_expect']:.0f} 理智/件 · "
-            f"{row['times']:,} 把"
-        )
-    lines.append("数据：ark.yituliu.cn（COS 掉落矩阵）")
-
-    max_rate = max(r["rate"] for r in stats) or 1.0
-    context = {
-        "version": ArknightsUID_version,
-        "item_name": item_name,
-        "item_icon": await item_icon_b64(item_name),
-        "rows": [
-            {
-                "stage_code": r["stage_code"],
-                "zone": r["zone"],
-                "rate": r["rate"],
-                "ap_expect": r["ap_expect"],
-                "times": r["times"],
-                "rate_pct": round(r["rate"] / max_rate * 100),
-            }
-            for r in stats
-        ],
-    }
-    await send_card_or_text(bot, ev, "ark_drop_rate.html", context, "\n".join(lines))
+    await show_material_overview(bot, ev, view="drop")
 
 
 @push_sub_sv.on_fullmatch(("订阅方舟活动", "订阅活动"))
@@ -1006,7 +1040,7 @@ async def subscribe_ark_activities(bot: Bot, ev: Event) -> None:
     resubscribed = False
     if data:
         for subscribe in data:
-            if subscribe.group_id == ev.group_id:
+            if subscribe.group_id == ev.group_id and _same_bot(subscribe, ev):
                 await gs_subscribe.delete_subscribe("session", TASK_NAME, ev)
                 resubscribed = True
                 break
@@ -1014,12 +1048,27 @@ async def subscribe_ark_activities(bot: Bot, ev: Event) -> None:
         "session", task_name=TASK_NAME, event=ev, extra_message=""
     )
     # 首次订阅即初始化基线，避免把存量活动当新活动轰炸
-    state = load_push_state()
-    if "seen" not in state or not state.get("seen"):
+    try:
+        state = await asyncio.to_thread(load_push_state)
+    except PushStateUnavailable:
+        # 瞬时不可读：不当首次基线重建（磁盘可能有在途 delivered 进度，
+        # 重建会把未投完的条目晋升为已见 → 部分会话永久漏推）——
+        # 与定时任务同口径跳过，下轮按真实状态处理（PushStateUnavailable
+        # 契约：调用方跳过本轮，不得当首次基线重建）
+        state = None
+    if state is not None and ("seen" not in state or not state.get("seen")):
         entries = await collect_current_entries()
         if entries:
-            # 必须落盘才成基线——此前返回值被丢弃，基线实际未建立
-            save_push_state({"seen": list(entries.keys())})
+            # 必须落盘才成基线；失败只降级为"订阅已建立、基线未保存"，
+            # 由下轮定时任务重建（不推送存量），不误报订阅失败
+            saved = await _await_commit(
+                lambda: save_push_state({"seen": list(entries.keys())})
+            )
+            if not saved:
+                logger.warning(
+                    "[ArknightsUID·推送] 订阅已建立，但基线保存失败："
+                    "下轮定时任务会重建基线（期间新动态不推送，不轰炸存量）"
+                )
     await bot.send(
         "已重新订阅方舟活动推送！" if resubscribed else "成功订阅方舟活动推送！"
     )
@@ -1032,7 +1081,7 @@ async def unsubscribe_ark_activities(bot: Bot, ev: Event) -> None:
     data = await gs_subscribe.get_subscribe(TASK_NAME)
     if data:
         for subscribe in data:
-            if subscribe.group_id == ev.group_id:
+            if subscribe.group_id == ev.group_id and _same_bot(subscribe, ev):
                 await gs_subscribe.delete_subscribe("session", TASK_NAME, ev)
                 return await bot.send("成功取消订阅方舟活动！")
     await bot.send("未曾订阅方舟活动！")
@@ -1051,7 +1100,13 @@ async def subscribe_ark_announcements(bot: Bot, ev: Event) -> None:
         "session", task_name=ANN_TASK_NAME, event=ev, extra_message=""
     )
     # 首次订阅建基线：存量公告不当新公告轰炸（已有基线则不动）
-    if not _load_ann_state().get("seen"):
+    try:
+        has_baseline = bool((await asyncio.to_thread(_load_ann_state)).get("seen"))
+    except PushStateUnavailable:
+        # 瞬时不可读：不当首次基线重建（防在途 delivered 被晋升为已见
+        # 漏推）——与定时任务同口径跳过，下轮按真实状态处理
+        has_baseline = None
+    if has_baseline is False:
         try:
             current = await get_ark_ann_list(limit=_ANN_FETCH_LIMIT)
         except Exception as exc:
@@ -1060,7 +1115,16 @@ async def subscribe_ark_announcements(bot: Bot, ev: Event) -> None:
             )
             current = []
         if current:
-            _save_ann_state({"seen": [a["id"] for a in current if a.get("id")]})
+            saved = await _await_commit(
+                lambda: _save_ann_state(
+                    {"seen": [a["id"] for a in current if a.get("id")]}
+                )
+            )
+            if not saved:
+                logger.warning(
+                    "[ArknightsUID·公告推送] 订阅已建立，但基线保存失败："
+                    "下轮定时任务会重建基线（期间新公告不推送，不轰炸存量）"
+                )
 
     lines = ["已订阅官方公告推送（仅公告；活动/卡池请用 ark订阅方舟活动）"]
     try:
@@ -1092,14 +1156,18 @@ async def unsubscribe_ark_announcements(bot: Bot, ev: Event) -> None:
     # 的是发起人，私聊按 user_id 匹配/删除会连带删掉该用户创建的群订阅，
     # 整群推送静默消失（审计 #39）。
     if ev.group_id:
-        mine = [s for s in data if s.group_id == ev.group_id]
+        mine = [s for s in data if s.group_id == ev.group_id and _same_bot(s, ev)]
         if not mine:
             return await _send_text(bot, ev, "未曾订阅官方公告。")
         await gs_subscribe.delete_subscribe("session", ANN_TASK_NAME, ev)
         return await _send_text(bot, ev, "已取消官方公告推送。")
 
     mine = [
-        s for s in data if not getattr(s, "group_id", None) and s.user_id == ev.user_id
+        s
+        for s in data
+        if not getattr(s, "group_id", None)
+        and s.user_id == ev.user_id
+        and _same_bot(s, ev)
     ]
     if not mine:
         return await _send_text(bot, ev, "未曾订阅官方公告。")
@@ -1191,16 +1259,42 @@ async def _push_new_announcements(datas) -> None:
         return
 
     async with _push_state_lock:
-        state = _load_ann_state()
+        try:
+            state = await asyncio.to_thread(_load_ann_state)
+        except PushStateUnavailable:
+            # 瞬时 IO/权限/等锁超时：跳过本轮（不当首次基线重建，防漏推）
+            return
         seen: list[str] = [str(key) for key in (state.get("seen") or [])]
         if not seen:
             # 无基线（首次运行/状态丢失）：只建基线不推送
-            _save_ann_state({"seen": [a["id"] for a in anns if a.get("id")]})
-            logger.info("[ArknightsUID·公告推送] 基线初始化完成，下轮开始检测")
+            saved = await _await_commit(
+                lambda: _save_ann_state(
+                    {"seen": [a["id"] for a in anns if a.get("id")]}
+                )
+            )
+            if saved:
+                logger.info("[ArknightsUID·公告推送] 基线初始化完成，下轮开始检测")
+            else:
+                logger.warning(
+                    "[ArknightsUID·公告推送] 基线初始化落盘失败，本轮未建立基线；"
+                    "下轮重新初始化（期间新公告不推送，不会误发存量）"
+                )
             return
 
+        seen_set = set(seen)
+        active_ann_seen = [
+            str(a["id"]) for a in anns if a.get("id") and str(a["id"]) in seen_set
+        ]
         fresh = diff_new_announcements(anns, seen)
         if not fresh:
+            if (
+                len(seen) > _STATE_LIMIT - 50
+                and active_ann_seen
+                and set(seen[:60]) & set(active_ann_seen)
+            ):
+                await _await_commit(
+                    lambda: _save_ann_state({"seen": seen, "touch": active_ann_seen})
+                )
             logger.info("[ArknightsUID·公告推送] 无新增")
             return
 
@@ -1243,12 +1337,23 @@ async def _push_new_announcements(datas) -> None:
             if sessions and sessions.issubset(set(delivered.get(key) or []))
         ]
         if done or delivered != delivered_before:
-            _save_ann_state(
-                {
-                    "seen": seen + done,
-                    "delivered": {k: v for k, v in delivered.items() if k not in done},
-                }
+            saved = await _await_commit(
+                lambda: _save_ann_state(
+                    {
+                        "seen": seen + done,
+                        "touch": active_ann_seen + done,
+                        "delivered": {
+                            k: v for k, v in delivered.items() if k not in done
+                        },
+                    }
+                )
             )
+            if not saved:
+                logger.warning(
+                    "[ArknightsUID·公告推送] 投递进度落盘失败：本轮已发送的条目"
+                    "下轮可能重复推送（delivered 合并语义按并集自愈），"
+                    "seen 以下轮磁盘态为准"
+                )
         else:
             # 全部投递失败且无新进度：不落盘（seen/delivered 均未变），
             # 下轮整批重试
@@ -1280,22 +1385,43 @@ async def check_ark_activities() -> None:
         return
 
     async with _push_state_lock:
-        state = load_push_state()
+        try:
+            state = await asyncio.to_thread(load_push_state)
+        except PushStateUnavailable:
+            # 瞬时 IO/权限/等锁超时：跳过本轮（不当首次基线重建，防漏推）
+            return
         seen: list[str] = list(state.get("seen") or [])
         if not seen:
             # 无基线（首次运行/状态丢失）：只建基线不推送
-            save_push_state({"seen": list(entries.keys())})
-            logger.info("[ArknightsUID·推送] 基线初始化完成，下轮开始检测")
+            saved = await _await_commit(
+                lambda: save_push_state({"seen": list(entries.keys())})
+            )
+            if saved:
+                logger.info("[ArknightsUID·推送] 基线初始化完成，下轮开始检测")
+            else:
+                logger.warning(
+                    "[ArknightsUID·推送] 基线初始化落盘失败，本轮未建立基线；"
+                    "下轮重新初始化（期间新动态不推送，不会误发存量）"
+                )
             return
 
+        seen_set = set(seen)
+        active_entry_seen = [k for k in entries.keys() if k in seen_set]
         fresh = diff_new_entries(entries, seen)
         if not fresh:
+            if (
+                len(seen) > _STATE_LIMIT - 50
+                and active_entry_seen
+                and set(seen[:60]) & set(active_entry_seen)
+            ):
+                await _await_commit(
+                    lambda: save_push_state({"seen": seen, "touch": active_entry_seen})
+                )
             logger.info("[ArknightsUID·推送] 无新增")
             return
 
         # 单轮最多推 8 条；seen 只标实际推过的 key（多余的留下轮增量推，
         # 否则一次性全标会让第 9 条起永久漏推）
-        seen_set = set(seen)
         fresh_keys = [k for k in entries.keys() if k not in seen_set]
         pushed_keys = fresh_keys[:8]
 
@@ -1332,12 +1458,23 @@ async def check_ark_activities() -> None:
             if sessions and sessions.issubset(set(delivered.get(key) or []))
         ]
         if done or delivered != delivered_before:
-            save_push_state(
-                {
-                    "seen": seen + done,
-                    "delivered": {k: v for k, v in delivered.items() if k not in done},
-                }
+            saved = await _await_commit(
+                lambda: save_push_state(
+                    {
+                        "seen": seen + done,
+                        "touch": active_entry_seen + done,
+                        "delivered": {
+                            k: v for k, v in delivered.items() if k not in done
+                        },
+                    }
+                )
             )
+            if not saved:
+                logger.warning(
+                    "[ArknightsUID·推送] 投递进度落盘失败：本轮已发送的条目"
+                    "下轮可能重复推送（delivered 合并语义按并集自愈），"
+                    "seen 以下轮磁盘态为准"
+                )
         logger.info("[ArknightsUID·推送] 推送完毕")
 
 
@@ -1348,6 +1485,8 @@ async def check_ark_activities() -> None:
 
 def _match_item_id(query: str, item_index: dict) -> str | None:
     """材料名 → itemId：精确 → 唯一前缀。歧义/无匹配返回 None。"""
+    if query in item_index:
+        return query
     exact = [iid for iid, info in item_index.items() if info.get("name") == query]
     if len(exact) == 1:
         return exact[0]
@@ -1378,74 +1517,156 @@ def _parse_plan_targets(text: str) -> list[tuple[str, int]]:
 
 @push_sv.on_command(("合成树", "合成"), block=True)
 async def show_craft_tree(bot: Bot, ev: Event) -> None:
-    """ark合成 材料 → 加工站合成树（含子材料递归）+ 直刷对比。"""
-    query = ev.text.strip()
-    if not query:
-        return await _send_text(bot, ev, "用法：ark合成 材料名（如 ark合成 聚酸酯块）")
+    await show_material_overview(bot, ev, view="craft")
 
-    from ArknightsUID.utils.gamedata.craft import (
-        craft_tree,
-        format_craft_tree,
-        load_formulas,
-    )
 
-    item_index = await load_item_index()
-    if not item_index:
-        return await _send_text(
-            bot, ev, "物品数据不可用（gamedata 拉取失败），请稍后再试。"
+async def _material_inventory(ev: Event, uid: str, index: int) -> dict[str, int] | str | None:
+    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
+    if isinstance(credential, str):
+        return credential if uid or index else None
+    response = await fetch_cultivate_player(credential)
+    owned = parse_inventory(response)
+    return owned if owned is not None else "仓库暂不可用，按未持有估算。"
+
+
+def _material_options(
+    result: dict, *, stats_available: bool, formulas_available: bool
+) -> list[str]:
+    lines = []
+    farm, tree = result["farm"], result["craft"]
+    farm_sanity, craft_sanity = result["farm_sanity"], result["craft_sanity"]
+    if farm:
+        lines.append(
+            f"推荐直刷 {farm['stage_code']}：约 {farm['ap_expect']:.1f} 理智/件"
+            f"（所需数量约 {farm_sanity:g} 理智）"
         )
-    item_id = _match_item_id(query, item_index)
+    elif stats_available:
+        lines.append("暂无样本充足的开放掉落关卡。")
+    else:
+        lines.append("一图流掉落数据暂不可用。")
+
+    if tree:
+        cost = "、".join(f"{row['name']}×{row['count']}" for row in tree["costs"])
+        lines.append(f"单次配方：{cost} → {tree['output']} 件")
+        if result["stock_craftable"] is not None:
+            lines.append(f"库存子材料可合 {result['stock_craftable']}/{result['need']} 件（另需龙门币）")
+        if craft_sanity is not None:
+            lines.append(f"合成所缺底层材料：约 {craft_sanity:g} 理智")
+        elif result["craft_missing_rows"]:
+            lines.append("部分合成材料缺掉率，暂时无法估算总理智。")
+        missing = result["craft_missing_rows"]
+        if missing and (result["stock_craftable"] is not None or not farm):
+            options = "、".join(
+                f"{row['name']}×{row['count']}" + (f"（刷 {row['stage']}）" if row["stage"] else "")
+                for row in missing[:8]
+            )
+            lines.append(f"合成路线还缺：{options}" + ("……" if len(missing) > 8 else ""))
+    elif formulas_available:
+        lines.append("没有加工站配方。")
+    else:
+        lines.append("加工站配方暂不可用。")
+
+    if farm_sanity is not None and craft_sanity is not None:
+        difference = abs(farm_sanity - craft_sanity)
+        if difference < 0.1:
+            lines.append("直刷和合成的期望理智相近。")
+        else:
+            route = "直刷" if farm_sanity < craft_sanity else "合成"
+            lines.append(f"{route}预计少用 {difference:.1f} 理智（不折算龙门币和副产物）。")
+    return lines
+
+
+async def show_material_overview(bot: Bot, ev: Event, *, view: str = "overview") -> None:
+    try:
+        raw, uid, index = split_account(ev.text or "", legacy_uid=False, legacy_index=False)
+    except ValueError as exc:
+        return await _send_text(bot, ev, str(exc))
+    query, separator, amount = raw.replace("：", ":").rpartition(":")
+    if not separator:
+        query, amount = raw, "1"
+    query, amount = query.strip(), amount.strip()
+    if not query or not re.fullmatch(r"[0-9]{1,4}", amount) or int(amount) == 0:
+        return await _send_text(
+            bot, ev, "用法：ark材料 材料名[:目标数量] [2号|UID:数字]，例如 ark材料 固源岩组:10"
+        )
+    total = int(amount)
+    items = await load_item_index()
+    item_id = _match_item_id(query, items)
     if not item_id:
-        return await _send_text(
-            bot, ev, f"未找到材料「{query}」（或匹配到多种，请写全名）。"
-        )
+        candidates = [
+            str(row["name"]) for row in items.values()
+            if str(row.get("name") or "").startswith(query)
+        ]
+        if len(candidates) > 1:
+            return await _send_text(bot, ev, f"「{query}」匹配到多种材料：{'、'.join(candidates[:8])}，请写全名。")
+        if view == "overview" and (page := await query_page(query)):
+            notes = [page.summary] if page.summary else []
+            notes.extend(f"{key}：{value}" for key, value in list(page.fields.items())[:5])
+            return await send_card_or_text(
+                bot, ev, "ark_drop_rate.html",
+                {"version": ArknightsUID_version, "item_name": page.title,
+                 "header": "百科资料", "summary_lines": notes, "rows": [],
+                 "sources": ["PRTS Wiki"]},
+                "\n".join([page.title, *notes, page.source_url]),
+            )
+        return await _send_text(bot, ev, f"未找到材料「{query}」，请核对名称或稍后重试。")
 
-    formulas = await load_formulas()
-    if not formulas or item_id not in formulas:
-        return await _send_text(
-            bot, ev, f"「{item_index[item_id]['name']}」不可合成（无加工站配方）。"
-        )
+    item_name = str(items[item_id].get("name") or query)
+    async def item_summary():
+        return await query_page(item_name) if view == "overview" else None
 
-    tree = craft_tree(item_id, formulas, item_index, need=1)
-    lines = [f"「明日方舟」{item_index[item_id]['name']} · 合成树"]
-    lines.extend(format_craft_tree(tree, item_index))
-    lines.append("数据：ArknightsGameData（workshopFormulas）；合成需加工站 Lv3")
+    matrix, stages, formulas, inventory, page = await asyncio.gather(
+        fetch_drop_matrix(), fetch_stage_info(), load_formulas(),
+        _material_inventory(ev, uid, index), item_summary(),
+    )
+    matrix_by_item = latest_matrix_by_item(matrix or [])
+    stage_meta = {str(stage.get("stageId") or ""): stage for stage in stages or []}
+    owned = inventory.get(item_id, 0) if isinstance(inventory, dict) else None
+    need = max(0, total - (owned or 0)) if separator else 1
+    lines = [f"目标 {total} 件 · 缺 {need} 件"] if separator else ["按 1 件估算"]
+    if owned is not None:
+        lines.append(f"当前账号持有 {owned} 件")
+    elif isinstance(inventory, str):
+        lines.append(inventory)
+    if not need:
+        lines.append("仓库现有数量已达目标；下列为每件的获取参考。")
+    if page and page.summary:
+        snippet = page.summary.strip()
+        lines.append(snippet[:160] + ("…" if len(snippet) > 160 else ""))
 
-    # 卡片行：树展平为带缩进层级的节点列表（图标仅首两层，避免逐叶下载）
-    from ArknightsUID.utils.gamedata.itemicon import item_icon_b64
-
-    card_rows: list[dict] = []
-
-    async def _walk(node: dict, depth: int) -> None:
-        costs = node.get("costs") or []
-        if depth <= 1 and costs:
-            for cost in costs:
-                cost["icon"] = await item_icon_b64(cost.get("name") or "")
-        card_rows.append(
-            {
-                "depth": depth,
-                "name": node.get("name") or node.get("item_id"),
-                "need": node.get("need") or 0,
-                "craftable": bool(node.get("craftable")),
-                "output": node.get("output") or 0,
-                "gold": node.get("gold") or 0,
-                "costs": costs,
-            }
-        )
-        for child in node.get("children") or []:
-            await _walk(child, depth + 1)
-
-    await _walk(tree, 0)
+    result = craft_vs_farm(
+        item_id, need or 1, formulas, items, matrix_by_item, stage_meta,
+        inventory=inventory if isinstance(inventory, dict) else None,
+    )
+    lines += _material_options(
+        result, stats_available=bool(matrix and stages), formulas_available=bool(formulas),
+    )
+    tree = result["craft"]
+    recipe = format_craft_tree(tree, items) if tree and (view == "craft" or (view == "drop" and not result["farm"])) else []
+    stats = item_drop_stats(item_id, matrix_by_item, stage_meta, top=8) if view == "drop" else []
+    max_rate = max((row["rate"] for row in stats), default=1.0)
+    rows = [{**row, "rate_pct": round(row["rate"] / max_rate * 100)} for row in stats]
+    if view == "overview":
+        lines.append(f"展开详情：ark材料掉率 {item_name} / ark合成 {item_name}")
+    sources = ["ArknightsGameData（配方）", "一图流（开放关卡的掉落样本）"]
+    if page:
+        sources.append("PRTS Wiki（简介）")
+    context = {
+        "version": ArknightsUID_version,
+        "item_name": item_name,
+        "item_icon": await item_icon_b64(item_name),
+        "header": {"overview": "材料全景", "drop": "掉落关卡 · 按掉率降序", "craft": "加工站合成树"}[view],
+        "summary_lines": lines,
+        "recipe": recipe,
+        "rows": rows,
+        "sources": sources,
+    }
+    details = [
+        f"  {row['stage_code']} · 每把 {row['rate']:.3f} 件 · "
+        f"{row['ap_expect']:.1f} 理智/件 · 样本 {row['times']:,} 把"
+        for row in rows
+    ]
     await send_card_or_text(
-        bot,
-        ev,
-        "ark_craft.html",
-        {
-            "name": item_index[item_id]["name"],
-            "need": 1,
-            "icon": await item_icon_b64(item_index[item_id]["name"]),
-            "rows": card_rows,
-            "version": ArknightsUID_version,
-        },
-        "\n".join(lines),
+        bot, ev, "ark_drop_rate.html", context,
+        "\n".join([f"「明日方舟」{item_name} · {context['header']}", *lines, *recipe, *details, "数据：" + " / ".join(sources)]),
     )

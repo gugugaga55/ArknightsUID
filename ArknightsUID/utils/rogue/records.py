@@ -27,6 +27,7 @@ lastChars 结算阵容。
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -177,10 +178,14 @@ def _parse_char(item: Any) -> RogueRunChar | None:
     )
 
 
+_SAFE_HEX_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{3,8}$")
+
+
 def _parse_ending(item: Any) -> tuple[str, list[dict]]:
     """endingText 可能是 JSON 分段 [{content,color}]（结算回顾），也可能是纯文本。
 
-    返回 (纯文本, 分段列表)；分段仅保留带文字的 {"text","color"}。
+    返回 (纯文本, 分段列表)；分段仅保留带文字的 {"text","color"}，
+    color 仅放行合法十六进制色值，防止模板内联 style 属性注入。
     """
     raw = _to_str(item.get("endingText")).strip()
     if not raw:
@@ -194,10 +199,14 @@ def _parse_ending(item: Any) -> tuple[str, list[dict]]:
             if isinstance(segments, list):
                 for seg in segments:
                     if isinstance(seg, dict) and seg.get("content"):
+                        raw_color = str(seg.get("color") or "").strip()
+                        safe_color = (
+                            raw_color if _SAFE_HEX_COLOR_RE.fullmatch(raw_color) else ""
+                        )
                         segments_out.append(
                             {
                                 "text": str(seg.get("content")),
-                                "color": str(seg.get("color") or ""),
+                                "color": safe_color,
                             }
                         )
                 if segments_out:

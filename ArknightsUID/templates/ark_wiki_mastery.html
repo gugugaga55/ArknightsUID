@@ -1,11 +1,14 @@
 <!--
-  ark_wiki_mastery.html —— PRTS 专精材料卡（#15）
+  ark_wiki_mastery.html —— PRTS 专精卡（#15：技能专精效果 + 材料）
   设计语言：罗德岛终端（见 ark_base.css 头部注释）
-  上下文（由 arknightsuid_wiki.send_mastery_materials 组装）：
+  上下文（由 arknightsuid_wiki._build_mastery_context 组装）：
     name: str             干员名
     rarity: str           1-6（人读值）
     profession: str
-    skills: [{name, mastery_costs: [{mastery: str, materials: [str]}]}]  仅含有专精材料的技能
+    skills: [{name, index, icon, effect_label, effect_icon,
+              effect: {description, sp_init, sp_cost, duration, meta} | None,
+              mastery_costs: [{mastery: str, tier_icon: str, active: bool, materials: [{name, count, icon}]}]}]
+    effect_icon/tier_icon: 专精档位官方图标 b64（专精_N.png，失败空串降级为纯文字 chip）
     source_url/version: str
 -->
 <!DOCTYPE html>
@@ -14,13 +17,13 @@
 <body>
     <div class="container" data-ghost="MASTERY">
         <div class="mast">
-            <span class="mast-brand">ArknightsUID <em>// 专精材料 MASTERY</em></span>
+            <span class="mast-brand">ArknightsUID <em>// 技能专精 MASTERY</em></span>
             <span class="mast-meta"><span class="idx">15</span>PRTS.WIKI</span>
         </div>
 
         <div class="titleblock" style="align-items: flex-start;">
             <div>
-                <div class="eyebrow">{{ profession }} · 技能专精材料</div>
+                <div class="eyebrow">{{ profession }} · 技能专精效果与材料</div>
                 <h1 class="title title--s"><em>{{ name }}</em></h1>
                 {% if rarity.isdigit() %}
                 <div class="stars" style="margin-top: var(--space-2);">
@@ -35,17 +38,28 @@
             </div>
             {% endif %}
         </div>
-        <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">MASTERY MATERIALS</span></div>
+        <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">MASTERY EFFECTS &amp; MATERIALS</span></div>
 
         {% for s in skills %}
         <div class="sect">
             <span class="sect-label">{% if s.icon %}<span class="icon" style="width: 26px; height: 26px;"><img src="{{ s.icon }}" alt=""></span>{% endif %}{{ s.name }}</span>
-            <span class="sect-en">SKILL {{ loop.index }} // {{ s.mastery_costs | length }} 阶</span>
+            <span class="sect-en">SKILL {{ s.index }} // {{ s.mastery_costs | length }} 阶</span>
         </div>
+        {% if s.effect %}
+        <div class="rows">
+            <div class="row" style="align-items: flex-start;">
+                <span class="chip chip--yellow" style="flex-shrink: 0; margin-top: 3px;">{% if s.effect_icon %}<img src="{{ s.effect_icon }}" alt="" style="width: 18px; height: 16px; object-fit: contain; vertical-align: -4px; margin-right: 4px;">{% endif %}{{ s.effect_label }}</span>
+                <div>
+                    <div style="line-height: 1.55;">{{ s.effect.description }}</div>
+                    {% if s.effect.meta %}<div class="mono" style="margin-top: 4px; opacity: .75; font-size: 12px;">{{ s.effect.meta }}</div>{% endif %}
+                </div>
+            </div>
+        </div>
+        {% endif %}
         <div class="rows">
             {% for mc in s.mastery_costs %}
-            <div class="row" style="align-items: flex-start;">
-                <span class="chip chip--yellow" style="flex-shrink: 0; margin-top: 3px;">{{ mc.mastery }}</span>
+            <div class="row {{ 'row--active' if mc.active else '' }}" style="align-items: flex-start;">
+                <span class="chip {{ 'chip--yellow' if mc.active else '' }}" style="flex-shrink: 0; margin-top: 3px;">{% if mc.tier_icon %}<img src="{{ mc.tier_icon }}" alt="" style="width: 18px; height: 16px; object-fit: contain; vertical-align: -4px; margin-right: 4px;">{% endif %}{{ mc.mastery }}材料</span>
                 <div class="mats">
                     {% for m in mc.materials %}
                     <span class="mat">{% if m.icon %}<span class="iicon"><img src="{{ m.icon }}" alt=""></span>{% endif %}{{ m.name }}{% if m.count %}<span class="cnt">×{{ m.count }}</span>{% endif %}</span>

@@ -51,11 +51,10 @@ from .rogue_registry import (  # noqa: F401
 )
 
 IS_ENEMY_CACHE_DIR = GAMEDATA_CACHE_DIR / "is_enemy"
-# 复核间隔（非数据寿命）：敌人库/技能词典内容近永久，只在版本更新时
-# 变化——间隔到点走条件 GET diff，304 时零下载零解析仅续期，故比旧
-# TTL（30 天）激进；新期敌人最长 1 天即可见。下载失败以过期缓存兜底，
-# 只有完全无缓存才走负标记。
-_DATA_TTL = 86400.0
+# 敌人库/技能词典/关卡出怪表是游戏解包静态数据（tomimi 同源），内容近
+# 永久——永不过期（is_fresh 对 inf 恒真），不再每日条件复核/重建。
+# 新期数据靠 ark刷新 显式重建；下载失败仍走负标记退避（_NET_MISS_TTL）。
+_DATA_TTL = float("inf")
 
 # 数据直链（jsdelivr CDN：content-type 正确、快；raw 直链核心下载器会 5s 超时）
 _TOMIMI_BASE = "https://cdn.jsdelivr.net/gh/tanch-p/tomimi-dev@main/src/lib/data"
@@ -393,7 +392,10 @@ _STAGE_CACHE_DIR = Path(IS_ENEMY_CACHE_DIR) / "stages"
 _STAGE_FETCH_CONCURRENCY = 8
 
 _stage_index_cache: dict[str, list[dict]] | None = None
-_STAGE_INDEX_TTL = 86400.0
+# 出没索引是派生数据（源：全量出怪表，同为 _DATA_TTL=inf 静态数据）——
+# 一次构建后不再每日重建（250+ 文件的逐关拉取开销大）；ark刷新 会显式
+# 清索引缓存（clear_stage_index_cache）。
+_STAGE_INDEX_TTL = float("inf")
 _STAGE_INDEX_RETRY_SECONDS = 30.0
 _stage_index_generation = 0
 
@@ -512,6 +514,10 @@ async def _do_build_stage_index(theme_dir: str | None = None) -> dict[str, list[
         if not enemies:
             return
         floors = _floors_text(stage.get("floors"))
+        # 同关同 (基础 id, level) 去重：波次拆分条目（enemy_x_01..）不该
+        # 让"出没关卡"列表同名刷屏；seen_per_enemy 记录该敌人已入索引的
+        # (level, elite) 组合，形态/紧急差异仍保留
+        seen: dict[str, set[tuple[int, bool]]] = {}
         for enemy in enemies:
             if not isinstance(enemy, dict):
                 continue
@@ -522,16 +528,24 @@ async def _do_build_stage_index(theme_dir: str | None = None) -> dict[str, list[
             elite_extra = int(enemy.get("elite_max_count") or 0) > int(
                 enemy.get("max_count") or 0
             )
-            index.setdefault(enemy_id, []).append(
-                {
-                    "theme": theme_dir,
-                    "code": meta.get("code") or "",
-                    "name": meta.get("name") or level_id,
-                    "floors": floors,
-                    "level": level,
-                    "elite": elite_extra,
-                }
-            )
+            base_id = base_enemy_id(enemy_id)
+            marker = (level, elite_extra)
+            if marker in seen.setdefault(base_id, set()):
+                continue
+            seen[base_id].add(marker)
+            row = {
+                "theme": theme_dir,
+                "code": meta.get("code") or "",
+                "name": meta.get("name") or level_id,
+                "floors": floors,
+                "level": level,
+                "elite": elite_extra,
+            }
+            index.setdefault(base_id, []).append(row)
+            # 波次实例 id 也归一进索引（按实例 id 反查的旧调用兼容），
+            # 引用同一 row，不重复占内存也不重复展示
+            if enemy_id != base_id:
+                index.setdefault(enemy_id, []).append(row)
 
     metas = await asyncio.gather(
         *(_load_stage_meta(t) for t in themes), return_exceptions=True
@@ -826,6 +840,105 @@ def build_stage_enemy_panel(
     return panel
 
 
+_VARIANT_ID_SUFFIX = re.compile(r"_\d+$")
+
+
+def base_enemy_id(enemy_id: str) -> str:
+    """形态/波次实例 id → 基础 id（enemy_2095_skzamf_01 → enemy_2095_skzamf）。"""
+    return _VARIANT_ID_SUFFIX.sub("", enemy_id) or enemy_id
+
+
+def db_entry_for(db: dict[str, dict], enemy_id: str) -> dict | None:
+    """关卡敌人 id → 敌库条目；形态实例尾缀回退基础 id。
+
+    tomimi 出怪表引用波次实例 id（enemy_2095_skzamf_01 / enemy_3001_upeopl_1），
+    敌库按基础 id（enemy_2095_skzamf）收录——直接查会整段 miss，关卡敌人
+    列表/出没索引漏掉这些敌人（实测"不容拒绝"39 个敌人漏 21 个）。
+    """
+    entry = db.get(enemy_id)
+    if entry is not None:
+        return entry
+    base = base_enemy_id(enemy_id)
+    if base == enemy_id:
+        return None
+    return db.get(base)
+
+
+def aggregate_stage_enemies(enemies: list) -> list[dict]:
+    """出怪表条目聚合：同基础敌人的波次拆分条目数量求和为一行。
+
+    tomimi 把同一敌人的各波次出怪拆成实例条目（enemy_x_01.._20 各带
+    数量与逐波属性微调），逐条出卡会同名刷屏（"不容拒绝"一个
+    "昔日道标"重复 14 行）。关卡卡是概览：数量按波次求和，面板数值取
+    出现最多的覆写组（主力波口径）；level>0 的形态条目（全库仅个位数）
+    面板差异实质，按 (基础 id, level) 独立成行保留。组内任一条目缺
+    紧急字段时去掉紧急键（保留"沿用普通范围"的兜底语义）。
+    """
+    import json as _json
+    from collections import Counter
+
+    def _fingerprint(item: dict) -> str:
+        overwrite = item.get("overwrittenData")
+        if not overwrite:
+            return ""
+        try:
+            return _json.dumps(overwrite, sort_keys=True, ensure_ascii=False)
+        except (TypeError, ValueError):
+            return f"unserializable:{item.get('id') or ''}"
+
+    # 顶级分组：形态行（level>0）按 (base, level) 独立；其余按 base
+    top: dict[tuple, list[dict]] = {}
+    order: list[tuple] = []
+    for item in enemies:
+        if not isinstance(item, dict):
+            continue
+        enemy_id = str(item.get("id") or "")
+        if not enemy_id:
+            continue
+        base = base_enemy_id(enemy_id)
+        level = int(item.get("level") or 0)
+        key = (base, level) if level > 0 else (base, 0)
+        if key not in top:
+            top[key] = []
+            order.append(key)
+        top[key].append(item)
+
+    result = []
+    for key in order:
+        base, level = key
+        members = top[key]
+        is_form = level > 0
+        # 面板代表：覆写指纹出现最多的一组（并列取首个，可复现）
+        if is_form:
+            repr_item = members[0]
+        else:
+            counts = Counter(_fingerprint(m) for m in members)
+            repr_fp, _ = counts.most_common(1)[0]
+            repr_item = next(
+                m for m in members if _fingerprint(m) == repr_fp
+            )
+        aggregated = {
+            "id": base,
+            "level": level,
+            "overwrittenData": repr_item.get("overwrittenData"),
+            "min_count": sum(int(m.get("min_count") or 0) for m in members),
+            "max_count": sum(int(m.get("max_count") or 0) for m in members),
+        }
+        if all(
+            m.get("elite_min_count") is not None
+            and m.get("elite_max_count") is not None
+            for m in members
+        ):
+            aggregated["elite_min_count"] = sum(
+                int(m["elite_min_count"]) for m in members
+            )
+            aggregated["elite_max_count"] = sum(
+                int(m["elite_max_count"]) for m in members
+            )
+        result.append(aggregated)
+    return result
+
+
 def stage_panel_rows(
     stage: dict,
     db: dict[str, dict],
@@ -840,12 +953,13 @@ def stage_panel_rows(
     紧急作战效果；floor 为该关所在层号（关卡卡传 floors 最大值），
     难度档的每层增益按 (1+N)^floor 复合进生命/攻击（tomimi 同源；
     缺省 0 = 不折算，兼容无层数上下文的调用）。
+    条目先按基础 id 聚合（波次拆分实例不再同名刷屏）。
     count：min==max 且 >0 → 固定数，0 → 波次出怪，紧急数量差 → 紧急+N 注记。
     """
     rows: list[dict] = []
-    for item in stage.get("enemies") or []:
+    for item in aggregate_stage_enemies(stage.get("enemies") or []):
         key = str(item.get("id") or "")
-        entry = db.get(key)
+        entry = db_entry_for(db, key)
         if not entry:
             continue
         blocks = entry.get("stats") or []
@@ -1379,6 +1493,15 @@ async def enemy_icon_b64(enemy_key: str) -> str:
                 _status, data = await download_bytes_status(
                     f"{_ICON_BASE}/{filename}", timeout=20.0, quiet_404=True
                 )
+                if data is None:
+                    # 波次实例 key（enemy_…_16）上游只按基础 id 收图（形态
+                    # 变体 _2.._9 有独立图，精确优先），miss 后回退重试
+                    base_key = base_enemy_id(enemy_key)
+                    if base_key != enemy_key:
+                        base_file = f"{safe_cache_stem(base_key)}.webp"
+                        _status, data = await download_bytes_status(
+                            f"{_ICON_BASE}/{base_file}", timeout=20.0, quiet_404=True
+                        )
                 if data is None:
                     raise RuntimeError(f"icon download failed: {filename}")
                 await asyncio.to_thread(_save_valid_image_bytes, local_path, data)

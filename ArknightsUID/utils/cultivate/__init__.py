@@ -8,14 +8,13 @@
 - 当前进度：player_info 的 chars（复用 utils/player 解析层）
 - 物品名/稀有度：ArknightsGameData item_table（gamedata 共享缓存）
 
-口径（v1，与 gxy 的差异均已注明）：
-- 目标 = 精英化2 + 主技能7 + 全技能专精3 + 全模组满级（"毕业"）
+口径：
+- 默认按精2、技能7、全部专3及可用模组满级计算，也可为每位干员指定目标。
 - skillCost 与 player_info chars.skills 按**顺序对位**（同一 API 家族的顺序约定，
   位置对不上时退化为全量计入并打 warning）
 - 模组按 uniequip_table 的 ID/类型对应当前进度，基础证章不参与扣减
 - 经验书（2001-2004）不按 200/400/1000/2000 经验值折算，按数量直列
-- 刷图建议不并入单干员计算：掉率数据源（yituliu COS 掉落矩阵）已由
-  wiki 模块接入，ark养成计划 经 _build_farm_rows 消费（arknightsuid_cultivate）
+- 单人和多人卡片共用缺口及刷图建议；未持有干员从精0、技能1级预估。
 """
 
 from __future__ import annotations
@@ -25,6 +24,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from ..dict_utils import path, value
+from ..gamedata.panel_args import parse_panel_query
 
 if TYPE_CHECKING:
     from ..enduid.adapter import ArkCredential
@@ -39,6 +39,58 @@ _MASTERY_MAX = 3  # 专精 3
 # skillCost.levelCost 下标：0-6 → 技能 1-7 级，7-9 → 专精 1-3（gxy 同款口径）
 _MASTERY_COST_BASE = 7
 _EVOLVE_MAX = 2
+_FULL_GOAL_LABEL = "毕业（精2 · 技能7 · 全技能专3 · 全可用模组满级）"
+
+
+@dataclass(frozen=True, slots=True)
+class CultivationGoal:
+    phase: int
+    skill_level: int
+    skill_index: int | None = None
+    mastery: int = 0
+    module_type: str = ""
+    module_level: int = 0
+
+    @property
+    def label(self) -> str:
+        parts = [f"精{self.phase}", f"技能{self.skill_level}级"]
+        if self.mastery:
+            parts.append(f"{self.skill_index}技能专{self.mastery}")
+        if self.module_level:
+            parts.append(f"{self.module_type}模{self.module_level}级")
+        return " · ".join(parts)
+
+
+def parse_cultivation_goal(text: str) -> tuple[str, CultivationGoal | None]:
+    config = parse_panel_query(text)
+    name = config.pop("name")
+    if not any(value is not None and value is not False for value in config.values()):
+        return name, None
+    if any(config[key] is not None for key in ("level", "potential", "favor")):
+        raise ValueError("养成暂只计算精英化、技能和模组材料；干员等级、潜能和信赖请用 ark面板。")
+    phase, skill = config["phase"], config["skill_level"]
+    skill_index, mastery = config["skill_index"], config["mastery"]
+    module_type, module_level = config["module_type"], config["module_level"]
+    if (skill_index is None) != (mastery is None) or (mastery or 0) > _MASTERY_MAX:
+        raise ValueError("专精请同时指定技能和档位，例如「3技能 专3」。")
+    if module_level and not module_type:
+        raise ValueError("请指定模组类型，例如「X模 模1」。")
+    if config["no_module"] and module_type:
+        raise ValueError("「无模」不能和指定模组一起使用。")
+    if phase is None:
+        phase = 2 if mastery or module_type or skill is None else int(skill > 4)
+    if skill is None:
+        skill = 4 if phase == 0 else _MAIN_SKILL_MAX
+    if phase == 0 and skill > 4:
+        raise ValueError("精0最高技能4级。")
+    if (mastery or module_type) and phase != 2:
+        raise ValueError("专精和模组需精2。")
+    if mastery and skill != _MAIN_SKILL_MAX:
+        raise ValueError("专精前需要技能7级。")
+    return name, CultivationGoal(
+        phase, skill, skill_index, mastery or 0, module_type or "",
+        (module_level or 1) if module_type else 0,
+    )
 
 
 def _items_of(raw: Any) -> list[dict[str, Any]]:
@@ -145,8 +197,22 @@ def _owned_items(response: Any) -> dict[str, int]:
     return owned
 
 
+def parse_inventory(response: Any) -> dict[str, int] | None:
+    """区分空仓库与读取失败，避免用 0 伪装未知持有量。"""
+    if value(response, "code") not in (None, 0):
+        return None
+    if not isinstance(path(response, "data", "player_item_data"), (dict, list)):
+        return None
+    return _owned_items(response)
+
+
 def build_remaining_need(
-    cost: CultivateCost, char: CharEntry, *, equip_types: dict[str, str] | None = None
+    cost: CultivateCost,
+    char: CharEntry,
+    *,
+    equip_types: dict[str, str] | None = None,
+    goal: CultivationGoal | None = None,
+    estimated_start: bool = False,
 ) -> tuple[dict[str, int], list[str]]:
     """当前练度 → 毕业的剩余材料需求 {itemId: count} + 假设性 warning 列表。"""
     warnings: list[str] = []
@@ -157,35 +223,60 @@ def build_remaining_need(
             need[entry["id"]] += entry["count"]
 
     # 精英化：当前阶段之后的所有阶段
-    for phase_items in cost.evolve[char.evolve_phase : _EVOLVE_MAX]:
+    phase_limit = goal.phase if goal else _EVOLVE_MAX
+    skill_limit = goal.skill_level if goal else _MAIN_SKILL_MAX
+    if goal and phase_limit > max(char.evolve_phase, len(cost.evolve)):
+        raise ValueError(f"该干员没有可计算的精{phase_limit}材料档位。")
+    if goal and skill_limit > max(char.main_skill_lvl, len(cost.main_skill)):
+        raise ValueError(f"该干员没有可计算的技能{skill_limit}级材料档位。")
+    for phase_items in cost.evolve[char.evolve_phase : phase_limit]:
         add(phase_items)
 
     # 主技能 1-7：main_skill 下标 = 等级-1，从当前级+1 起
-    for level in range(char.main_skill_lvl + 1, _MAIN_SKILL_MAX + 1):
+    for level in range(char.main_skill_lvl + 1, skill_limit + 1):
         if level - 1 < len(cost.main_skill):
             add(cost.main_skill[level - 1])
 
     # 专精：skillCost 顺序对位 chars.skills；level_cost[7+专精-1]
-    if cost.skills and len(cost.skills) != len(char.skills):
-        warnings.append("技能顺序对位不全，专精按已持有技能数计算")
+    mastery_limit = goal.mastery if goal else _MASTERY_MAX
+    skill_target = goal.skill_index if goal else None
+    if mastery_limit and skill_target and (
+        skill_target > len(cost.skills)
+        or len(cost.skills[skill_target - 1]["level_cost"]) < _MASTERY_COST_BASE + mastery_limit
+    ):
+        raise ValueError(f"该干员没有可计算的{skill_target}技能专{mastery_limit}档位。")
+    if mastery_limit and cost.skills and len(cost.skills) != len(char.skills) and not estimated_start:
+        warnings.append("技能顺序对位不全，超出持有技能的部分按专精0估算")
     for index, skill_cost in enumerate(cost.skills):
+        if skill_target and skill_target != index + 1:
+            continue
         current = char.skills[index].specialize_level if index < len(char.skills) else 0
-        for mastery in range(current + 1, _MASTERY_MAX + 1):
+        for mastery in range(current + 1, mastery_limit + 1):
             level_index = _MASTERY_COST_BASE + mastery - 1
             if level_index < len(skill_cost["level_cost"]):
                 add(skill_cost["level_cost"][level_index])
 
     # 玩家 equip 列表可能含基础证章且顺序与成本表不同，不能按下标扣材料。
-    if cost.equips:
+    module_level = goal.module_level if goal else 3
+    module_type = goal.module_type if goal else ""
+    target_equips = [
+        equip for equip in cost.equips
+        if not module_type or equip["type_name"].upper() == module_type
+    ]
+    if module_type and not target_equips:
+        raise ValueError(f"该干员没有可计算的 {module_type} 模。")
+    if module_level and target_equips:
         types = equip_types or {}
         if any(e.level > 0 and e.equip_id not in types for e in char.equips):
             warnings.append("部分模组类型未能对应，相关进度未扣除，模组材料按未解锁估算")
         installed = {
-            types[e.equip_id]: e.level for e in char.equips if types.get(e.equip_id)
+            types[e.equip_id].upper(): e.level for e in char.equips if types.get(e.equip_id)
         }
-        for equip_cost in cost.equips:
-            current = installed.get(equip_cost["type_name"], 0)
-            for level_items in equip_cost["level_cost"][current:]:
+        for equip_cost in target_equips:
+            current = installed.get(equip_cost["type_name"].upper(), 0)
+            if goal and module_level > max(current, len(equip_cost["level_cost"])):
+                raise ValueError(f"该干员没有可计算的 {module_type} 模{module_level}档位。")
+            for level_items in equip_cost["level_cost"][current:module_level]:
                 add(level_items)
 
     return dict(need), warnings
@@ -284,8 +375,10 @@ async def calculate_cultivation(
     *,
     keep_zero: bool = False,
     inventory_response: Any | None = None,
+    force_refresh: bool = True,
+    goal: CultivationGoal | None = None,
 ) -> dict[str, Any] | str:
-    """完整计算链：进度（player_info 缓存）+ 需求（cal_character）+ 持有（cal_player）。
+    """完整计算链：进度（player_info）+ 需求（cal_character）+ 持有（cal_player）。
 
     返回卡片/文本两用的结果 dict；失败返回中文错误文案。
     keep_zero=True 供多干员合并（ark养成计划）：gap 保留零缺口行与原始
@@ -296,18 +389,22 @@ async def calculate_cultivation(
         fetch_cultivate_character,
         fetch_cultivate_player,
     )
-    from ..gamedata.charinfo import load_item_index
+    from ..gamedata.charinfo import load_char_index, load_item_index
     from ..player import fetch_cached_player_info, parse_player_info
+    from ..player.parse import CharEntry
 
-    player_response = await fetch_cached_player_info(credential)
+    player_response = (
+        await fetch_cached_player_info(credential, force=True)
+        if force_refresh
+        else await fetch_cached_player_info(credential)
+    )
     if isinstance(player_response, str):
         return player_response
     player = parse_player_info(player_response)
-    if player is None or not player.chars:
+    if player is None or (not player.chars and not isinstance(player.raw.get("chars"), list)):
         return "未获取到干员练度数据，无法计算养成需求。"
     char = next((c for c in player.chars if c.char_id == char_id), None)
-    if char is None:
-        return "你还没有获得该干员（或数据尚未同步），无法计算养成需求。"
+    estimated_start = char is None
 
     cost_response = await fetch_cultivate_character(credential, char_id)
     if isinstance(cost_response, str):
@@ -315,6 +412,15 @@ async def calculate_cultivation(
     cost = parse_cultivate_cost(cost_response)
     if cost is None:
         return "森空岛养成材料接口返回异常，无法计算。"
+    if char is None:
+        info = (await load_char_index()).get(char_id) or {}
+        if not info and not (cost.evolve or cost.main_skill or cost.skills or cost.equips):
+            return "未找到该干员的养成数据，请检查干员名。"
+        char = CharEntry(
+            char_id=char_id, level=1, main_skill_lvl=1,
+            name=str(info.get("name") or cost.raw.get("name") or char_id),
+            profession=str(info.get("profession") or ""), rarity=int(info.get("rarity") or 0),
+        )
 
     # 持有量失败不中断计算（缺口仍可展示），但必须显式告警——
     # 否则按持有 0 计算会呈现"缺全部材料"的误导清单；
@@ -322,18 +428,14 @@ async def calculate_cultivation(
     owned_response = inventory_response
     if owned_response is None:
         owned_response = await fetch_cultivate_player(credential)
-    owned: dict[str, int] = {}
+    inventory = parse_inventory(owned_response)
     owned_warnings: list[str] = []
     if isinstance(owned_response, str):
         owned_warnings.append(
             f"持有材料获取失败（{owned_response}），以下缺口按持有 0 估算"
         )
-    else:
-        owned = _owned_items(owned_response)
-        if value(owned_response, "code") not in (None, 0) or (
-            path(owned_response, "data", "player_item_data") is None
-        ):
-            owned_warnings.append("持有材料接口返回异常，以下缺口按持有 0 估算")
+    elif inventory is None:
+        owned_warnings.append("持有材料接口返回异常，以下缺口按持有 0 估算")
 
     equip_types: dict[str, str] = {}
     if cost.equips and char.equips:
@@ -342,15 +444,25 @@ async def calculate_cultivation(
         equip_table = await ensure_uniequip_table()
         for equip_id, info in (equip_table or {}).get("equipDict", {}).items():
             equip_types[equip_id] = str(info.get("typeName2") or "")
-    need, warnings = build_remaining_need(cost, char, equip_types=equip_types)
+    try:
+        need, warnings = build_remaining_need(
+            cost, char, equip_types=equip_types, goal=goal, estimated_start=estimated_start,
+        )
+    except ValueError as exc:
+        return str(exc)
+    if estimated_start:
+        warnings.append(f"{char.display_name} 未在账号干员列表中，按精0、技能1级估算。")
     warnings = owned_warnings + warnings
     item_index = await load_item_index()
-    gap = summarize_gap(need, owned, item_index, max_rows=max_rows, keep_zero=keep_zero)
+    gap = summarize_gap(need, inventory or {}, item_index, max_rows=max_rows, keep_zero=keep_zero)
 
     return {
         "char": char,
         "need": need,
         "gap": gap,
+        "inventory": inventory,
+        "goal_label": goal.label if goal else _FULL_GOAL_LABEL,
+        "full_goal": goal is None,
         "warnings": warnings,
         "current": {
             "evolve_phase": char.evolve_phase,
@@ -413,6 +525,7 @@ def merge_cultivation_results(results: list[dict[str, Any]]) -> dict[str, Any]:
                 "rarity": char.rarity_display,
                 "current": result.get("current") or {},
                 "gap_count": char_material_total,
+                "goal_label": result.get("goal_label") or _FULL_GOAL_LABEL,
             }
         )
 

@@ -33,7 +33,7 @@
 
         <div class="titleblock" style="align-items: flex-start;">
             <div>
-                <div class="eyebrow">{{ result.char.profession_name }} · 到毕业材料缺口</div>
+                <div class="eyebrow">{{ result.char.profession_name }} · 养成材料缺口</div>
                 <h1 class="title title--s"><em>{{ name }}</em></h1>
                 {% if result.char.rarity_display %}
                 <div class="stars" style="margin-top: var(--space-2);">
@@ -54,24 +54,22 @@
             <div class="cell">
                 <div class="cell-label">精英化 ELITE</div>
                 <div class="cell-value">{{ result.current.evolve_phase }}</div>
-                <div class="cell-sub">目标 E2</div>
             </div>
             <div class="cell">
                 <div class="cell-label">主技能 SKILL</div>
                 <div class="cell-value">{{ result.current.main_skill_lvl }}</div>
-                <div class="cell-sub">目标 LV7</div>
             </div>
             <div class="cell">
                 <div class="cell-label">专精 MASTERY</div>
                 <div class="cell-value">{{ result.current.masteries | join("/") if result.current.masteries else "-" }}</div>
-                <div class="cell-sub">目标 M3</div>
             </div>
             <div class="cell">
                 <div class="cell-label">模组 MODULE</div>
                 <div class="cell-value">{{ result.current.equip_levels | max if result.current.equip_levels else "-" }}</div>
-                <div class="cell-sub">目标 满级</div>
             </div>
         </div>
+
+        <div class="prose">目标：{{ result.goal_label | default("毕业（精2 · 技能7 · 全技能专3 · 全可用模组满级）") }}。不含干员等级经验与升级龙门币。</div>
 
         {% if result.gap.gold_lack or result.gap.exp_books %}
         <div class="sect">
@@ -108,7 +106,20 @@
             {% endfor %}
         </div>
         {% else %}
-        <div class="prose">材料缺口：无——已毕业，或仓库库存充足。</div>
+        <div class="prose">材料缺口：无——{{ "已毕业" if result.full_goal | default(true) else "已达目标" }}，或仓库库存充足。</div>
+        {% endif %}
+
+        {% if farm_rows %}
+        <div class="sect"><span class="sect-label">刷图建议</span><span class="sect-en">FARMING</span></div>
+        <div class="rows">
+            {% for row in farm_rows %}
+            <div class="row">
+                <span class="row-label">{{ row.name }} ×{{ row.lack }}</span>
+                <span class="row-value">{{ row.advice }}</span>
+            </div>
+            {% endfor %}
+        </div>
+        <div class="prose">各材料单独估算。</div>
         {% endif %}
 
         {% if result.warnings %}

@@ -22,7 +22,7 @@ import random
 import re
 import time
 from collections.abc import Awaitable, Callable
-from contextlib import contextmanager
+from contextlib import asynccontextmanager, contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -32,13 +32,17 @@ from gsuid_core.logger import logger
 from gsuid_core.models import Event
 from gsuid_core.subscribe import gs_subscribe
 from gsuid_core.sv import SV
+from gsuid_core.utils.database.models import Subscribe
 
+from ArknightsUID.utils.arg_utils import split_account
 from ArknightsUID.utils.async_locks import KeyedLocks
-from ArknightsUID.utils.time_utils import beijing_datetime
+from ArknightsUID.utils.time_utils import BEIJING_TZ, beijing_datetime
 
 from ArknightsUID.utils.config import ArkConfig
 from ArknightsUID.utils.enduid.adapter import (
+    ArkCredential,
     hide_uid,
+    hide_uid_for,
     resolve_credential,
 )
 from ArknightsUID.utils.player import (
@@ -232,6 +236,15 @@ def _poll_view(row: dict, fields: tuple[str, ...]) -> dict:
 # 首次订阅），旧快照一律弃写。存独立文件：状态行本身可能被清掉或
 # 从未存在，行内版本字段覆盖不到这些交错。
 _SUB_EPOCH_PATH: Path = MAIN_PATH / "push_sub_epoch.json"
+_SUB_EPOCH_MAX_KEYS = 2000
+
+
+def _prune_epoch_dict(data: dict) -> dict:
+    """限制 push_sub_epoch.json 条目上限，淘汰最早写入的历史键防无限膨胀。"""
+    if len(data) <= _SUB_EPOCH_MAX_KEYS:
+        return data
+    keep_keys = list(data.keys())[-_SUB_EPOCH_MAX_KEYS:]
+    return {k: data[k] for k in keep_keys}
 
 
 def _epoch_key(task_name: str, key: str) -> str:
@@ -251,7 +264,7 @@ def _bump_epoch(task_name: str, key: str) -> bool:
         def merge() -> dict:
             fresh = _load_state(_SUB_EPOCH_PATH)
             fresh[_epoch_key(task_name, key)] = time.time_ns()
-            return fresh
+            return _prune_epoch_dict(fresh)
 
         return _write_state_atomic(_SUB_EPOCH_PATH, {}, merge_from=merge)
     except Exception as exc:
@@ -308,7 +321,7 @@ def _record_intent(
         }
         fresh[_epoch_key(task_name, key)] = time.time_ns()
         accepted = True
-        return fresh
+        return _prune_epoch_dict(fresh)
 
     try:
         written = _write_state_atomic(_SUB_EPOCH_PATH, {}, merge_from=merge)
@@ -320,35 +333,63 @@ def _record_intent(
         return False
 
 
+async def _to_thread_shielded(func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """把同步文件锁事务下放工作线程（享受 2s 等锁预算，不卡事件循环），
+    且在协程取消时等待底层不可取消线程执行完再传播 CancelledError。"""
+    task = asyncio.ensure_future(asyncio.to_thread(func, *args, **kwargs))
+    pending_cancel: asyncio.CancelledError | None = None
+    while True:
+        try:
+            res = await asyncio.shield(task)
+        except asyncio.CancelledError as exc:
+            pending_cancel = pending_cancel or exc
+            if task.done():
+                raise pending_cancel from None
+            continue
+        if pending_cancel is not None:
+            raise pending_cancel from None
+        return res
+
+
 @contextmanager
 def _intent_guard(task_name: str, key: str, ticket: int):
-    """异常/取消只结束自身仍未提交的意图，不回滚更新操作或取消墓碑。"""
+    """同步版意图守卫（供直接调用兼容）。"""
     try:
         yield
     finally:
+        _cleanup_pending_intent_sync(task_name, key, ticket)
 
-        def merge() -> dict:
-            fresh = _load_state(_SUB_EPOCH_PATH)
-            row = fresh.get(_intent_key(task_name, key)) or {}
-            if row.get("ticket") == ticket and row.get("pending"):
-                # 保持最新票水位，避免旧命令借恢复动作重新有效。
-                fresh[_intent_key(task_name, key)] = {
-                    **row,
-                    "pending": False,
-                    # None 是升级前未知状态：是否有订阅由数据库查询结果决定。
-                    "active": row.get("resume_active"),
-                }
-                fresh[_epoch_key(task_name, key)] = time.time_ns()
-            return fresh
 
-        row = _load_state(_SUB_EPOCH_PATH).get(_intent_key(task_name, key)) or {}
+def _cleanup_pending_intent_sync(task_name: str, key: str, ticket: int) -> None:
+    def merge() -> dict:
+        fresh = _load_state(_SUB_EPOCH_PATH)
+        row = fresh.get(_intent_key(task_name, key)) or {}
         if row.get("ticket") == ticket and row.get("pending"):
-            try:
-                _write_state_atomic(_SUB_EPOCH_PATH, {}, merge_from=merge)
-            except Exception as exc:
-                logger.warning(
-                    f"[ArknightsUID·推送] 未完成订阅恢复失败: {exc.__class__.__name__}"
-                )
+            fresh[_intent_key(task_name, key)] = {
+                **row,
+                "pending": False,
+                "active": row.get("resume_active"),
+            }
+            fresh[_epoch_key(task_name, key)] = time.time_ns()
+        return _prune_epoch_dict(fresh)
+
+    row = _load_state(_SUB_EPOCH_PATH).get(_intent_key(task_name, key)) or {}
+    if row.get("ticket") == ticket and row.get("pending"):
+        try:
+            _write_state_atomic(_SUB_EPOCH_PATH, {}, merge_from=merge)
+        except Exception as exc:
+            logger.warning(
+                f"[ArknightsUID·推送] 未完成订阅恢复失败: {exc.__class__.__name__}"
+            )
+
+
+@asynccontextmanager
+async def _async_intent_guard(task_name: str, key: str, ticket: int):
+    """异步版意图守卫：恢复写盘下放工作线程，不阻塞事件循环。"""
+    try:
+        yield
+    finally:
+        await _to_thread_shielded(_cleanup_pending_intent_sync, task_name, key, ticket)
 
 
 _subscription_locks = KeyedLocks()
@@ -410,19 +451,26 @@ def _clear_subscription_state(task_name: str, ev: Event, uid: str) -> None:
         _reset_sanity_state(ev.bot_id, ev.user_id, uid)
         return
     path = _task_state_path(task_name)
-    state = _load_state(path)
-    state.pop(_state_key(ev.bot_id, ev.user_id, uid), None)
-    _save_state(path, state, "退订")
+    target_key = _state_key(ev.bot_id, ev.user_id, uid)
+
+    def _merge_pop() -> dict:
+        fresh = _load_state(path)
+        fresh.pop(target_key, None)
+        return fresh
+
+    _save_state(path, {}, "退订", merge_from=_merge_pop)
 
 
 async def _cancel_subscription(
-    task_name: str, ev: Event, ticket: int, uid: str = ""
+    task_name: str, ev: Event, ticket: int, uid: str = "", *, scoped: bool = False
 ) -> bool:
     key = _state_key(ev.bot_id, ev.user_id, uid)
-    saved = (
-        _record_intent(task_name, key, ticket, active=False)
-        if uid
-        else _record_cancel_all(task_name, ev, ticket)
+    saved = await _to_thread_shielded(
+        lambda: (
+            _record_intent(task_name, key, ticket, active=False)
+            if uid
+            else _record_cancel_all(task_name, ev, ticket)
+        )
     )
     if not saved:
         return False
@@ -438,22 +486,28 @@ async def _cancel_subscription(
             ]
             path = _task_state_path(task_name)
             prefix = f"{ev.bot_id}|{ev.user_id}|"
+            state_keys = await asyncio.to_thread(_load_state, path)
             targets += [
-                k[len(prefix) :] for k in _load_state(path) if k.startswith(prefix)
+                k[len(prefix) :] for k in state_keys if k.startswith(prefix)
             ]
         for target_uid in dict.fromkeys(targets):
             target_key = _state_key(ev.bot_id, ev.user_id, target_uid)
-            row = (
-                _load_state(_SUB_EPOCH_PATH).get(_intent_key(task_name, target_key))
-                or {}
-            )
+            epoch_state = await asyncio.to_thread(_load_state, _SUB_EPOCH_PATH)
+            row = epoch_state.get(_intent_key(task_name, target_key)) or {}
             if int(row.get("ticket") or 0) > ticket:
+                if scoped:
+                    return False
                 continue
-            await gs_subscribe.delete_subscribe(
-                "single", task_name=task_name, event=ev, uid=target_uid
+            if scoped:
+                await _delete_personal_row(task_name, ev, target_uid)
+            else:
+                await gs_subscribe.delete_subscribe(
+                    "single", task_name=task_name, event=ev, uid=target_uid
+                )
+            await _to_thread_shielded(
+                _clear_subscription_state, task_name, ev, target_uid
             )
-            _clear_subscription_state(task_name, ev, target_uid)
-            _bump_epoch(task_name, target_key)
+            await _to_thread_shielded(_bump_epoch, task_name, target_key)
     return True
 
 
@@ -471,8 +525,8 @@ def _load_cred_warn_state() -> dict[str, dict]:
     return _load_state(CRED_WARN_STATE_PATH)
 
 
-def _save_cred_warn_state(state: dict[str, dict]) -> None:
-    _save_state(CRED_WARN_STATE_PATH, state, "凭据预警")
+def _save_cred_warn_state(state: dict[str, dict], merge_from=None) -> None:
+    _save_state(CRED_WARN_STATE_PATH, state, "凭据预警", merge_from=merge_from)
 
 
 # 凭据预警的按键锁：同一 (bot, user, uid) 的「冷却重读 → 发送 → 成功记账」
@@ -492,12 +546,14 @@ async def maybe_warn_credential(subscribe, uid: str, error: str) -> None:
     """
     key = _state_key(subscribe.bot_id, subscribe.user_id, uid)
     async with _cred_warn_locks.get(key):
-        last = float((_load_cred_warn_state().get(key) or {}).get("ts") or 0)
+        cred_state = await asyncio.to_thread(_load_cred_warn_state)
+        last = float((cred_state.get(key) or {}).get("ts") or 0)
         if time.time() - last < CRED_WARN_COOLDOWN_SECS:
             return
+        shown_uid = await hide_uid_for(uid, subscribe.user_id, subscribe.bot_id)
         message = (
             "「明日方舟」登录状态不可用\n"
-            f"UID {hide_uid(uid)} 的定时查询连续失败：{str(error)[:60]}\n"
+            f"UID {shown_uid} 的定时查询连续失败：{str(error)[:60]}\n"
             "请重新 ark绑定 / ark扫码登录（私聊）；7 天内不重复提醒。"
         )
         try:
@@ -511,9 +567,16 @@ async def maybe_warn_credential(subscribe, uid: str, error: str) -> None:
             f"[ArknightsUID·凭据预警] 已提醒 user={subscribe.user_id} "
             f"uid={hide_uid(uid)}"
         )
-        state = _load_cred_warn_state()
-        state[key] = {"ts": time.time()}
-        _save_cred_warn_state(state)
+        now_ts = time.time()
+
+        def _merge_cred() -> dict:
+            fresh = _load_cred_warn_state()
+            fresh[key] = {"ts": now_ts}
+            return fresh
+
+        await _to_thread_shielded(
+            _save_cred_warn_state, {}, merge_from=_merge_cred
+        )
 
 
 def _write_state_atomic(path: Path, state: dict, merge_from=None) -> bool:
@@ -620,7 +683,10 @@ async def _run_subscribe_command(
     text: str,
     commit: Callable[..., Awaitable[bool]],
     prepare: Callable[..., Awaitable[Any]] | None = None,
-) -> tuple[Any, Any] | None:
+    *,
+    credential: ArkCredential | None = None,
+    quiet: bool = False,
+) -> tuple[ArkCredential, Any] | None:
     """理智/训练/基建订阅命令的公共骨架（操作票流程，第四轮复核）。
 
     取票 → 解析账号 → 意图落盘(pending) → 守卫内锁前 prepare（任务专属
@@ -629,25 +695,51 @@ async def _run_subscribe_command(
     返回。剿灭/签到等无状态竞态的订阅不经此骨架。
     """
     ticket = time.time_ns()
-    uid, index = _extract_target(text)
-    credential = await resolve_or_reply(bot, ev, uid, index)
     if credential is None:
-        return None
+        uid, index = _extract_target(text)
+        credential = await resolve_or_reply(bot, ev, uid, index)
+        if credential is None:
+            return None
     key = _state_key(ev.bot_id, ev.user_id, credential.uid)
-    if not _record_intent(task_name, key, ticket, active=True, pending=True):
-        await _send_text(
-            bot, ev, "订阅保存失败或已有更新操作，本次未生效；请稍后重试。"
-        )
+    prior_epoch_state = await asyncio.to_thread(_load_state, _SUB_EPOCH_PATH)
+    prior_row = prior_epoch_state.get(_intent_key(task_name, key)) or {}
+    had_prior_active = bool(
+        prior_row.get("resume_active")
+        if prior_row.get("pending")
+        else prior_row.get("active")
+    )
+    ok_pending = await _to_thread_shielded(
+        lambda: _record_intent(task_name, key, ticket, active=True, pending=True)
+    )
+    if not ok_pending:
+        if not quiet:
+            await _send_text(
+                bot, ev, "订阅保存失败或已有更新操作，本次未生效；请稍后重试。"
+            )
         return None
-    with _intent_guard(task_name, key, ticket):
+    async with _async_intent_guard(task_name, key, ticket):
         prepared = await prepare(credential) if prepare is not None else None
         completed = False
         async with _subscription_lock(task_name, ev):
             completed = await commit(key, ticket, credential, prepared)
+            if not completed and not had_prior_active:
+                latest_epoch = await asyncio.to_thread(_load_state, _SUB_EPOCH_PATH)
+                cur = latest_epoch.get(_intent_key(task_name, key)) or {}
+                if int(cur.get("ticket") or 0) <= ticket:
+                    try:
+                        if quiet:
+                            await _delete_personal_row(task_name, ev, credential.uid)
+                        else:
+                            await gs_subscribe.delete_subscribe(
+                                "single", task_name=task_name, event=ev, uid=credential.uid,
+                            )
+                    except Exception:
+                        pass
         if not completed:
-            await _send_text(
-                bot, ev, "订阅保存未完成或已有更新操作，本次未生效；请重新订阅。"
-            )
+            if not quiet:
+                await _send_text(
+                    bot, ev, "订阅保存未完成或已有更新操作，本次未生效；请重新订阅。"
+                )
             return None
     return credential, prepared
 
@@ -659,25 +751,36 @@ async def _run_subscribe_command(
     ),
     block=True,
 )
-async def subscribe_sanity_push(bot: Bot, ev: Event) -> None:
+async def subscribe_sanity_push(
+    bot: Bot, ev: Event, *, credential: ArkCredential | None = None, quiet: bool = False
+) -> bool:
     async def commit(key: str, ticket: int, credential, _prepared) -> bool:
-        if not _intent_current(TASK_NAME, key, ticket):
+        if not await asyncio.to_thread(_intent_current, TASK_NAME, key, ticket):
             return False
         await gs_subscribe.add_subscribe(
             "single", task_name=TASK_NAME, event=ev, uid=credential.uid
         )
-        if not _intent_current(TASK_NAME, key, ticket):
+        if not await asyncio.to_thread(_intent_current, TASK_NAME, key, ticket):
             return False
-        _reset_sanity_state(ev.bot_id, ev.user_id, credential.uid)
-        return _record_intent(TASK_NAME, key, ticket, active=True)
+        await _to_thread_shielded(
+            _reset_sanity_state, ev.bot_id, ev.user_id, credential.uid
+        )
+        return await _to_thread_shielded(
+            lambda: _record_intent(TASK_NAME, key, ticket, active=True)
+        )
 
     result = await _run_subscribe_command(
-        bot, ev, TASK_NAME, ev.text or "", commit=commit
+        bot, ev, TASK_NAME, ev.text or "", commit=commit,
+        credential=credential, quiet=quiet,
     )
     if result is None:
-        return
+        return False
     credential, _ = result
-    shown = credential.nickname or hide_uid(credential.uid)
+    if quiet:
+        return True
+    shown = credential.nickname or await hide_uid_for(
+        credential.uid, ev.user_id, ev.bot_id
+    )
     await _send_text(
         bot,
         ev,
@@ -685,6 +788,7 @@ async def subscribe_sanity_push(bot: Bot, ev: Event) -> None:
         f"理智回满时会在这里提醒你一次，用理智后自动恢复提醒。\n"
         f"取消：ark取消订阅理智",
     )
+    return True
 
 
 @notify_sv.on_command(
@@ -725,7 +829,7 @@ async def check_sanity_push() -> None:
     """定时检查各订阅账号理智，回满推送一次。"""
     _t0 = time.monotonic()
     # 查询前记录代次，查询结果返回期间的变更也必须使旧关系失效。
-    epoch_snapshot = _load_state(_SUB_EPOCH_PATH)
+    epoch_snapshot = await asyncio.to_thread(_load_state, _SUB_EPOCH_PATH)
     datas = await gs_subscribe.get_subscribe(TASK_NAME)
     if not datas:
         return
@@ -738,7 +842,7 @@ async def check_sanity_push() -> None:
         if not uid:
             continue
         key = _state_key(subscribe.bot_id, subscribe.user_id, uid)
-        prev = load_push_state().get(key, {})
+        prev = (await asyncio.to_thread(load_push_state)).get(key, {})
         epoch_base = int(epoch_snapshot.get(_epoch_key(TASK_NAME, key)) or 0)
         notified = bool(prev.get("notified"))
         warned = bool(prev.get("warned"))
@@ -766,19 +870,18 @@ async def check_sanity_push() -> None:
 
         # 发送前验证（第四轮复核）：处理期间订阅被重订阅换会话或退订
         # → 本轮跳过该订阅，不向旧会话发送、不落旧标记
-        if not _poll_current(TASK_NAME, key, epoch_base, epoch_snapshot):
+        if not await asyncio.to_thread(
+            _poll_current, TASK_NAME, key, epoch_base, epoch_snapshot
+        ):
             continue
 
         ap = effective_ap(data)
         is_full, should_push = evaluate_sanity(ap, data.ap_max, notified)
         should_warn, new_warned = evaluate_sanity_warn(ap, data.ap_max, warned)
-        # 发送失败的标志不落盘（下轮重试），与训练/基建推送口径一致；
-        # 否则回满当轮 bot 掉线 → notified=True 落盘 → 该周期永久漏发。
-        # 另一标志与本轮发送成败无关，照常推进（否则预警轮不复位
-        # notified，下轮回满会被误判"已通知过"而漏发）。
         if should_push:
+            shown_uid = await hide_uid_for(uid, subscribe.user_id, subscribe.bot_id)
             message = format_push_message(
-                data.name or credential.nickname, data.ap_max, hide_uid(uid)
+                data.name or credential.nickname, data.ap_max, shown_uid
             )
             warned = new_warned
             try:
@@ -793,8 +896,9 @@ async def check_sanity_push() -> None:
                     f"[ArknightsUID·理智推送] 推送失败: {exc.__class__.__name__}"
                 )
         elif should_warn:
+            shown_uid = await hide_uid_for(uid, subscribe.user_id, subscribe.bot_id)
             message = format_sanity_warn_message(
-                data.name or credential.nickname, ap, data.ap_max, hide_uid(uid)
+                data.name or credential.nickname, ap, data.ap_max, shown_uid
             )
             notified = is_full
             try:
@@ -855,7 +959,7 @@ async def check_sanity_push() -> None:
                 fresh[key] = {**row, **patch}
             return fresh
 
-        save_push_state({}, merge_from=_merge_sanity)
+        await _to_thread_shielded(save_push_state, {}, merge_from=_merge_sanity)
     _elapsed = time.monotonic() - _t0
     if _elapsed > 480:
         # 超过轮询间隔(10min)的 80%：下一轮会被调度器 max_instances=1
@@ -926,8 +1030,8 @@ def _load_train_state() -> dict[str, dict]:
     return _load_state(_TRAIN_STATE_PATH)
 
 
-def _save_train_state(state: dict[str, dict]) -> None:
-    _save_state(_TRAIN_STATE_PATH, state, "训练推送")
+def _save_train_state(state: dict[str, dict], merge_from=None) -> None:
+    _save_state(_TRAIN_STATE_PATH, state, "训练推送", merge_from=merge_from)
 
 
 @notify_sv.on_command(
@@ -938,10 +1042,12 @@ def _save_train_state(state: dict[str, dict]) -> None:
     ),
     block=True,
 )
-async def subscribe_training_push(bot: Bot, ev: Event) -> None:
+async def subscribe_training_push(
+    bot: Bot, ev: Event, *, credential: ArkCredential | None = None, quiet: bool = False
+) -> bool:
     # 操作票（第四轮复核）：查询前先取票——两条订阅并发时，后发起者票大，
     # 完成顺序无论谁先，最终以后发起者的设置为准（用户最新意图）
-    lead_secs, target_text = parse_training_lead(ev.text)
+    lead_secs, target_text = (None, "") if quiet else parse_training_lead(ev.text)
 
     async def prepare(credential) -> dict:
         window = lead_secs or TRAIN_WARN_WINDOW_SECS
@@ -997,32 +1103,43 @@ async def subscribe_training_push(bot: Bot, ev: Event) -> None:
         }
 
     async def commit(key: str, ticket: int, credential, prepared) -> bool:
-        # 意图身份在 await 之后再校验；无需借用另一条命令建立的关系。
-        # op 水位兜底：新命令的状态写盘成功但意图落盘失败时，旧票不能
-        # 覆盖新配置（此时意图文件仍认旧票为当前）。
-        current_row = _load_train_state().get(key) or {}
+        current_row = (await asyncio.to_thread(_load_train_state)).get(key) or {}
         if not (
-            _intent_current(TRAIN_TASK_NAME, key, ticket)
+            await asyncio.to_thread(_intent_current, TRAIN_TASK_NAME, key, ticket)
             and int(current_row.get("op") or 0) <= ticket
         ):
             return False
         await gs_subscribe.add_subscribe(
             "single", task_name=TRAIN_TASK_NAME, event=ev, uid=credential.uid
         )
-        if not _intent_current(TRAIN_TASK_NAME, key, ticket):
+        if not await asyncio.to_thread(_intent_current, TRAIN_TASK_NAME, key, ticket):
             return False
-        state = _load_train_state()
-        state[key] = {**prepared["state"], "op": ticket}
-        _save_train_state(state)
-        return _record_intent(TRAIN_TASK_NAME, key, ticket, active=True)
+        new_row = {**prepared["state"], "op": ticket}
+
+        def _merge_sub_train() -> dict:
+            fresh = _load_train_state()
+            fresh[key] = new_row
+            return fresh
+
+        await _to_thread_shielded(
+            _save_train_state, {}, merge_from=_merge_sub_train
+        )
+        return await _to_thread_shielded(
+            lambda: _record_intent(TRAIN_TASK_NAME, key, ticket, active=True)
+        )
 
     result = await _run_subscribe_command(
-        bot, ev, TRAIN_TASK_NAME, target_text, prepare=prepare, commit=commit
+        bot, ev, TRAIN_TASK_NAME, target_text, prepare=prepare, commit=commit,
+        credential=credential, quiet=quiet,
     )
     if result is None:
-        return
+        return False
     credential, prepared = result
-    shown = credential.nickname or hide_uid(credential.uid)
+    if quiet:
+        return True
+    shown = credential.nickname or await hide_uid_for(
+        credential.uid, ev.user_id, ev.bot_id
+    )
     await _send_text(
         bot,
         ev,
@@ -1033,6 +1150,7 @@ async def subscribe_training_push(bot: Bot, ev: Event) -> None:
         f"{prepared['lead_note']}\n"
         f"取消：ark取消订阅训练",
     )
+    return True
 
 
 @notify_sv.on_command(
@@ -1074,7 +1192,7 @@ async def check_training_push() -> None:
     _t0 = time.monotonic()
     """定时检查各订阅账号训练室，完成推送一次（换训干员后重新武装）。"""
     # 查询前记录代次，查询结果返回期间的变更也必须使旧关系失效。
-    epoch_snapshot = _load_state(_SUB_EPOCH_PATH)
+    epoch_snapshot = await asyncio.to_thread(_load_state, _SUB_EPOCH_PATH)
     datas = await gs_subscribe.get_subscribe(TRAIN_TASK_NAME)
     if not datas:
         return
@@ -1087,7 +1205,7 @@ async def check_training_push() -> None:
         if not uid:
             continue
         key = _state_key(subscribe.bot_id, subscribe.user_id, uid)
-        prev = _load_train_state().get(key, {})
+        prev = (await asyncio.to_thread(_load_train_state)).get(key, {})
         epoch_base = int(epoch_snapshot.get(_epoch_key(TRAIN_TASK_NAME, key)) or 0)
         prev_notified = bool(prev.get("notified"))
         prev_trainee = str(prev.get("trainee") or "")
@@ -1117,7 +1235,9 @@ async def check_training_push() -> None:
 
         # 发送前验证（第四轮复核）：处理期间订阅被重订阅换会话或退订
         # → 本轮跳过该订阅，不向旧会话发送、不落旧标记
-        if not _poll_current(TRAIN_TASK_NAME, key, epoch_base, epoch_snapshot):
+        if not await asyncio.to_thread(
+            _poll_current, TRAIN_TASK_NAME, key, epoch_base, epoch_snapshot
+        ):
             continue
 
         remaining = training_remaining_secs(building)
@@ -1135,13 +1255,12 @@ async def check_training_push() -> None:
             window_secs=warn_window,
         )
         new_state["warned"] = new_warned
-        # 字段所有权：warn_window 是用户配置（只由订阅命令写），轮询不回写；
-        # 本轮预警判定用进入本轮时的快照值（见上 evaluate_training_warn）。
         if should_push:
+            shown_uid = await hide_uid_for(uid, subscribe.user_id, subscribe.bot_id)
             message = format_training_push_message(
                 (data.name if data else "") or credential.nickname,
                 building.training_trainee,
-                hide_uid(uid),
+                shown_uid,
             )
             try:
                 await _CheckedSubscribe(subscribe).send(message)
@@ -1160,11 +1279,12 @@ async def check_training_push() -> None:
                     "warned": False,
                 }
         elif should_warn:
+            shown_uid = await hide_uid_for(uid, subscribe.user_id, subscribe.bot_id)
             message = format_training_warn_message(
                 (data.name if data else "") or credential.nickname,
                 building.training_trainee,
                 remaining,
-                hide_uid(uid),
+                shown_uid,
             )
             try:
                 await _CheckedSubscribe(subscribe).send(message)
@@ -1214,7 +1334,14 @@ async def check_training_push() -> None:
                 fresh[key] = {**row, **new_state}
             return fresh
 
-        _write_state_atomic(_TRAIN_STATE_PATH, {}, merge_from=_merge_train)
+        try:
+            await _to_thread_shielded(
+                lambda: _write_state_atomic(
+                    _TRAIN_STATE_PATH, {}, merge_from=_merge_train
+                )
+            )
+        except Exception as exc:
+            logger.warning(f"[ArknightsUID·训练推送] 状态保存失败: {exc.__class__.__name__}")
     _elapsed = time.monotonic() - _t0
     if _elapsed > 480:
         logger.warning(
@@ -1236,16 +1363,23 @@ def _iso_week_key(now_ts: float | None = None) -> str:
 
 
 @notify_sv.on_command(("订阅剿灭",), block=True)
-async def subscribe_campaign_push(bot: Bot, ev: Event) -> None:
-    uid, index = _extract_target(ev.text)
-    credential = await resolve_or_reply(bot, ev, uid, index)
+async def subscribe_campaign_push(
+    bot: Bot, ev: Event, *, credential: ArkCredential | None = None, quiet: bool = False
+) -> bool:
     if credential is None:
-        return
+        uid, index = _extract_target(ev.text)
+        credential = await resolve_or_reply(bot, ev, uid, index)
+        if credential is None:
+            return False
 
     await gs_subscribe.add_subscribe(
         "single", task_name=CAMPAIGN_TASK_NAME, event=ev, uid=credential.uid
     )
-    shown = credential.nickname or hide_uid(credential.uid)
+    if quiet:
+        return True
+    shown = credential.nickname or await hide_uid_for(
+        credential.uid, ev.user_id, ev.bot_id
+    )
     await _send_text(
         bot,
         ev,
@@ -1253,6 +1387,7 @@ async def subscribe_campaign_push(bot: Bot, ev: Event) -> None:
         f"每周五 20:00 检查本周合成玉，没拿满会提醒你。\n"
         f"取消：ark取消订阅剿灭",
     )
+    return True
 
 
 @notify_sv.on_command(("取消订阅剿灭", "退订剿灭推送"), block=True)
@@ -1281,14 +1416,16 @@ def evaluate_campaign(campaign_current: int, campaign_total: int) -> tuple[bool,
     return remaining > 0, remaining
 
 
-@scheduler.scheduled_job("cron", day_of_week="fri", hour=20, id="ark_campaign_push")
+@scheduler.scheduled_job(
+    "cron", day_of_week="fri", hour=20, timezone=BEIJING_TZ, id="ark_campaign_push"
+)
 async def check_campaign_push() -> None:
     """周五 20:00 检查订阅账号的本周剿灭进度，未拿满提醒一次。"""
     datas = await gs_subscribe.get_subscribe(CAMPAIGN_TASK_NAME)
     if not datas:
         return
     week_key = _iso_week_key()
-    state = load_push_state()
+    state = await asyncio.to_thread(load_push_state)
     # 每账号每周只提醒一次：{key: {"campaign_week": "2026-W34"}}
     for subscribe in datas:
         uid = str(subscribe.uid or "")
@@ -1314,9 +1451,10 @@ async def check_campaign_push() -> None:
             data.campaign_current, data.campaign_total
         )
         if should_push:
+            shown_uid = await hide_uid_for(uid, subscribe.user_id, subscribe.bot_id)
             message = (
                 "「明日方舟」剿灭周提醒\n"
-                f"{data.name or credential.nickname}（UID {hide_uid(uid)}）"
+                f"{data.name or credential.nickname}（UID {shown_uid}）"
                 f"本周合成玉 {data.campaign_current}/{data.campaign_total}\n"
                 f"还有 {remaining} 合成玉没拿，周末别忘了打剿灭！"
             )
@@ -1332,17 +1470,12 @@ async def check_campaign_push() -> None:
                 )
                 continue  # 发送失败不落周标记：重启后的下次触发还能补发
 
-        # 无论是否需要提醒，本周已检查过就落标记（未拿满也只提醒一次）。
-        # 键级合并写：整文件覆盖会把轮询窗口内其他任务/进程刚写入的键
-        # （如理智推送的 notified）回滚（审计 #39）
-        # 显式绑定循环变量（B023）：闭包在本迭代内即被同步消费，
-        # 默认参绑定消除对晚绑定的依赖
         def _merge_campaign(key=key, week_key=week_key) -> dict:
             fresh = load_push_state()
             fresh[key] = {**fresh.get(key, {}), "campaign_week": week_key}
             return fresh
 
-        save_push_state({}, merge_from=_merge_campaign)
+        await _to_thread_shielded(save_push_state, {}, merge_from=_merge_campaign)
         await asyncio.sleep(random.uniform(1, 2))
 
 
@@ -1360,8 +1493,8 @@ def _load_building_state() -> dict[str, dict]:
     return _load_state(_BUILDING_STATE_PATH)
 
 
-def _save_building_state(state: dict[str, dict]) -> None:
-    _save_state(_BUILDING_STATE_PATH, state, "基建推送")
+def _save_building_state(state: dict[str, dict], merge_from=None) -> None:
+    _save_state(_BUILDING_STATE_PATH, state, "基建推送", merge_from=merge_from)
 
 
 def evaluate_full(current: int, limit: int, notified: bool) -> tuple[bool, bool]:
@@ -1394,11 +1527,12 @@ def evaluate_tired(tired_count: int, notified: bool) -> tuple[bool, bool]:
 
 
 def evaluate_recruit(done_slots: list[int], seen: list[int]) -> tuple[list[int], bool]:
-    """公招完成：已到点槽位的 finishTs 去重（seen 内不重复提醒）。
+    """公招完成：已到点槽位的 finishTs 过滤（seen 内不重复提醒，同秒多槽位保留实际数量）。
 
     返回 (本轮新完成的 finishTs 列表, should_push)。
     """
-    fresh = sorted({ts for ts in done_slots if ts not in set(seen)})
+    seen_set = set(seen)
+    fresh = [ts for ts in sorted(done_slots) if ts not in seen_set]
     return fresh, bool(fresh)
 
 
@@ -1455,24 +1589,37 @@ def format_recruit_push_message(name: str, done_count: int, uid_masked: str) -> 
     ),
     block=True,
 )
-async def subscribe_building_push(bot: Bot, ev: Event) -> None:
+async def subscribe_building_push(
+    bot: Bot, ev: Event, *, credential: ArkCredential | None = None, quiet: bool = False
+) -> bool:
     async def commit(key: str, ticket: int, credential, _prepared) -> bool:
-        if not _intent_current(BUILDING_TASK_NAME, key, ticket):
+        if not await asyncio.to_thread(
+            _intent_current, BUILDING_TASK_NAME, key, ticket
+        ):
             return False
         await gs_subscribe.add_subscribe(
             "single", task_name=BUILDING_TASK_NAME, event=ev, uid=credential.uid
         )
-        if not _intent_current(BUILDING_TASK_NAME, key, ticket):
+        if not await asyncio.to_thread(
+            _intent_current, BUILDING_TASK_NAME, key, ticket
+        ):
             return False
-        return _record_intent(BUILDING_TASK_NAME, key, ticket, active=True)
+        return await _to_thread_shielded(
+            lambda: _record_intent(BUILDING_TASK_NAME, key, ticket, active=True)
+        )
 
     result = await _run_subscribe_command(
-        bot, ev, BUILDING_TASK_NAME, ev.text or "", commit=commit
+        bot, ev, BUILDING_TASK_NAME, ev.text or "", commit=commit,
+        credential=credential, quiet=quiet,
     )
     if result is None:
-        return
+        return False
     credential, _ = result
-    shown = credential.nickname or hide_uid(credential.uid)
+    if quiet:
+        return True
+    shown = credential.nickname or await hide_uid_for(
+        credential.uid, ev.user_id, ev.bot_id
+    )
     await _send_text(
         bot,
         ev,
@@ -1481,6 +1628,7 @@ async def subscribe_building_push(bot: Bot, ev: Event) -> None:
         f"处理后自动恢复提醒（专精训练另有 ark订阅训练，含剩余时间预警）。\n"
         f"取消：ark取消订阅基建",
     )
+    return True
 
 
 @notify_sv.on_command(
@@ -1515,7 +1663,7 @@ async def check_building_push() -> None:
     _t0 = time.monotonic()
     """定时检查各订阅账号基建：无人机/贸易/换班/公招四类事件各推一次。"""
     # 查询前记录代次，查询结果返回期间的变更也必须使旧关系失效。
-    epoch_snapshot = _load_state(_SUB_EPOCH_PATH)
+    epoch_snapshot = await asyncio.to_thread(_load_state, _SUB_EPOCH_PATH)
     datas = await gs_subscribe.get_subscribe(BUILDING_TASK_NAME)
     if not datas:
         return
@@ -1527,7 +1675,7 @@ async def check_building_push() -> None:
         if not uid:
             continue
         key = _state_key(subscribe.bot_id, subscribe.user_id, uid)
-        prev = _load_building_state().get(key, {})
+        prev = (await asyncio.to_thread(_load_building_state)).get(key, {})
         epoch_base = int(epoch_snapshot.get(_epoch_key(BUILDING_TASK_NAME, key)) or 0)
 
         credential = await resolve_credential(
@@ -1552,11 +1700,14 @@ async def check_building_push() -> None:
 
         # 发送前验证（第四轮复核）：处理期间订阅被重订阅换会话或退订
         # → 本轮跳过该订阅，不向旧会话发送、不落旧标记
-        if not _poll_current(BUILDING_TASK_NAME, key, epoch_base, epoch_snapshot):
+        if not await asyncio.to_thread(
+            _poll_current, BUILDING_TASK_NAME, key, epoch_base, epoch_snapshot
+        ):
             continue
 
         new_state = dict(prev)
         nickname = data.name or credential.nickname
+        shown_uid = await hide_uid_for(uid, subscribe.user_id, subscribe.bot_id)
 
         # 无人机回满（无 building 时跳过基建三类，公招仍可判定）
         building = parse_building(data)
@@ -1573,7 +1724,7 @@ async def check_building_push() -> None:
                             nickname,
                             building.labor_value,
                             building.labor_max,
-                            hide_uid(uid),
+                            shown_uid,
                         )
                     )
                     logger.info(
@@ -1609,7 +1760,7 @@ async def check_building_push() -> None:
                         format_trading_push_message(
                             nickname,
                             full_rows,
-                            hide_uid(uid),
+                            shown_uid,
                         )
                     )
                     logger.info(
@@ -1632,7 +1783,7 @@ async def check_building_push() -> None:
                         format_tired_push_message(
                             nickname,
                             [(c.name, c.room, c.morale) for c in building.tired_chars],
-                            hide_uid(uid),
+                            shown_uid,
                         )
                     )
                     logger.info(
@@ -1661,7 +1812,7 @@ async def check_building_push() -> None:
                     format_recruit_push_message(
                         nickname,
                         len(fresh_done),
-                        hide_uid(uid),
+                        shown_uid,
                     )
                 )
                 logger.info(
@@ -1674,7 +1825,9 @@ async def check_building_push() -> None:
                 )
                 fresh_done = []
         if fresh_done:
-            seen = list(prev.get("recruit_seen") or []) + fresh_done
+            seen = list(
+                dict.fromkeys([*(prev.get("recruit_seen") or []), *fresh_done])
+            )
             new_state["recruit_seen"] = seen[-_RECRUIT_SEEN_KEEP:]
 
         if new_state != prev:
@@ -1707,7 +1860,14 @@ async def check_building_push() -> None:
                 fresh[key] = {**row, **new_state}
             return fresh
 
-        _write_state_atomic(_BUILDING_STATE_PATH, {}, merge_from=_merge_building)
+        try:
+            await _to_thread_shielded(
+                lambda: _write_state_atomic(
+                    _BUILDING_STATE_PATH, {}, merge_from=_merge_building
+                )
+            )
+        except Exception as exc:
+            logger.warning(f"[ArknightsUID·基建推送] 状态保存失败: {exc.__class__.__name__}")
     _elapsed = time.monotonic() - _t0
     if _elapsed > 720:  # 轮询间隔 15min 的 80%
         logger.warning(
@@ -1726,8 +1886,8 @@ def _load_sign_state() -> dict[str, dict]:
     return _load_state(_SIGN_STATE_PATH)
 
 
-def _save_sign_state(state: dict[str, dict]) -> None:
-    _save_state(_SIGN_STATE_PATH, state, "签到推送")
+def _save_sign_state(state: dict[str, dict], merge_from=None) -> None:
+    _save_state(_SIGN_STATE_PATH, state, "签到推送", merge_from=merge_from)
 
 
 def evaluate_sign_result(response: dict | None) -> str:
@@ -1769,16 +1929,23 @@ def format_sign_push_message(
     ),
     block=True,
 )
-async def subscribe_sign_push(bot: Bot, ev: Event) -> None:
-    uid, index = _extract_target(ev.text)
-    credential = await resolve_or_reply(bot, ev, uid, index)
+async def subscribe_sign_push(
+    bot: Bot, ev: Event, *, credential: ArkCredential | None = None, quiet: bool = False
+) -> bool:
     if credential is None:
-        return
+        uid, index = _extract_target(ev.text)
+        credential = await resolve_or_reply(bot, ev, uid, index)
+        if credential is None:
+            return False
 
     await gs_subscribe.add_subscribe(
         "single", task_name=SIGN_TASK_NAME, event=ev, uid=credential.uid
     )
-    shown = credential.nickname or hide_uid(credential.uid)
+    if quiet:
+        return True
+    shown = credential.nickname or await hide_uid_for(
+        credential.uid, ev.user_id, ev.bot_id
+    )
     await _send_text(
         bot,
         ev,
@@ -1786,6 +1953,7 @@ async def subscribe_sign_push(bot: Bot, ev: Event) -> None:
         f"每天 {_SIGN_HOUR:02d}:{_SIGN_MINUTE:02d} 自动完成森空岛签到并回报结果（今日已签则静默）。\n"
         f"取消：ark取消订阅签到",
     )
+    return True
 
 
 @notify_sv.on_command(
@@ -1805,18 +1973,162 @@ async def unsubscribe_sign_push(bot: Bot, ev: Event) -> None:
         await gs_subscribe.delete_subscribe(
             "single", task_name=SIGN_TASK_NAME, event=ev, uid=credential.uid
         )
-        state = _load_sign_state()
-        state.pop(_state_key(ev.bot_id, ev.user_id, credential.uid), None)
-        _save_sign_state(state)
+        pop_key = _state_key(ev.bot_id, ev.user_id, credential.uid)
+
+        def _merge_pop_one() -> dict:
+            fresh = _load_sign_state()
+            fresh.pop(pop_key, None)
+            return fresh
+
+        await _to_thread_shielded(_save_sign_state, {}, merge_from=_merge_pop_one)
         return await _send_text(bot, ev, "已取消该账号的自动签到。")
 
     await gs_subscribe.delete_subscribe("single", task_name=SIGN_TASK_NAME, event=ev)
     prefix = f"{ev.bot_id}|{ev.user_id}|"
-    state = _load_sign_state()
-    for key in [k for k in state if k.startswith(prefix)]:
-        state.pop(key, None)
-    _save_sign_state(state)
+
+    def _merge_pop_all() -> dict:
+        fresh = _load_sign_state()
+        for k in [k for k in fresh if k.startswith(prefix)]:
+            fresh.pop(k, None)
+        return fresh
+
+    await _to_thread_shielded(_save_sign_state, {}, merge_from=_merge_pop_all)
     await _send_text(bot, ev, "已取消全部自动签到。")
+
+
+async def _delete_personal_row(task: str, ev: Event, uid: str) -> None:
+    # 宿主通用 delete_subscribe 的 single 模式没有 bot_id 过滤。
+    await Subscribe.delete_row(
+        task_name=task, bot_id=ev.bot_id, user_id=ev.user_id, uid=uid,
+    )
+
+
+def _daily_tasks() -> tuple[tuple[str, str, Callable[..., Awaitable[bool]]], ...]:
+    return (
+        ("理智", TASK_NAME, subscribe_sanity_push),
+        ("训练", TRAIN_TASK_NAME, subscribe_training_push),
+        ("剿灭", CAMPAIGN_TASK_NAME, subscribe_campaign_push),
+        ("基建", BUILDING_TASK_NAME, subscribe_building_push),
+        ("自动签到", SIGN_TASK_NAME, subscribe_sign_push),
+    )
+
+
+async def _personal_subscriptions(task: str, ev: Event, uid: str) -> list[Subscribe]:
+    return list(await Subscribe.select_rows(
+        distinct=False, task_name=task, bot_id=ev.bot_id, user_id=ev.user_id, uid=uid,
+    ) or [])
+
+
+def _subscription_destination(row: Subscribe, ev: Event) -> str:
+    if row.group_id:
+        return "本群" if row.group_id == ev.group_id else "其他群聊"
+    return "私聊"
+
+
+@notify_sv.on_fullmatch(("订阅",), block=True)
+@notify_sv.on_command(("订阅 ", "订阅总览", "我的订阅"), block=True)
+async def show_subscriptions(bot: Bot, ev: Event) -> None:
+    from ArknightsUID.arknightsuid_push import ANN_TASK_NAME, TASK_NAME as ACT_TASK
+
+    try:
+        raw, uid, index = split_account(ev.text or "")
+    except ValueError as exc:
+        return await _send_text(bot, ev, str(exc))
+    if raw:
+        return await _send_text(bot, ev, "用法：ark订阅 / ark我的订阅 [2号|UID:数字]")
+    credential = await resolve_credential(ev.user_id, ev.bot_id, uid, index)
+    lines = ["「明日方舟」订阅总览"]
+    if isinstance(credential, str):
+        lines.append(f"个人账号：{credential}")
+    else:
+        shown = credential.nickname or await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
+        lines.append(f"个人账号：{shown}")
+        for name, task, _ in _daily_tasks():
+            rows = await _personal_subscriptions(task, ev, credential.uid)
+            destinations = "、".join(dict.fromkeys(_subscription_destination(row, ev) for row in rows))
+            status = f"已开启（{destinations}）" if rows else "未开启"
+            if rows and task == TRAIN_TASK_NAME:
+                key = _state_key(ev.bot_id, ev.user_id, credential.uid)
+                state = (await asyncio.to_thread(_load_train_state)).get(key) or {}
+                status += " · 提前 " + format_lead_secs(state.get("warn_window") or TRAIN_WARN_WINDOW_SECS)
+            lines.append(f"  {name}：{status}")
+
+    lines.append("本群订阅：" if ev.group_id else "当前私聊订阅：")
+    for name, task in (("活动", ACT_TASK), ("公告", ANN_TASK_NAME)):
+        if not ev.group_id and task == ACT_TASK:
+            lines.append("  活动：仅群聊可订阅")
+            continue
+        scope = {"group_id": ev.group_id, "user_type": "group"} if ev.group_id else {
+            "user_id": ev.user_id, "user_type": ev.user_type,
+        }
+        if self_id := getattr(ev, "bot_self_id", None):
+            scope["bot_self_id"] = self_id
+        rows = await Subscribe.select_rows(
+            distinct=False, task_name=task, bot_id=ev.bot_id, **scope,
+        )
+        lines.append(f"  {name}：{'已开启' if rows else '未开启'}")
+    lines.append("个人批量开关：ark订阅日常 / ark退订日常")
+    await _send_text(bot, ev, "\n".join(lines))
+
+
+@notify_sv.on_command(("订阅日常", "一键订阅"), block=True)
+async def subscribe_daily(bot: Bot, ev: Event) -> None:
+    await _change_daily_subscriptions(bot, ev, enable=True)
+
+
+@notify_sv.on_command(("退订日常", "取消订阅日常"), block=True)
+async def unsubscribe_daily(bot: Bot, ev: Event) -> None:
+    await _change_daily_subscriptions(bot, ev, enable=False)
+
+
+async def _change_daily_subscriptions(bot: Bot, ev: Event, *, enable: bool) -> None:
+    ticket = time.time_ns()
+    try:
+        raw, uid, index = split_account(ev.text or "")
+    except ValueError as exc:
+        return await _send_text(bot, ev, str(exc))
+    if raw and (raw != "含签到" or not enable):
+        return await _send_text(
+            bot, ev, "用法：ark订阅日常 [2号] [含签到] / ark退订日常 [2号]"
+        )
+    credential = await resolve_or_reply(bot, ev, uid, index)
+    if credential is None:
+        return
+    shown = credential.nickname or await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
+    lines = [f"「明日方舟」{shown} · {'订阅日常' if enable else '退订日常'}"]
+    for name, task, subscribe in _daily_tasks():
+        if enable and task == SIGN_TASK_NAME and raw != "含签到":
+            lines.append(f"{name}：未更改（加「含签到」可开启）")
+            continue
+        try:
+            if enable:
+                if await _personal_subscriptions(task, ev, credential.uid):
+                    lines.append(f"{name}：已订阅，保留发送位置和设置")
+                    continue
+                saved = await subscribe(bot, ev, credential=credential, quiet=True)
+                status = "已开启" if saved else "未开启成功"
+            elif task in (TASK_NAME, TRAIN_TASK_NAME, BUILDING_TASK_NAME):
+                saved = await _cancel_subscription(task, ev, ticket, credential.uid, scoped=True)
+                status = "已关闭" if saved else "未关闭成功"
+            else:
+                await _delete_personal_row(task, ev, credential.uid)
+                if task == SIGN_TASK_NAME:
+                    await _clear_sign_state(ev, credential.uid)
+                status = "已关闭"
+        except Exception as exc:
+            logger.warning(f"[ArknightsUID·日常订阅] {name}更新失败: {type(exc).__name__}")
+            status = "更新失败，请稍后重试"
+        lines.append(f"{name}：{status}")
+    await _send_text(bot, ev, "\n".join(lines))
+
+
+async def _clear_sign_state(ev: Event, uid: str) -> None:
+    def merge() -> dict:
+        fresh = _load_sign_state()
+        fresh.pop(_state_key(ev.bot_id, ev.user_id, uid), None)
+        return fresh
+
+    await _to_thread_shielded(_save_sign_state, {}, merge_from=merge)
 
 
 def _sign_schedule() -> tuple[int, int]:
@@ -1835,7 +2147,11 @@ _SIGN_HOUR, _SIGN_MINUTE = _sign_schedule()
 
 
 @scheduler.scheduled_job(
-    "cron", hour=_SIGN_HOUR, minute=_SIGN_MINUTE, id="ark_sign_push"
+    "cron",
+    hour=_SIGN_HOUR,
+    minute=_SIGN_MINUTE,
+    timezone=BEIJING_TZ,
+    id="ark_sign_push",
 )
 async def check_sign_push() -> None:
     """每天按 SignTime 配置自动签到订阅账号并回报（失败/成功推送，已签静默）。"""
@@ -1852,7 +2168,8 @@ async def check_sign_push() -> None:
         if not uid:
             continue
         key = _state_key(subscribe.bot_id, subscribe.user_id, uid)
-        if (_load_sign_state().get(key) or {}).get("date") == today:
+        sign_state = await asyncio.to_thread(_load_sign_state)
+        if (sign_state.get(key) or {}).get("date") == today:
             continue
 
         credential = await resolve_credential(
@@ -1879,8 +2196,9 @@ async def check_sign_push() -> None:
                 f"uid={hide_uid(uid)}"
             )
         else:
+            shown_uid = await hide_uid_for(uid, subscribe.user_id, subscribe.bot_id)
             push = format_sign_push_message(
-                credential.nickname, hide_uid(uid), outcome, message
+                credential.nickname, shown_uid, outcome, message
             )
             try:
                 await _CheckedSubscribe(subscribe).send(push)
@@ -1893,9 +2211,13 @@ async def check_sign_push() -> None:
                     f"[ArknightsUID·签到推送] 推送失败: {exc.__class__.__name__}"
                 )
                 continue  # 发送失败不落日期标记，重启后补跑
-        state = _load_sign_state()
-        state[key] = {"date": today}
-        _save_sign_state(state)
+
+        def _merge_sign(key=key, today=today) -> dict:
+            fresh = _load_sign_state()
+            fresh[key] = {"date": today}
+            return fresh
+
+        await _to_thread_shielded(_save_sign_state, {}, merge_from=_merge_sign)
         await asyncio.sleep(random.uniform(1, 2))
 
 

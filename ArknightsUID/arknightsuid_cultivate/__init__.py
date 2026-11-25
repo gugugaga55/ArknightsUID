@@ -12,10 +12,16 @@ from gsuid_core.bot import Bot
 from gsuid_core.models import Event
 from gsuid_core.sv import SV
 
-from ArknightsUID.utils.arg_utils import extract_uid
+from ArknightsUID.utils.arg_utils import split_account
 from ArknightsUID.utils.card import send_card_or_text
-from ArknightsUID.utils.cultivate import calculate_cultivation
+from ArknightsUID.utils.cultivate import (
+    CultivationGoal,
+    calculate_cultivation,
+    merge_cultivation_results,
+    parse_cultivation_goal,
+)
 from ArknightsUID.utils.enduid.adapter import (
+    ArkCredential,
     hide_uid,
     hide_uid_for,
 )
@@ -37,7 +43,9 @@ from ArknightsUID.utils.card import send_text as _send_text  # noqa: E402
 from ArknightsUID.utils.card import resolve_or_reply  # noqa: E402
 
 
-def _format_result(credential, result: dict, shown_uid: str = "") -> str:
+def _format_result(
+    credential, result: dict, shown_uid: str = "", farm_rows: list[dict] | None = None
+) -> str:
     char = result["char"]
     gap = result["gap"]
     current = result["current"]
@@ -49,7 +57,7 @@ def _format_result(credential, result: dict, shown_uid: str = "") -> str:
             f"当前：精{current['evolve_phase']} · 主技能{current['main_skill_lvl']} · "
             f"专精{'/'.join(str(m) for m in current['masteries']) or '-'}"
         ),
-        "目标：精2 · 技能7 · 专精3 · 模组满级",
+        f"目标：{result.get('goal_label', '毕业')}",
     ]
     if gap["gold_lack"]:
         lines.append(f"龙门币：还差 {gap['gold_lack']:,}")
@@ -61,10 +69,15 @@ def _format_result(credential, result: dict, shown_uid: str = "") -> str:
                 f"  {rarity}{row['name']}：缺 {row['lack']}（需 {row['need']}，有 {row['owned']}）"
             )
     else:
-        lines.append("材料缺口：无（已毕业或仓库充足）")
+        reached = "已毕业" if result.get("full_goal", True) else "已达目标"
+        lines.append(f"材料缺口：无（{reached}或仓库充足）")
     for row in gap["exp_books"]:
         lines.append(f"  {row['name']}：缺 {row['lack']}")
-    lines.append("注：不含等级经验曲线与龙门币等级消耗；刷图建议见「ark养成计划」。")
+    if farm_rows:
+        lines.append("刷图建议（各材料单独估算）：")
+        for row in farm_rows:
+            lines.append(f"  {row['name']}：{row['advice']}")
+    lines.append("不含干员等级经验与升级龙门币。")
     for warning in result.get("warnings", []):
         lines.append(f"⚠️ {warning}")
     return "\n".join(lines)
@@ -110,159 +123,158 @@ async def _resolve_query_to_char_id(
     block=True,
 )
 async def show_cultivation_plan(bot: Bot, ev: Event) -> None:
-    """ark养成计划 <干员名>… → 多干员到毕业的合并材料缺口 + 刷图建议。"""
-    text = ev.text.strip()
-    uid = extract_uid(text)
-    if uid:
-        text = text.replace(uid, "", 1).strip()
-    text, index = _split_index(text)
+    await _show_cultivation(bot, ev, plan_view=True)
 
-    names = _split_plan_names(text)
-    if not names:
+
+@cultivate_sv.on_command(("养成计算", "养成", "yc"), block=True)
+async def show_cultivation(bot: Bot, ev: Event) -> None:
+    await _show_cultivation(bot, ev)
+
+
+async def _show_cultivation(bot: Bot, ev: Event, *, plan_view: bool = False) -> None:
+    try:
+        text, uid, index = split_account(ev.text or "", legacy_index=False)
+        if not uid and not index:
+            text, index = _split_index(text)
+        targets = _parse_targets(text)
+    except ValueError as exc:
+        return await _send_text(bot, ev, str(exc))
+    if not targets:
         return await _send_text(
-            bot,
-            ev,
-            "用法：ark养成计划 <干员名> [干员名 …]（最多 6 名，空格/顿号分隔，"
-            "如 ark养成计划 银灰 史尔特尔 42）",
+            bot, ev, "用法：ark养成 银灰 [精2] / ark养成 银灰 伊内丝。"
+            "每人指定不同目标时用分号分隔，例如：ark养成 银灰 精2；伊内丝 3技能 专3。",
         )
-    if len(names) > _PLAN_MAX_CHARS:
-        names = names[:_PLAN_MAX_CHARS]
+    if len(targets) > 1 and not plan_view and all(goal is None for _, goal in targets):
+        if not re.search(r"[、，,；;]", text):
+            # 旧单人入口允许包含空格的个人别名，优先判定整串。
+            whole = await resolve_query(text, bot_id=ev.bot_id, user_id=ev.user_id)
+            if whole.unique:
+                targets = [(text, None)]
+    if len(targets) > _PLAN_MAX_CHARS:
+        return await _send_text(bot, ev, f"一次最多计算 {_PLAN_MAX_CHARS} 名干员。")
 
     credential = await resolve_or_reply(bot, ev, uid, index)
     if credential is None:
         return
-
+    plan_view = plan_view or len(targets) > 1
     results: list[dict] = []
     unresolved: list[str] = []
-    seen_char_ids: set[str] = set()
+    seen: dict[str, CultivationGoal | None] = {}
     inventory_response = None
-    for name in names:
-        char_id, resolve_error = await _resolve_query_to_char_id(
-            name, ev.bot_id, ev.user_id
-        )
+
+    for name, goal in targets:
+        char_id, error = await _resolve_query_to_char_id(name, ev.bot_id, ev.user_id)
         if not char_id:
-            unresolved.append(f"{name}（{resolve_error}）")
+            unresolved.append(f"{name}（{error}）")
             continue
-        if char_id in seen_char_ids:
+        if char_id in seen:
+            if seen[char_id] != goal:
+                return await _send_text(bot, ev, f"「{name}」有两个不同目标，请只保留一个。")
             continue
-        seen_char_ids.add(char_id)
-        if inventory_response is None:
+        seen[char_id] = goal
+        first_in_batch = inventory_response is None
+        if plan_view and first_in_batch:
             from ArknightsUID.utils.enduid.adapter import fetch_cultivate_player
 
             inventory_response = await fetch_cultivate_player(credential)
         result = await calculate_cultivation(
-            credential, char_id, max_rows=999, keep_zero=True,
+            credential, char_id, keep_zero=plan_view,
             inventory_response=inventory_response,
+            force_refresh=first_in_batch, goal=goal,
         )
         if isinstance(result, str):
             unresolved.append(f"{name}（{result}）")
-            continue
-        results.append(result)
-
+        else:
+            results.append(result)
     if not results:
         return await _send_text(bot, ev, "没有可计算的干员：\n" + "\n".join(unresolved))
 
-    from ArknightsUID.utils.cultivate import merge_cultivation_results
+    if plan_view:
+        await _send_cultivation_plan(bot, ev, credential, results, unresolved)
+    else:
+        await _send_single_cultivation(bot, ev, credential, results[0])
 
+
+def _parse_targets(text: str) -> list[tuple[str, CultivationGoal | None]]:
+    targets = []
+    for part in re.split(r"[、，,；;]+", text):
+        if not part.strip():
+            continue
+        name, goal = parse_cultivation_goal(part)
+        if not name:
+            raise ValueError("请在目标前写干员名，例如「银灰 精2」。")
+        if goal is not None:
+            targets.append((name, goal))
+        else:
+            targets.extend((name, None) for name in _split_plan_names(name))
+    return list(dict.fromkeys(targets))
+
+
+async def _send_cultivation_plan(
+    bot: Bot, ev: Event, credential: ArkCredential,
+    results: list[dict], unresolved: list[str],
+) -> None:
     merged = merge_cultivation_results(results)
     if unresolved:
-        merged["warnings"] = list(merged.get("warnings") or []) + [
-            f"未计入：{'；'.join(unresolved)}"
-        ]
-
+        merged["warnings"].append(f"未计入：{'；'.join(unresolved)}")
+    _add_farm_inventory(merged, results)
     farm_rows = await _build_farm_rows(merged, credential)
-
-    # 图文并茂：材料/经验书/刷图建议挂 PRTS 道具图标、干员清单挂头像，
-    # 受限并发批量取图（失败空串降级，不拖垮整卡）
-    gap = merged
-    icon_rows = gap["materials"] + gap["exp_books"] + farm_rows
-    icons = await gather_b64(item_icon_b64, [str(r.get("name") or "") for r in icon_rows])
-    for row, icon in zip(icon_rows, icons):
-        row["icon"] = icon
-    if gap["gold_lack"]:
-        gap["gold_icon"] = await item_icon_b64("龙门币")
+    await _apply_material_icons(merged, farm_rows)
     avatars = await gather_b64(
         char_avatar_b64, [str(c.get("char_id") or "") for c in merged["chars"]]
     )
-    for char_row, avatar in zip(merged["chars"], avatars):
-        char_row["avatar"] = avatar
-
-    shown_uid = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
+    for row, avatar in zip(merged["chars"], avatars):
+        row["avatar"] = avatar
+    uid = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
     context = {
-        "version": ArknightsUID_version,
-        "uid": shown_uid,
-        "merged": merged,
-        "farm_rows": farm_rows,
+        "version": ArknightsUID_version, "uid": uid, "merged": merged, "farm_rows": farm_rows,
     }
     await send_card_or_text(
-        bot,
-        ev,
-        "ark_cultivate_plan.html",
-        context,
-        _format_plan_result(credential, merged, farm_rows, shown_uid),
+        bot, ev, "ark_cultivate_plan.html", context,
+        _format_plan_result(credential, merged, farm_rows, uid),
     )
 
 
-@cultivate_sv.on_command(
-    (
-        "养成计算",
-        "养成",
-        "yc",
-    ),
-    block=True,
-)
-async def show_cultivation(bot: Bot, ev: Event) -> None:
-    query = ev.text.strip()
-    uid = extract_uid(query)
-    if uid:
-        query = query.replace(uid, "", 1).strip()
-    query, index = _split_index(query)
-
-    if not query:
-        return await _send_text(
-            bot, ev, "用法：ark养成 <干员名>（如 ark养成 银灰 / ark养成 42）"
-        )
-
-    credential = await resolve_or_reply(bot, ev, uid, index)
-    if credential is None:
-        return
-
-    char_id, resolve_error = await _resolve_query_to_char_id(
-        query, ev.bot_id, ev.user_id
-    )
-    if not char_id:
-        return await _send_text(bot, ev, resolve_error)
-
-    result = await calculate_cultivation(credential, char_id)
-    if isinstance(result, str):
-        return await _send_text(bot, ev, result)
-
-    # 图文并茂：材料/经验书/龙门币行挂上 PRTS 带框道具图标（失败降级空串）
+async def _send_single_cultivation(
+    bot: Bot, ev: Event, credential: ArkCredential, result: dict,
+) -> None:
+    char = result["char"]
     gap = result["gap"]
-    icon_rows = gap["materials"] + gap["exp_books"]
-    icons = await gather_b64(item_icon_b64, [str(r.get("name") or "") for r in icon_rows])
-    for row, icon in zip(icon_rows, icons):
+    _add_farm_inventory(gap, [result])
+    farm_rows = await _build_farm_rows(gap, credential)
+    await _apply_material_icons(gap, farm_rows)
+    context = {
+        "version": ArknightsUID_version,
+        "name": char.display_name,
+        "portrait": await char_portrait_b64(char.char_id, char.rarity_display),
+        "result": result,
+        "farm_rows": farm_rows,
+    }
+    shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
+    await send_card_or_text(
+        bot, ev, "ark_cultivate.html", context, _format_result(credential, result, shown, farm_rows),
+    )
+
+
+async def _apply_material_icons(gap: dict, farm_rows: list[dict]) -> None:
+    rows = gap["materials"] + gap["exp_books"] + farm_rows
+    icons = await gather_b64(item_icon_b64, [str(row["name"]) for row in rows])
+    for row, icon in zip(rows, icons):
         row["icon"] = icon
     if gap["gold_lack"]:
         gap["gold_icon"] = await item_icon_b64("龙门币")
 
-    context = {
-        "version": ArknightsUID_version,
-        "name": result["char"].display_name,
-        "portrait": await char_portrait_b64(char_id, result["char"].rarity_display),
-        "result": result,
-    }
-    await send_card_or_text(
-        bot,
-        ev,
-        "ark_cultivate.html",
-        context,
-        _format_result(
-            credential,
-            result,
-            await hide_uid_for(credential.uid, ev.user_id, ev.bot_id),
-        ),
-    )
+
+def _add_farm_inventory(gap: dict, results: list[dict]) -> None:
+    # 先为全部养成目标预留直用材料，避免再把它们算成可合成的库存。
+    inventory = results[0].get("inventory")
+    if inventory is None:
+        return
+    remaining = inventory.copy()
+    for result in results:
+        for item_id, quantity in result.get("need", {}).items():
+            remaining[item_id] = max(0, remaining.get(item_id, 0) - quantity)
+    gap["farm_inventory"] = remaining
 
 
 # ---------------------------------------------------------------------------
@@ -311,7 +323,7 @@ def _format_plan_result(
         "「明日方舟」养成规划（合并缺口）",
         f"UID：{uid_line}",
         f"干员：{names}",
-        "目标：精2 · 技能7 · 专精3 · 模组满级（各干员当前进度到毕业）",
+        *[f"  {c['name']}：{c.get('goal_label', '毕业')}" for c in merged["chars"]],
     ]
     if merged["gold_lack"]:
         lines.append(f"龙门币：共差 {merged['gold_lack']:,}")
@@ -323,11 +335,11 @@ def _format_plan_result(
                 f"缺 {row['lack']}（需 {row['need']}，有 {row['owned']}）"
             )
     else:
-        lines.append("材料缺口：无（均已毕业或仓库充足）")
+        lines.append("材料缺口：无（均已达目标或仓库充足）")
     for row in merged["exp_books"]:
         lines.append(f"  {row['name']}：缺 {row['lack']}")
     if farm_rows:
-        lines.append("刷图建议（缺口的直刷 vs 合成，前 5 种）：")
+        lines.append("刷图建议（缺口前 5 种，各材料单独估算）：")
         for row in farm_rows:
             lines.append(f"  {row['name']}：{row['advice']}")
     for warning in merged.get("warnings", [])[:4]:
@@ -341,8 +353,23 @@ def _farm_advice_text(result: dict) -> str:
     farm = result.get("farm")
     farm_sanity = result.get("farm_sanity")
     craft_sanity = result.get("craft_sanity")
+    craftable = result.get("stock_craftable")
+    if craftable is not None:
+        missing = "、".join(
+            f"{row['name']}×{row['count']}" + (f"刷 {row['stage']}" if row["stage"] else "")
+            for row in result["craft_missing_rows"][:3]
+        )
+        if len(result["craft_missing_rows"]) > 3:
+            missing += "等"
+        estimate = f"（约 {craft_sanity:g} 理智）" if craft_sanity is not None else "（部分缺掉率）"
+        advice = f"库存子材料可合 {craftable}/{result['need']} 件"
+        if missing:
+            advice += f"；合成还缺 {missing}{estimate}"
+        if farm and (craft_sanity is None or farm_sanity <= craft_sanity):
+            advice += f"；也可直刷 {farm['stage_code']}（约 {farm_sanity:g} 理智）"
+        return advice
     if farm is None and craft_sanity is None:
-        return "无直刷/合成数据"
+        return "有加工站配方，部分子材料缺掉率" if result.get("craft") else "无直刷/合成数据"
     if farm is None and craft_sanity is not None:
         return f"不可直刷，合成（叶子直刷约 {craft_sanity} 理智）"
     stage = str(farm.get("stage_code") or "?")
@@ -383,11 +410,13 @@ async def _build_farm_rows(merged: dict, credential) -> list[dict]:
     item_index = await load_item_index()
     matrix = await fetch_drop_matrix()
     stages = await fetch_stage_info()
-    if not item_index or not matrix or not stages:
+    if not item_index:
         return []
-    matrix_by_item = latest_matrix_by_item(matrix)
-    stage_meta = {str(s.get("stageId", "")): s for s in stages}
+    matrix_by_item = latest_matrix_by_item(matrix or [])
+    stage_meta = {str(s.get("stageId", "")): s for s in stages or []}
     formulas = await load_formulas()
+    if not matrix_by_item and not formulas:
+        return []
 
     rows: list[dict] = []
     for row in targets:
@@ -401,6 +430,7 @@ async def _build_farm_rows(merged: dict, credential) -> list[dict]:
             item_index,
             matrix_by_item,
             stage_meta,
+            inventory=merged.get("farm_inventory"),
         )
         rows.append(
             {

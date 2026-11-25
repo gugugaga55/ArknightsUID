@@ -19,25 +19,34 @@
 <body>
     <div class="container" data-ghost="DROP">
         <div class="mast">
-            <span class="mast-brand">ArknightsUID <em>// 材料掉率 DROP RATE</em></span>
-            <span class="mast-meta"><span class="idx">18</span>YITULIU</span>
+            <span class="mast-brand">ArknightsUID <em>// 材料指南 MATERIALS</em></span>
+            <span class="mast-meta"><span class="idx">18</span>FARM / WORKSHOP</span>
         </div>
 
         <div class="titleblock" style="align-items: center;">
             <div style="display: flex; align-items: center; gap: 14px;">
                 {% if item_icon %}<span class="iicon iicon--lg"><img src="{{ item_icon }}" alt=""></span>{% endif %}
                 <div>
-                    <div class="eyebrow">掉落关卡 · 按掉率降序</div>
+                    <div class="eyebrow">{{ header | default("掉落关卡 · 按掉率降序") }}</div>
                     <h1 class="title title--s"><em>{{ item_name }}</em></h1>
                 </div>
             </div>
             <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_drop_rate.b64" %}" alt="">
         </div>
-        <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">DROP RATES</span></div>
+        <div class="title-rule" style="margin-top: var(--space-3);"><span class="en">MATERIAL GUIDE</span></div>
 
+        {% if summary_lines %}
+        <div class="prose">{% for line in summary_lines %}{{ line }}{% if not loop.last %}<br>{% endif %}{% endfor %}</div>
+        {% endif %}
+        {% if recipe %}
+        <div class="sect"><span class="sect-label">合成树</span><span class="sect-en">WORKSHOP</span></div>
+        <div class="prose" style="white-space: pre-wrap;">{{ recipe | join("\n") }}</div>
+        {% endif %}
+
+        {% if rows %}
         <div class="sect">
             <span class="sect-label">掉落关卡</span>
-            <span class="sect-en">STAGES // 样本 &gt; 300</span>
+            <span class="sect-en">STAGES // 样本 ≥ 300</span>
         </div>
         <div class="rows">
             {% for r in rows %}
@@ -54,8 +63,13 @@
             {% endfor %}
         </div>
 
+        {% endif %}
+        {% if sources %}
+        <div class="prose">数据：{{ sources | join(" / ") }}</div>
+        {% endif %}
+
         <div class="foot">
-            <span class="foot-brand">ArknightsUID · 掉率</span>
+            <span class="foot-brand">ArknightsUID · 材料</span>
             <span class="foot-meta mono">VER {{ version }}</span>
         </div>
         <div class="ticker">

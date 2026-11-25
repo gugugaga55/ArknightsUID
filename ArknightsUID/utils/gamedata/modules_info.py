@@ -16,7 +16,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from .charinfo import load_char_index, load_item_index, match_entries
+from .charinfo import AMIYA_FORM_IDS, load_char_index, load_item_index, match_entries
 from .oppanel import load_module_tables, module_stat_modifiers
 
 _ATTR_LABELS = {
@@ -143,15 +143,30 @@ def _merge_tier_costs(
     return {k: v for k, v in merged.items() if v}
 
 
-async def build_module_context(query: str) -> dict | str:
+async def build_module_context(
+    query: str, *, bot_id: str = "", user_id: str = ""
+) -> dict | str:
     """ark模组 干员名 → {name, modules}；失败返回错误文案。"""
+    query = (query or "").strip()
+    if bot_id and user_id:
+        try:
+            from ..user_alias import apply_user_alias
+
+            query = await apply_user_alias(bot_id, user_id, query)
+        except Exception:
+            pass
     char_index = await load_char_index()
     if not char_index:
         return "干员索引不可用（gamedata 拉取失败），请稍后再试。"
-    resolved = resolve_char(query, char_index)
-    if isinstance(resolved, str):
-        return resolved
-    char_id, char_name = resolved
+    amiya_id = AMIYA_FORM_IDS.get(query)
+    if amiya_id:
+        char_id = amiya_id
+        char_name = str((char_index.get(amiya_id) or {}).get("name") or query)
+    else:
+        resolved = resolve_char(query, char_index)
+        if isinstance(resolved, str):
+            return resolved
+        char_id, char_name = resolved
 
     uniequip, battle = await load_module_tables()
     if not uniequip:

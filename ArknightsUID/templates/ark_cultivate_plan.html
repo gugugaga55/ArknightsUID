@@ -27,7 +27,7 @@
 
         <div class="titleblock">
             <div>
-                <div class="eyebrow">{{ merged.chars | length }} 名干员 · 到毕业的合并缺口</div>
+                <div class="eyebrow">{{ merged.chars | length }} 名干员 · 目标材料合并缺口</div>
                 <h1 class="title">养成<em>规划</em></h1>
                 <div class="title-rule"><span class="en">CULTIVATION PLAN</span></div>
             </div>
@@ -45,7 +45,7 @@
                     {% if c.avatar %}<span class="aicon"><img src="{{ c.avatar }}" alt="{{ c.name }}"></span>{% endif %}
                     {{ c.name }}
                 </span>
-                <span class="row-value u-mute">精{{ c.current.evolve_phase }} · 技能{{ c.current.main_skill_lvl }} · 专精{{ c.current.masteries | join('/') or '-' }}</span>
+                <span class="row-value u-mute">目标 {{ c.goal_label | default("毕业") }}</span>
                 <span class="bar-num">缺 {{ c.gap_count }} 种</span>
             </div>
             {% endfor %}
@@ -68,7 +68,7 @@
             {% endfor %}
         </div>
         {% else %}
-        <div class="prose">材料缺口：无——目标干员均已毕业或仓库充足。</div>
+        <div class="prose">材料缺口：无——目标干员均已达目标或仓库充足。</div>
         {% endif %}
 
         {% if merged.exp_books or merged.gold_lack %}
@@ -112,6 +112,7 @@
             </div>
             {% endfor %}
         </div>
+        <div class="prose">各材料单独估算。</div>
         {% endif %}
 
         {% if merged.warnings %}

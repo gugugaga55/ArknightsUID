@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+from collections import Counter
+from collections.abc import Mapping
 from typing import Any
 
 from ._table_cache import ensure_building_table
@@ -28,7 +30,11 @@ _WORKSHOP_FORMULA_TYPES = {"F_BUILDING", "F_EVOLVE", "F_ASC", "F_SKILL"}
 
 
 async def load_formulas() -> dict[str, dict[str, Any]]:
-    """itemId → 加工站配方（一个 item 只保留一条配方；重复取最后一条）。"""
+    """itemId → 加工站配方（一个 item 只保留一条升阶合成配方）。
+
+    排除 F_EVOLVE 中的跨职业同阶芯片 3:2 转换配方（count=2, costs=[{count:3}]），
+    否则任意芯片/芯片组会在跨职业转换环里来回递归耗损，导致理智估算爆炸。
+    """
     building = await ensure_building_table()
     if not isinstance(building, dict):
         return {}
@@ -39,7 +45,21 @@ async def load_formulas() -> dict[str, dict[str, Any]]:
     for formula in formulas.values():
         if not isinstance(formula, dict):
             continue
-        if formula.get("formulaType") not in _WORKSHOP_FORMULA_TYPES:
+        ftype = formula.get("formulaType")
+        if ftype not in _WORKSHOP_FORMULA_TYPES:
+            continue
+        output = int(formula.get("count") or 1)
+        costs = formula.get("costs") or []
+        if ftype == "F_EVOLVE" and (
+            output == 2
+            or (
+                isinstance(costs, list)
+                and len(costs) == 1
+                and isinstance(costs[0], dict)
+                and int(costs[0].get("count") or 0) == 3
+            )
+        ):
+            # 芯片/芯片组跨职业 3 换 2 转换配方，不属于纵向升阶合成
             continue
         item_id = str(formula.get("itemId") or "")
         if item_id:
@@ -49,8 +69,8 @@ async def load_formulas() -> dict[str, dict[str, Any]]:
 
 def _cost_names(
     formula: dict[str, Any], item_index: dict[str, dict[str, Any]]
-) -> list[dict[str, str]]:
-    rows: list[dict[str, str]] = []
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
     for cost in formula.get("costs") or []:
         cid = str(cost.get("id") or "")
         if not cid:
@@ -71,11 +91,12 @@ def craft_tree(
     item_index: dict[str, dict[str, Any]],
     need: int = 1,
     depth: int = 0,
+    ancestors: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
-    """合成树：need 件 item_id 的完整合成路径（含递归子材料）。
+    """合成树：need 件 item_id 的完整合成路径（含递归子材料与防环检测）。
 
     子材料需求按制作次数缩放：crafts = ceil(need / output)，
-    子节点 need = 配方成本 × crafts。不可合成（无 WORKSHOP 配方）时
+    子节点 need = 配方成本 × crafts。不可合成（无 WORKSHOP 配方或成环）时
     costs 为空、craftable=False（叶子节点）。
     """
     from math import ceil
@@ -92,14 +113,18 @@ def craft_tree(
         "children": [],
     }
     formula = formulas.get(item_id)
-    if not formula or depth >= _MAX_DEPTH:
+    if not formula or depth >= _MAX_DEPTH or item_id in ancestors:
+        return node
+    raw_costs = _cost_names(formula, item_index)
+    if any(c["item_id"] in ancestors or c["item_id"] == item_id for c in raw_costs):
         return node
     output = max(1, int(formula.get("count") or 1))
     crafts = max(1, ceil(need / output))
     node["craftable"] = True
     node["output"] = output
     node["gold"] = int(formula.get("goldCost") or 0) * crafts
-    node["costs"] = _cost_names(formula, item_index)
+    node["costs"] = raw_costs
+    next_ancestors = ancestors | {item_id}
     for cost in node["costs"]:
         scaled = dict(cost)
         scaled["count"] = cost["count"] * crafts
@@ -110,6 +135,7 @@ def craft_tree(
                 item_index,
                 scaled["count"],
                 depth + 1,
+                next_ancestors,
             )
         )
     return node
@@ -176,6 +202,42 @@ def best_stage_cost(
     return best
 
 
+def _craft_inventory_gap(
+    item_id: str, need: int, formulas: dict[str, dict[str, Any]],
+    inventory: Mapping[str, int],
+) -> dict[str, int]:
+    """强制合成成品，递归优先消耗已有子材料，并保留批次余量。"""
+    stock = Counter(inventory)
+    missing: Counter[str] = Counter()
+    stock.pop(item_id, None)
+
+    def consume(target: str, count: int, ancestors: frozenset[str]) -> None:
+        used = min(count, max(0, stock[target]))
+        stock[target] -= used
+        count -= used
+        if not count:
+            return
+        formula = formulas.get(target) or {}
+        costs = formula.get("costs") or []
+        if (
+            not costs or target in ancestors or len(ancestors) >= _MAX_DEPTH
+            or any(str(cost.get("id")) in ancestors | {target} for cost in costs)
+        ):
+            missing[target] += count
+            return
+        output = max(1, int(formula.get("count") or 1))
+        batches = (count + output - 1) // output
+        for cost in costs:
+            cost_id = str(cost.get("id") or "")
+            cost_count = int(cost.get("count") or 0)
+            if cost_id and cost_count > 0:
+                consume(cost_id, cost_count * batches, ancestors | {target})
+        stock[target] += batches * output - count
+
+    consume(item_id, need, frozenset())
+    return dict(missing)
+
+
 def craft_vs_farm(
     item_id: str,
     need: int,
@@ -183,6 +245,8 @@ def craft_vs_farm(
     item_index: dict[str, dict[str, Any]],
     matrix_by_item: dict[str, list[dict[str, Any]]],
     stage_meta: dict[str, dict[str, Any]],
+    *,
+    inventory: Mapping[str, int] | None = None,
 ) -> dict[str, Any]:
     """合成 vs 直刷对比（单材料）。
 
@@ -196,16 +260,38 @@ def craft_vs_farm(
     tree = craft_tree(item_id, formulas, item_index, need)
     craft_sanity: float | None = None
     craft_leaves: dict[str, int] = {}
+    stock_craftable: int | None = None
+    craft_missing_rows = []
     if tree["craftable"]:
-        craft_leaves = leaf_materials(tree)
+        if inventory is None:
+            craft_leaves = leaf_materials(tree)
+        else:
+            craft_leaves = _craft_inventory_gap(item_id, need, formulas, inventory)
+            if not craft_leaves:
+                stock_craftable = need
+            else:
+                # 找出无需额外刷取的最大合成量，批次和重复子材料按同一口径扣减。
+                lo, hi = 0, need
+                while lo + 1 < hi:
+                    mid = (lo + hi) // 2
+                    if _craft_inventory_gap(item_id, mid, formulas, inventory):
+                        hi = mid
+                    else:
+                        lo = mid
+                stock_craftable = lo
         total = 0.0
         ok = True
         for leaf_id, leaf_need in craft_leaves.items():
             leaf_best = best_stage_cost(leaf_id, matrix_by_item, stage_meta)
+            craft_missing_rows.append({
+                "name": str((item_index.get(leaf_id) or {}).get("name") or leaf_id),
+                "count": leaf_need,
+                "stage": leaf_best["stage_code"] if leaf_best else "",
+            })
             if leaf_best is None:
                 ok = False
-                break
-            total += leaf_best["ap_expect"] * leaf_need
+            else:
+                total += leaf_best["ap_expect"] * leaf_need
         craft_sanity = round(total, 1) if ok else None
 
     return {
@@ -217,4 +303,6 @@ def craft_vs_farm(
         "craft": tree if tree["craftable"] else None,
         "craft_leaves": craft_leaves,
         "craft_sanity": craft_sanity,
+        "stock_craftable": stock_craftable,
+        "craft_missing_rows": craft_missing_rows,
     }

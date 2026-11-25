@@ -15,7 +15,7 @@ character_table 的 rarity 是 TIER_x（=x 星），与 player_info charInfoMap 
 
 from __future__ import annotations
 
-from ..disk_cache import read_json, write_json
+from ..disk_cache import read_json
 from ..disk_cache import index_covers_sources as _index_covers_sources
 
 from typing import Any, NamedTuple
@@ -156,6 +156,7 @@ def build_item_index(item_table: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 async def load_item_index() -> dict[str, dict[str, Any]]:
     """加载物品索引（精简缓存优先，TTL 同 character_table）。失败返回 {}。"""
+    generation = table_cache_generation()
     if (
         ITEMINDEX_PATH.exists()
         and await _cache_fresh(ITEM_TABLE_PATH, CHAR_TABLE_TTL)
@@ -172,7 +173,7 @@ async def load_item_index() -> dict[str, dict[str, Any]]:
         return cached if isinstance(cached, dict) else {}
     index = build_item_index(item_table)
     if index:
-        await write_json(ITEMINDEX_PATH, index)
+        await write_index_if_current(ITEMINDEX_PATH, index, generation)
     return index
 
 

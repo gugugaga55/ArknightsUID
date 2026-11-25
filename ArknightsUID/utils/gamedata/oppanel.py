@@ -124,8 +124,10 @@ def max_level_at(char_entry: dict, phase: int) -> int:
     return int((phases[phase] or {}).get("maxLevel") or 1)
 
 
-def potential_modifiers(char_entry: dict, rank: int) -> dict[str, float]:
-    """潜能 1..rank 的累加修正（游戏语义：各档效果叠加）。"""
+def potential_modifiers(
+    char_entry: dict, rank: int, base: dict[str, float] | None = None
+) -> dict[str, float]:
+    """潜能 1..rank 的累加修正（游戏语义：各档效果叠加；百分比潜能按基础面板折算）。"""
     result: dict[str, float] = {}
     for potential in (char_entry.get("potentialRanks") or [])[: max(rank, 0)]:
         modifiers = ((potential.get("buff") or {}).get("attributes") or {}).get(
@@ -138,9 +140,9 @@ def potential_modifiers(char_entry: dict, rank: int) -> dict[str, float]:
             if not field:
                 continue
             value = float(modifier.get("value") or 0)
-            if modifier.get("formulaItem") == "PERCENTAGE":
-                # 百分比潜能按基础值折算延迟到 compute_panel（罕见，先线性近似）
-                result[field] = result.get(field, 0.0) + value
+            formula_item = str(modifier.get("formulaItem") or "").upper()
+            if formula_item in ("PERCENTAGE", "1", "FINAL_SCALING") and base is not None:
+                result[field] = result.get(field, 0.0) + base.get(field, 0.0) * value
             else:
                 result[field] = result.get(field, 0.0) + value
     return result
@@ -253,19 +255,35 @@ def compute_panel(
     phase = max(0, min(phase, len(phases) - 1))
     frames = phases[phase].get("attributesKeyFrames") or []
     base = interpolate(frames, level)
-    pot = potential_modifiers(char_entry, potential)
+    pot = potential_modifiers(char_entry, potential, base=base)
     favor = favor_modifiers(char_entry, favor_percent)
     module = module_modifiers or {}
+
+    base_aspd = base.get("attackSpeed") or 100.0
+    total_aspd = min(
+        600.0,
+        max(
+            20.0,
+            base_aspd
+            + pot.get("attackSpeed", 0.0)
+            + favor.get("attackSpeed", 0.0)
+            + module.get("attackSpeed", 0.0),
+        ),
+    )
 
     attrs: dict[str, str] = {}
     parts: dict[str, dict[str, float]] = {}
     for field, key in PANEL_ATTRS:
-        total = (
+        raw_total = (
             base.get(field, 0.0)
             + pot.get(field, 0.0)
             + favor.get(field, 0.0)
             + module.get(field, 0.0)
         )
+        if field == "baseAttackTime" and raw_total > 0:
+            total = raw_total * 100.0 / total_aspd
+        else:
+            total = raw_total
         attrs[key] = _fmt(total)
         parts[key] = {
             "base": base.get(field, 0.0),

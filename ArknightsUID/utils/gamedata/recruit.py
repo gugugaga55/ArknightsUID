@@ -14,12 +14,12 @@ rarity 口径：PRTS SMW 稀有度存 0-5，展示 +1（0=1★ … 5=6★）。
 
 from __future__ import annotations
 
-from ..disk_cache import read_json, write_json
-
+import re
 import time
 from pathlib import Path
 from typing import Any
 
+from ..disk_cache import read_json, write_json
 from ._table_cache import GAMEDATA_CACHE_DIR
 
 RECRUIT_DATA_PATH = GAMEDATA_CACHE_DIR / "recruit.json"
@@ -206,6 +206,25 @@ MAX_SELECT_TAGS = 3
 # 不设上限时 C(20,3)=1140 个组合 × ~300 词条的逐词条集合重建会同步占用
 # 事件循环数百毫秒；截断只影响 >8 标签的极端输入（取前 8 个）。
 MAX_INPUT_TAGS = 8
+
+
+_TAG_ALIASES = {
+    "高资": "高级资深干员", "高级资深": "高级资深干员", "资深": "资深干员",
+    "快活": "快速复活", "回费": "费用回复", "小车": "支援机械",
+    "近战": "近战位", "远程": "远程位",
+}
+_PROFESSION_TAGS = ("先锋", "近卫", "狙击", "重装", "医疗", "辅助", "术师", "特种")
+
+
+def normalize_recruit_tags(text: str) -> list[str]:
+    """归一常用简称与截图里的职业全称，保留未知词供调用方报错。"""
+    tokens = re.split(r"[\s,，、+＋]+", text)
+    tags = []
+    for token in filter(None, tokens):
+        if token.endswith("干员") and token[:-2] in _PROFESSION_TAGS:
+            token = token[:-2]
+        tags.append(_TAG_ALIASES.get(token, token))
+    return list(dict.fromkeys(tags))
 
 
 def build_tag_universe(data: list[dict[str, Any]]) -> set[str]:

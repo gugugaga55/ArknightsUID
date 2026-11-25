@@ -11,7 +11,7 @@ iconId/rarity，type=RELIC）。同名藏品跨期复用（钝爪-典训 每期�
 
 from __future__ import annotations
 
-from ..disk_cache import index_covers_sources, read_json, write_json
+from ..disk_cache import index_covers_sources, read_json
 
 import base64
 import asyncio
@@ -23,8 +23,12 @@ from ..http import download_bytes_status
 from ._table_cache import (
     GAMEDATA_CACHE_DIR,
     ROGUE_TOPIC_TABLE_PATH,
+    TABLE_CACHE_TTLS,
+    CHAR_TABLE_TTL,
     _cache_fresh,
     ensure_rogue_topic_table,
+    table_cache_generation,
+    write_index_if_current,
 )
 
 RELIC_INDEX_PATH = GAMEDATA_CACHE_DIR / "roguerelicindex.json"
@@ -97,14 +101,16 @@ def build_relic_index(topic_table: dict[str, Any]) -> dict[str, list[dict]]:
 
 
 async def load_relic_index() -> dict[str, list[dict]]:
-    """藏品索引（精简缓存优先，TTL 30 天——肉鸽数据只随版本更新）。
+    """藏品索引（精简缓存优先，TTL 跟随 roguelike_topic_table）。
 
-    该检查先于 18MB 主题表 ensure：30 天内直接读精简 sidecar，
+    该检查先于 18MB 主题表 ensure：直接读精简 sidecar，
     不触发全量表下载。失败返回 {}。
     """
+    ttl = TABLE_CACHE_TTLS.get(ROGUE_TOPIC_TABLE_PATH, CHAR_TABLE_TTL)
+    generation = table_cache_generation()
     if (
         RELIC_INDEX_PATH.exists()
-        and await _cache_fresh(ROGUE_TOPIC_TABLE_PATH, 30 * 86400)
+        and await _cache_fresh(ROGUE_TOPIC_TABLE_PATH, ttl)
         and index_covers_sources(RELIC_INDEX_PATH, ROGUE_TOPIC_TABLE_PATH)
     ):
         cached = await read_json(RELIC_INDEX_PATH)
@@ -116,7 +122,7 @@ async def load_relic_index() -> dict[str, list[dict]]:
         return cached if isinstance(cached, dict) else {}
     index = build_relic_index(table)
     if index:
-        await write_json(RELIC_INDEX_PATH, index)
+        await write_index_if_current(RELIC_INDEX_PATH, index, generation)
     return index
 
 

@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from ..disk_cache import index_covers_sources, read_json, write_json
+from ..disk_cache import index_covers_sources, read_json
 
 from typing import Any
 
@@ -27,6 +27,8 @@ from ._table_cache import (
     SKIN_TABLE_PATH,
     _cache_fresh,
     ensure_skin_table,
+    table_cache_generation,
+    write_index_if_current,
 )
 
 SKININDEX_PATH = GAMEDATA_CACHE_DIR / "skinindex.json"
@@ -62,6 +64,7 @@ def build_skin_index(
 
 async def load_skin_index() -> dict[str, dict[str, str]]:
     """加载时装目录（精简缓存优先，TTL 同 skin_table 7 天）。失败返回 {}。"""
+    generation = table_cache_generation()
     if (
         SKININDEX_PATH.exists()
         and await _cache_fresh(CHAR_TABLE_PATH, CHAR_TABLE_TTL)
@@ -87,7 +90,7 @@ async def load_skin_index() -> dict[str, dict[str, str]]:
         return {}
     index = build_skin_index(skin_table, char_index)
     if index:
-        await write_json(SKININDEX_PATH, index)
+        await write_index_if_current(SKININDEX_PATH, index, generation)
     return index
 
 

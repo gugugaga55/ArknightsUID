@@ -389,6 +389,30 @@ def map_file_url(title: str) -> str:
     return f"https://media.prts.wiki/{digest[0]}/{digest[:2]}/{quote(title)}"
 
 
+def mastery_icon_url(tier: int) -> str:
+    """专精档位官方图标（PRTS `专精_N.png`，96×87）直链，零 API。"""
+    if tier not in (1, 2, 3):
+        return ""
+    return map_file_url(f"专精_{tier}.png")
+
+
+async def mastery_icon_b64(tier: int) -> str:
+    """专精档位官方图标 b64（磁盘缓存；失败/越档空串降级为文字 chip）。"""
+    url = mastery_icon_url(tier)
+    if not url:
+        return ""
+    try:
+        from ..render import get_image_b64_with_cache
+        from ..resource.RESOURCE_PATH import CACHE_PATH
+
+        return await get_image_b64_with_cache(url, CACHE_PATH / "wiki" / "mastery")
+    except Exception as exc:
+        from gsuid_core.logger import logger
+
+        logger.debug(f"[ArknightsUID·prts] 专精图标获取失败 专{tier}: {exc}")
+        return ""
+
+
 def map_candidate_titles(code: str, name: str) -> list[str]:
     """关卡地图候选文件名：标准命名 + 辅助命名（JT 插曲关只有后者）。"""
     if not code or not name:
@@ -672,12 +696,16 @@ async def parse_page(
     *,
     follow_redirect: bool = True,
     deadline: float | None = None,
+    cache_seconds: float | None = None,
 ) -> PageWikitext | None:
     """解析页面 wikitext（跟随重定向，最多 3 跳）。
 
     deadline 为 time.monotonic() 时刻：查询链总预算耗尽时立即放弃
     （单次 _api 已有 20s 超时，deadline 防的是"直查+搜索回退 8 个候选页"
     这类多请求链路把命令卡住数分钟）。
+
+    cache_seconds 缺省为静态页 30 天；内容会持续更新的页面（活动/攻略
+    页随赛季改写）应显式传更短 TTL，避免整个赛季吃首抓快照。
     """
     current = title.strip()
     if not current:
@@ -695,7 +723,11 @@ async def parse_page(
                 "page": current,
                 "prop": "wikitext",
             },
-            cache_seconds=_STATIC_PAGE_CACHE_SECONDS,
+            cache_seconds=(
+                _STATIC_PAGE_CACHE_SECONDS
+                if cache_seconds is None
+                else cache_seconds
+            ),
         )
         if not data or "error" in data:
             return None
@@ -775,6 +807,14 @@ def _collapse_inline_template(match: re.Match[str]) -> str:
     parts = match.group(1).split("|")
     name = parts[0].strip()
     args = [p.strip() for p in parts[1:]]
+    if name == "ruby":
+        # {{ruby|主文本|注音}}：可见主体是第一个参数（取末段会只剩注音，
+        # 卫戍协议页「综合行动效率评价体系|Evaluation Framework…」实测）
+        return args[0] if args else ""
+    if name == "mdi":
+        # Material 图标模板：渲染为图标无文本，保留参数名会泄漏英文单词
+        # （holo 解析器此前为此专门预处理剥离，此处收敛到公共路径）
+        return ""
     if name == "DrName":
         # PRTS 干员称谓模板，渲染为默认玩家称呼；{{DrName|前缀=Dr.}}
         # （凯尔希页真实用法）保留前缀
@@ -2070,7 +2110,7 @@ async def query_game_info() -> dict[str, str]:
     """
     merged: dict[str, str] = {}
     for page in ("PRTS:Gameinfo/国服/基础", "PRTS:Gameinfo/国服/服务器维护"):
-        parsed = await parse_page(page)
+        parsed = await parse_page(page, cache_seconds=_CALENDAR_CACHE_SECONDS)
         if parsed:
             merged.update(parse_lst_sections(parsed.wikitext))
     return merged

@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 from gsuid_core.aps import scheduler
 from gsuid_core.bot import Bot
@@ -19,17 +20,23 @@ from gsuid_core.models import Event
 from gsuid_core.server import on_core_start
 from gsuid_core.sv import SV
 
+from ArknightsUID.utils.account_switch import clear_default_uid
 from ArknightsUID.utils.cache_clean import (
     CACHE_DAYS_TO_KEEP,
     clean_cache_directories,
 )
 from ArknightsUID.utils.database.models import ArkUser
-from ArknightsUID.utils.enduid.adapter import hide_uid
+from ArknightsUID.utils.enduid.adapter import hide_uid, hide_uid_for
+from ArknightsUID.utils.time_utils import BEIJING_TZ
 from ArknightsUID.utils.card import send_text as _send_text  # noqa: E402
 
 
 maintenance_sv = SV("ArknightsUID维护", pm=1, priority=5)
 refresh_sv = SV("ArknightsUID刷新", priority=5)
+
+_REFRESH_COOLDOWN_SECONDS = 600.0
+_last_refresh_monotonic = 0.0
+_refresh_lock = asyncio.Lock()
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +50,9 @@ async def clean_cache_command(bot: Bot, ev: Event) -> None:
     await _send_text(bot, ev, result)
 
 
-@scheduler.scheduled_job("cron", hour=3, minute=30, id="ark_cache_clean_daily")
+@scheduler.scheduled_job(
+    "cron", hour=3, minute=30, timezone=BEIJING_TZ, id="ark_cache_clean_daily"
+)
 async def ark_cache_clean_daily() -> None:
     await clean_cache_directories(CACHE_DAYS_TO_KEEP)
 
@@ -126,7 +135,7 @@ async def delete_invalid_creds(bot: Bot, ev: Event) -> None:
         return await _send_text(bot, ev, "没有标记为无效的本地登录。")
     from ArknightsUID.utils.skland.store import remove_invalid_ark_login
 
-    uids = []
+    uids: list[tuple[str, str, str]] = []
     skipped = 0
     for row in rows:
         uid = (getattr(row, "uid", "") or "").strip()
@@ -136,14 +145,20 @@ async def delete_invalid_creds(bot: Bot, ev: Event) -> None:
             # 成删光该用户所有账号（审计 #39）
             skipped += 1
             continue
-        removed = await remove_invalid_ark_login(
-            getattr(row, "user_id", ""), getattr(row, "bot_id", ""), uid
-        )
+        row_user_id = getattr(row, "user_id", "") or ""
+        row_bot_id = getattr(row, "bot_id", "") or ""
+        removed = await remove_invalid_ark_login(row_user_id, row_bot_id, uid)
         if removed:
-            uids.append(uid)
+            await asyncio.to_thread(clear_default_uid, row_bot_id, row_user_id, uid=uid)
+            uids.append((uid, row_user_id, row_bot_id))
         else:
             skipped += 1
-    shown = "、".join(hide_uid(u) for u in uids[:10])
+    shown_items = []
+    for u, r_user, r_bot in uids[:10]:
+        shown_items.append(
+            await hide_uid_for(u, r_user, r_bot) if r_user and r_bot else hide_uid(u)
+        )
+    shown = "、".join(shown_items)
     more = f" 等 {len(uids)} 个" if len(uids) > 10 else ""
     suffix = f"（跳过 {skipped} 条无法确认或已更新的记录）" if skipped else ""
     await _send_text(bot, ev, f"已解除本插件 {len(uids)} 条无效登录：{shown}{more}{suffix}；重新登录可恢复。")
@@ -156,6 +171,24 @@ async def delete_invalid_creds(bot: Bot, ev: Event) -> None:
 
 @refresh_sv.on_fullmatch(("刷新", "刷新数据", "更新数据"), block=True)
 async def refresh_gamedata_cache(bot: Bot, ev: Event) -> None:
+    global _last_refresh_monotonic
+
+    if _refresh_lock.locked():
+        return await _send_text(
+            bot, ev, "游戏数据刷新正在进行中，请稍候再试。"
+        )
+    is_non_admin = getattr(ev, "user_pm", 0) > 1
+    now_mono = time.monotonic()
+    if (
+        is_non_admin
+        and _last_refresh_monotonic > 0
+        and now_mono - _last_refresh_monotonic < _REFRESH_COOLDOWN_SECONDS
+    ):
+        remain = max(1, int(_REFRESH_COOLDOWN_SECONDS - (now_mono - _last_refresh_monotonic)))
+        return await _send_text(
+            bot, ev, f"游戏数据刚刚刷新过，请 {remain} 秒后再试。"
+        )
+
     from ArknightsUID.utils.path import CACHE_BASE
     from ArknightsUID.utils.gamedata._table_cache import table_cache_refresh
     from ArknightsUID.utils.gamedata.rogue_ending import clear_ending_cache
@@ -164,29 +197,40 @@ async def refresh_gamedata_cache(bot: Bot, ev: Event) -> None:
         clear_stage_index_cache,
     )
 
-    # 先停旧构建，避免清盘后后台任务把旧数据重新写回来。
-    await clear_stage_index_cache()
-    async with table_cache_refresh():
-        clear_ending_cache()
-        gamedata_dir = CACHE_BASE / "gamedata"
-        removed = 0
-        cache_files = set(gamedata_dir.glob("*.json"))
-        enemy_dir = gamedata_dir / "is_enemy"
-        # 肉鸽基础资料及各期难度表也有独立的每日缓存/失败标记。
-        data_names = ["enemy_database.json", "enemy_skills.json"] + [
-            f"difficulty_{theme}.json" for theme in THEME_DIRS
-        ]
-        for name in data_names:
-            cache_files.update(
-                enemy_dir / (name + suffix)
-                for suffix in ("", ".validators.json", ".miss")
-            )
-        stage_dir = enemy_dir / "stages"
-        cache_files.update(
-            path for path in stage_dir.rglob("*")
-            if path.is_file() and path.name.endswith((".json", ".json.miss"))
-        )
-        if gamedata_dir.exists():
+    async with _refresh_lock:
+        _last_refresh_monotonic = time.monotonic()
+        # 先停旧构建，避免清盘后后台任务把旧数据重新写回来。
+        await clear_stage_index_cache()
+        async with table_cache_refresh():
+            clear_ending_cache()
+            gamedata_dir = CACHE_BASE / "gamedata"
+            removed = 0
+            cache_files = set(gamedata_dir.glob("*.json"))
+            cache_files.update(gamedata_dir.glob("*.validators.json"))
+            # 关卡示意图的解包 level json（levels/ 子目录，永不过期口径）
+            levels_dir = gamedata_dir / "levels"
+            if levels_dir.exists():
+                cache_files.update(levels_dir.rglob("*.json"))
+                cache_files.update(levels_dir.rglob("*.json.miss"))
+            enemy_dir = gamedata_dir / "is_enemy"
+            # 肉鸽基础资料及各期难度表也有独立的每日缓存/失败标记。
+            data_names = ["enemy_database.json", "enemy_skills.json"] + [
+                f"difficulty_{theme}.json" for theme in THEME_DIRS
+            ]
+            for name in data_names:
+                cache_files.update(
+                    enemy_dir / (name + suffix)
+                    for suffix in ("", ".validators.json", ".miss")
+                )
+            stage_dir = enemy_dir / "stages"
+            if stage_dir.exists():
+                cache_files.update(
+                    path for path in stage_dir.rglob("*")
+                    if path.is_file() and path.name.endswith((".json", ".json.miss"))
+                )
+            stronghold_dir = CACHE_BASE / "stronghold_guide"
+            for suffix in ("", ".validators.json"):
+                cache_files.add(stronghold_dir / f"resource.json{suffix}")
             for path in cache_files:
                 if not path.exists():
                     continue
