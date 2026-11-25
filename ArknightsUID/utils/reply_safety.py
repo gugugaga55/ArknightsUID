@@ -10,9 +10,10 @@ import re
 from typing import Any
 
 _sensitive_fields = (
-    r"cookie|cred|token|hg_token|skland_user_id"
+    r"cookie|cred|token|hg[_ ]?token|skland[_ ]?user[_ ]?id"
+    r"|u8[_ ]?token|grant[_ ]?token|device[_ ]?token|ak-user-center"
     # 扩充常见高敏感字段，覆盖驼峰/下划线/空格变体，避免外部消息夹带泄漏。
-    r"|access[_ ]?token|refresh[_ ]?token"
+    r"|access[_ ]?token|refresh[_ ]?token|authorization"
     r"|secret|password|passwd"
 )
 # 字段边界用 ASCII 词边界断言而非 \b：Python re 的 \w 在 Unicode 模式下
@@ -23,10 +24,13 @@ _FIELD_EDGE = r"(?<![A-Za-z0-9_])(?:{})(?![A-Za-z0-9_])"
 # 赋值分隔符：字段名与分隔符之间允许一个闭合引号（JSON 键值
 # `"token": "xxx"` 中间隔着 '"'，否则赋值分支整条不匹配、值原样泄漏）；
 # 分隔符同时覆盖全角冒号/等号（中文报错消息常用）。
-_ASSIGN_SEP = r"\s*['\"]?\s*[:：=＝]\s*"
+_ASSIGN_SEP = r"\s*(?:\\?['\"])?\s*[:：=＝]\s*(?:bearer\s+)?"
 _SENSITIVE_ASSIGNMENT_RE = re.compile(
-    rf"(?i)['\"]?{_FIELD_EDGE.format(_sensitive_fields)}{_ASSIGN_SEP}"
-    rf"(?:\"[^\"]*\"|'[^']*'|[^,，;；\s]+)"
+    rf"(?i)(?:\\?['\"])?{_FIELD_EDGE.format(_sensitive_fields)}{_ASSIGN_SEP}"
+    rf"(?:\\\"(?:\\\\.|[^\"\\])*\\\"|\"(?:\\.|[^\"\\])*\"|\\'(?:\\\\.|[^'\\])*\\'|'(?:\\.|[^'\\])*'|[^,，;；\s]+)"
+)
+_BEARER_TOKEN_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9_])bearer\s+[A-Za-z0-9._~+/=-]{8,}"
 )
 _SENSITIVE_FIELD_RE = re.compile(rf"(?i){_FIELD_EDGE.format(_sensitive_fields)}")
 _SENTINEL_VALUE_RE = re.compile(
@@ -42,6 +46,7 @@ def safe_external_message(value: Any) -> str:
         return ""
     text = str(value)
     text = _SENSITIVE_ASSIGNMENT_RE.sub(_REDACTED, text)
+    text = _BEARER_TOKEN_RE.sub(_REDACTED, text)
     text = _SENSITIVE_FIELD_RE.sub(_REDACTED, text)
     text = _SENTINEL_VALUE_RE.sub(_REDACTED, text)
     text = re.sub(rf"(?:{_REDACTED}[\s,，;；]*){{2,}}", _REDACTED, text)

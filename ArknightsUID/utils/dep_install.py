@@ -15,14 +15,23 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import re
 from pathlib import Path
 from typing import Any, NamedTuple
-
-from packaging.requirements import Requirement
 
 from gsuid_core.logger import logger
 
 _PYPROJECT = Path(__file__).resolve().parents[2] / "pyproject.toml"
+
+
+def _req_name(spec: str) -> str:
+    """解析 PEP 508 依赖名（惰性用 packaging，缺省走正则兜底）。"""
+    try:
+        from packaging.requirements import Requirement
+
+        return Requirement(spec).name.lower()
+    except Exception:
+        return re.split(r"[<>=!~;\[\s]", spec.strip(), maxsplit=1)[0].strip().lower()
 
 # 友好别名 → 依赖名（pyproject 里没有但用户顺口会打的词）
 _ALIAS = {"ocr": "rapidocr", "截图识别": "rapidocr"}
@@ -56,11 +65,11 @@ def _declared_specs() -> list[tuple[str, str]]:
         project = data.get("project", {})
         pairs: list[tuple[str, str]] = []
         for spec in project.get("dependencies", []):
-            pairs.append((Requirement(spec).name.lower(), str(spec)))
+            pairs.append((_req_name(spec), str(spec)))
         for group, group_specs in (project.get("optional-dependencies") or {}).items():
             for spec in group_specs:
                 pairs.append((str(group).lower(), str(spec)))
-                pairs.append((Requirement(spec).name.lower(), str(spec)))
+                pairs.append((_req_name(spec), str(spec)))
         if pairs:
             return pairs
     except Exception as e:  # noqa: BLE001 - 解析失败走静态兜底
@@ -69,7 +78,7 @@ def _declared_specs() -> list[tuple[str, str]]:
 
 
 def _module_name(spec: str) -> str:
-    return Requirement(spec).name.lower().replace("-", "_")
+    return _req_name(spec).replace("-", "_")
 
 
 def is_installed(module: str) -> bool:
@@ -108,7 +117,7 @@ def dependency_status() -> list[DepEntry]:
     # 友好别名并入对应条目（resolve 认的别名在列表里也要能看见）
     for alias, dep in _ALIAS.items():
         for entry in by_spec.values():
-            if Requirement(entry.spec).name.lower() == dep:
+            if _req_name(entry.spec) == dep:
                 if alias not in entry.keys:
                     entry.keys.append(alias)
     return list(by_spec.values())

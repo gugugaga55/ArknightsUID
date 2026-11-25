@@ -29,9 +29,21 @@ def assert_uid_segment(uid: str) -> str:
     return text
 
 
+def _assert_safe_store_path(path: Path) -> Path:
+    """落盘 sink 纵深防御：路径任一段含 '..' 一律拒绝。
+
+    UID 段在各调用方入口已做纯数字校验（assert_uid_segment）；这里在
+    open()/unlink() 前再拦一次穿越成分，挡住未来新增调用方绕过上游
+    校验的路径拼接（写路径抛 ValueError，由调用方异常处理兜底）。
+    """
+    if ".." in path.parts:
+        raise ValueError(f"player_store 拒绝包含 '..' 的路径: {path.name!r}")
+    return path
+
+
 def resolve_player_path(path: PathLike) -> Path | None:
     """实际落盘路径：.gz 优先,回退明文;都不存在返回 None。move/unlink 用它。"""
-    p = Path(path)
+    p = _assert_safe_store_path(Path(path))
     if _is_gzip(p.name):
         gp = p.with_name(p.name + ".gz")
         if gp.exists():
@@ -45,7 +57,7 @@ def player_json_exists(path: PathLike) -> bool:
 
 def remove_player_json(path: PathLike) -> bool:
     """删除明文与 .gz 两种副本,返回是否删了东西。"""
-    p = Path(path)
+    p = _assert_safe_store_path(Path(path))
     removed = False
     for cand in (p.with_name(p.name + ".gz"), p):
         try:
@@ -89,7 +101,7 @@ def read_player_json_sync(path: PathLike) -> Any:
 
 
 def write_player_json_sync(path: PathLike, obj: Any) -> None:
-    p = Path(path)
+    p = _assert_safe_store_path(Path(path))
     p.parent.mkdir(parents=True, exist_ok=True)
     uniq = f".tmp.{os.getpid()}.{time.monotonic_ns()}"
     if _is_gzip(p.name):

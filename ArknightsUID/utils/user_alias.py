@@ -19,7 +19,26 @@ async def apply_user_alias(bot_id: str, user_id: str, query: str) -> str:
         target: str | None = await ArkAlias.resolve_alias(
             bot_id=bot_id, user_id=user_id, alias=text
         )
-        return target or query
+        if target and not str(target).startswith("rogue:"):
+            return target
+        return query
     except Exception:
         # 别名是锦上添花：任何 DB 异常都不阻断原查询
         return query
+
+
+def parse_alias_pair(text: str) -> tuple[str, str] | None:
+    """「别名 目标」「别名=目标」「别名 → 目标」→ (alias, target)。"""
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    for sep in ("=", "＝", "→", "->"):
+        if sep in raw:
+            left, _, right = raw.partition(sep)
+            alias, target = left.strip(), right.strip()
+            if alias and target:
+                return alias, target
+    parts = raw.split()
+    if len(parts) == 2:
+        return parts[0].strip(), parts[1].strip()
+    return None

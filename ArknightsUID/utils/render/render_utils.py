@@ -252,10 +252,14 @@ def _mount_fonts() -> None:
 def _get_local_base_url() -> str:
     # HOST/PORT 默认值在 gsuid_core 的 CONFIG_DEFAULT（CORE_DEFAULT）里，
     # 插件自身的 CONFIG_DEFAULT（16 行导入）不含这两个键，用错了 KeyError
-    host = core_config.get_config("HOST") or CORE_CONFIG_DEFAULT["HOST"]
+    host = str(core_config.get_config("HOST") or CORE_CONFIG_DEFAULT["HOST"]).strip()
     port = core_config.get_config("PORT") or CORE_CONFIG_DEFAULT["PORT"]
     if host in ("0.0.0.0", "0.0.0.0:"):
         host = "127.0.0.1"
+    elif host in ("::", "[::]", "::0", "[::0]"):
+        host = "[::1]"
+    elif ":" in host and not host.startswith("["):
+        host = f"[{host}]"
     return f"http://{host}:{port}"
 
 
@@ -416,6 +420,7 @@ async def _acquire_page():
                 viewport={"width": 1200, "height": 1000},
                 # 截图物理分辨率 = CSS 尺寸 × 倍率（RenderScale，默认 2x 防手机端发糊）
                 device_scale_factor=scale,
+                java_script_enabled=False,
             )
             _pool_scale = scale
 
@@ -431,6 +436,7 @@ async def _acquire_page():
             _pool_ctx = await browser.new_context(
                 viewport={"width": 1200, "height": 1000},
                 device_scale_factor=scale,
+                java_script_enabled=False,
             )
             _pool_scale = scale
             page = await _pool_ctx.new_page()
@@ -599,7 +605,7 @@ async def render_html(ark_templates, template_name: str, context: dict) -> bytes
             if page is None:
                 return None
 
-            await page.set_content(html_content, wait_until="load")
+            await page.set_content(html_content, wait_until="load", timeout=15000)
 
             container = page.locator(".container")
             await page.wait_for_selector(".container", timeout=2000)

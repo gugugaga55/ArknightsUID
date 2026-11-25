@@ -19,7 +19,8 @@ Noto Sans Symbols2 / CJK），本模块在插件侧自动补齐等价能力：
   fontconfig，由 render_utils._local_cjk_fonts 直接读字节注册。
 - 失败语义：单镜像失败 warning 后换镜像，整轮未补齐进入 1h 冷却，
   不阻塞渲染、不成重试风暴；下载 tmp + 原子替换，跨进程 file_lock
-  防多 worker 重复下载（锁超时降级并发重下，产物等价无害）。
+  防多 worker 重复下载（锁被其他 worker 持有时跳过该字体继续补包，
+  下一轮 pack_complete 会看到对侧成果）。
 """
 
 from __future__ import annotations
@@ -115,8 +116,18 @@ def is_valid_font(data: bytes) -> bool:
 
 
 def pack_complete() -> bool:
-    """字体包是否齐（stat 级；字节校验在下载与读取时做）。"""
-    return all(_font_path(item[0]) is not None for item in _FONT_PACK)
+    """字体包是否齐且全部通过魔数与尺寸校验。"""
+    return len(pack_font_paths()) == len(_FONT_PACK)
+
+
+def _has_valid_font(filename: str) -> bool:
+    path = _font_path(filename)
+    if path is None:
+        return False
+    try:
+        return is_valid_font(path.read_bytes())
+    except OSError:
+        return False
 
 
 def _font_path(filename: str) -> Path | None:
@@ -175,57 +186,84 @@ def font_face_css(base_url: str) -> str:
 
 
 async def _download_font(filename: str, repo_path: str) -> bool:
-    """单字体下载：双镜像顺序尝试，魔数+尺寸校验，tmp+原子替换。"""
+    """单字体下载：双镜像顺序尝试，魔数+尺寸校验，tmp+原子替换。
+
+    绝不在事件循环线程跨 await 持有同步 file_locked（否则会造成同线程
+    threading.local 重入误放行与多进程事件循环卡顿）：先在线程内快速探锁，
+    无锁完成异步下载与校验，最后仅对原子 os.replace 短暂加跨进程锁。
+    """
     from gsuid_core.utils.download_resource.download_file import download
 
-    from ..file_lock import file_locked, unique_tmp
+    from ..file_lock import LockTimeoutError, file_locked, unique_tmp
     from ..http import get_client
 
     target = FONT_PACK_DIR / filename
-    with file_locked(target):
-        if _font_path(filename) is not None:  # 等锁期间其他进程已下好
+
+    def _probe_ready() -> bool:
+        with file_locked(target, timeout=0.1):
+            if _has_valid_font(filename):
+                return True
+            FONT_PACK_DIR.mkdir(parents=True, exist_ok=True)
             return False
-        FONT_PACK_DIR.mkdir(parents=True, exist_ok=True)
-        tmp = unique_tmp(target)
-        client = await get_client()
-        try:
-            for mirror in _FONT_MIRRORS:
-                url = f"{mirror}{repo_path}"
-                retcode = await download(
-                    url, FONT_PACK_DIR, tmp.name, sess=client, tag="[ARK·字体]"
-                )
-                data = tmp.read_bytes() if tmp.exists() else b""
-                if retcode == 200 and is_valid_font(data):
+
+    try:
+        if await asyncio.to_thread(_probe_ready):
+            return False
+    except LockTimeoutError:
+        return False
+
+    tmp = unique_tmp(target)
+    client = await get_client()
+    try:
+        for mirror in _FONT_MIRRORS:
+            url = f"{mirror}{repo_path}"
+            retcode = await download(
+                url, FONT_PACK_DIR, tmp.name, sess=client, tag="[ARK·字体]"
+            )
+
+            def _commit_if_valid(status: int = retcode) -> tuple[bool, int]:
+                if not tmp.exists():
+                    return False, 0
+                data = tmp.read_bytes()
+                if status != 200 or not is_valid_font(data):
+                    return False, len(data)
+                with file_locked(target, timeout=2.0):
                     os.replace(tmp, target)
-                    logger.info(
-                        f"[ARK·字体] 颜文字字体包 +{filename}"
-                        f"（{len(data) // 1024}KB, {url.split('/')[2]}）"
-                    )
-                    return True
-                logger.warning(
-                    f"[ARK·字体] {filename} 下载无效"
-                    f"（HTTP {retcode}, {len(data)}B），尝试下一镜像"
+                return True, len(data)
+
+            ok, size = await asyncio.to_thread(_commit_if_valid)
+            if ok:
+                logger.info(
+                    f"[ARK·字体] 颜文字字体包 +{filename}"
+                    f"（{size // 1024}KB, {url.split('/')[2]}）"
                 )
-        finally:
-            tmp.unlink(missing_ok=True)
+                return True
+            logger.warning(
+                f"[ARK·字体] {filename} 下载无效"
+                f"（HTTP {retcode}, {size}B），尝试下一镜像"
+            )
+    except LockTimeoutError:
+        return False
+    finally:
+        await asyncio.to_thread(tmp.unlink, missing_ok=True)
     return False
 
 
 async def ensure_font_pack() -> tuple[bool, bool]:
-    """补齐缺失字体（逐文件双镜像，跨进程锁 + 原子替换）。
+    """补齐缺失或损坏字体（逐文件双镜像，跨进程锁 + 原子替换）。
 
     返回 (是否有新文件落盘, 包是否已齐)。任何单点失败不抛异常——已
     就绪文件照常生效，缺的维持降级（豆腐块同现状）。
     """
-    if pack_complete():
+    if await asyncio.to_thread(pack_complete):
         return False, True
     changed = False
     for filename, _, repo_path in _FONT_PACK:
-        if _font_path(filename) is not None:
+        if await asyncio.to_thread(_has_valid_font, filename):
             continue
         if await _download_font(filename, repo_path):
             changed = True
-    return changed, pack_complete()
+    return changed, await asyncio.to_thread(pack_complete)
 
 
 def maybe_start_download() -> None:

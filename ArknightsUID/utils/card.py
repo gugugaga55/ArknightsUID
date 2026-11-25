@@ -13,6 +13,7 @@ from gsuid_core.logger import logger
 from gsuid_core.models import Event
 from jinja2 import TemplateNotFound
 
+from .config import ArkConfig
 from .enduid.adapter import ArkCredential, resolve_credential
 
 
@@ -57,9 +58,10 @@ async def send_card_or_text(
     单测在无渲染引擎环境仍可走回退分支。出图直接 bot.send(bytes) 不带
     at_sender（图片无需 @，与文本路径不同，非 bug）。
 
-    extra_images：随卡片一并追加发送的独立图片（如公告超长图，
-    对齐 EndUID ann_detail_card 的长图单独发送）；bot.send(list) 会逐张发出。
-    出图成功时拼在卡片后一起发；回退文本时先发文本再逐张发图。
+    extra_images：随卡片一并追加发送的独立图片（如公告超长图、肉鸽关卡
+    敌人路线示意图）。多图时按 ForwardMultiImageEnable 以合并转发（node）
+    发送不刷屏群聊；关闭或单图逐张直接发。出图成功时拼在卡片后一起发；
+    回退文本时先发文本再逐张发图。
     """
     img = None
     try:
@@ -74,11 +76,36 @@ async def send_card_or_text(
         img = None
     extra_images = extra_images or []
     if img:
-        if extra_images:
-            await bot.send([img, *extra_images], at_sender=bool(ev.group_id))
-        else:
+        if not extra_images:
+            # 单图：保持历史行为 bytes 直发（tests 断言 sent[0] 为图片）
             await bot.send(img, at_sender=bool(ev.group_id))
+        elif ArkConfig.get_config("ForwardMultiImageEnable").data:
+            try:
+                from gsuid_core.segment import MessageSegment
+
+                await bot.send(
+                    MessageSegment.node([img, *extra_images]),
+                    at_sender=bool(ev.group_id),
+                )
+            except Exception:
+                logger.debug("[ArknightsUID] 合并转发发送失败，回退逐张发送")
+                for item in (img, *extra_images):
+                    await bot.send(item, at_sender=bool(ev.group_id))
+        else:
+            await bot.send([img, *extra_images], at_sender=bool(ev.group_id))
     else:
         await send_text(bot, ev, text)
-        for extra in extra_images:
-            await bot.send(extra)
+        if len(extra_images) > 1 and ArkConfig.get_config(
+            "ForwardMultiImageEnable"
+        ).data:
+            try:
+                from gsuid_core.segment import MessageSegment
+
+                await bot.send(MessageSegment.node(extra_images))
+            except Exception:
+                logger.debug("[ArknightsUID] 合并转发发送失败，回退逐张发送")
+                for extra in extra_images:
+                    await bot.send(extra)
+        else:
+            for extra in extra_images:
+                await bot.send(extra)

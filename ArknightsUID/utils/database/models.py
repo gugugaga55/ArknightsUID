@@ -128,10 +128,14 @@ class ArkUser(User, table=True):
     ) -> bool:
         """账号和绑定事务共用；不在内部提交。"""
         if data.get("game_id") == ARKNIGHTS_CHANNEL_OFFICIAL:
-            result = await session.execute(select(cls).where(
-                cls.user_id == user_id, cls.bot_id == bot_id, cls.uid == uid,
-                cls.game_id != ARKNIGHTS_CHANNEL_OFFICIAL,
-            ))
+            result = await session.execute(
+                select(cls).where(
+                    cls.user_id == user_id,
+                    cls.bot_id == bot_id,
+                    cls.uid == uid,
+                    cls.game_id != ARKNIGHTS_CHANNEL_OFFICIAL,
+                )
+            )
             if result.scalars().first() is not None:
                 raise ValueError("UID belongs to a different game record")
         stmt = (
@@ -173,13 +177,21 @@ class ArkUser(User, table=True):
     @classmethod
     @with_session
     async def account_rows(
-        cls, session: AsyncSession, user_id: str, bot_id: str,
+        cls,
+        session: AsyncSession,
+        user_id: str,
+        bot_id: str,
     ) -> list[ArkUser]:
         """空列表与数据库错误(None)分开，供来源策略失败时关闭回退。"""
-        result = await session.execute(select(cls).where(
-            cls.user_id == user_id, cls.bot_id == bot_id,
-            cls.game_id == ARKNIGHTS_CHANNEL_OFFICIAL,
-        ).order_by(cls.id))
+        result = await session.execute(
+            select(cls)
+            .where(
+                cls.user_id == user_id,
+                cls.bot_id == bot_id,
+                cls.game_id == ARKNIGHTS_CHANNEL_OFFICIAL,
+            )
+            .order_by(cls.id)
+        )
         return list(result.scalars().all())
 
     @classmethod
@@ -223,7 +235,7 @@ class ArkUser(User, table=True):
         last_cred_request_time（对齐 EndUID，作为 token 新鲜度记录）。
         cookie 密文落库 → 同 select_data_by_cred，Python 侧解密比对。
         """
-        filters = []
+        filters = [cls.login_disabled == False]  # noqa: E712 - SQL expression
         if game_id is not None:
             filters.append(cls.game_id == game_id)
         result = await session.execute(select(cls).where(*filters))
@@ -231,6 +243,8 @@ class ArkUser(User, table=True):
         matched = 0
         try:
             for row in rows:
+                if getattr(row, "login_disabled", False):
+                    continue
                 if not cred_equals(row.cookie, cred):
                     continue
                 row.token = encrypt_secret(token)
@@ -256,13 +270,15 @@ class ArkUser(User, table=True):
 
         返回更新行数（EndUID 回退账号无本地行时为 0，静默即可）。
         """
-        filters = []
+        filters = [cls.login_disabled == False]  # noqa: E712 - SQL expression
         if game_id is not None:
             filters.append(cls.game_id == game_id)
         result = await session.execute(select(cls).where(*filters))
         rows = result.scalars().all()
         matched = 0
         for row in rows:
+            if getattr(row, "login_disabled", False):
+                continue
             if not cred_equals(row.cookie, cred):
                 continue
             row.cookie_status = "无效"
@@ -321,24 +337,26 @@ class ArkUser(User, table=True):
             await session.delete(row)
         return len(rows)
 
-
     @classmethod
     async def _sync_bindings(
         cls, session: AsyncSession, user_id: str, bot_id: str, group_id=None
     ) -> None:
         """账号变更事务内重建当前用户的绑定。"""
         result = await session.execute(
-            select(ArkBind).where(
-                ArkBind.user_id == user_id, ArkBind.bot_id == bot_id
-            ).with_for_update()
+            select(ArkBind)
+            .where(ArkBind.user_id == user_id, ArkBind.bot_id == bot_id)
+            .with_for_update()
         )
         bindings = list(result.scalars().all())
         result = await session.execute(
-            select(cls).where(
-                cls.user_id == user_id, cls.bot_id == bot_id,
+            select(cls)
+            .where(
+                cls.user_id == user_id,
+                cls.bot_id == bot_id,
                 cls.game_id == ARKNIGHTS_CHANNEL_OFFICIAL,
                 cls.login_disabled == False,  # noqa: E712 - SQL expression
-            ).order_by(cls.id)
+            )
+            .order_by(cls.id)
         )
         uids = list(dict.fromkeys(row.uid for row in result.scalars() if row.uid))
         if not uids:
@@ -349,26 +367,43 @@ class ArkUser(User, table=True):
             for extra in bindings[1:]:
                 await session.delete(extra)
         else:
-            session.add(ArkBind(
-                user_id=user_id, bot_id=bot_id, group_id=group_id,
-                uid="_".join(uids),
-            ))
+            session.add(
+                ArkBind(
+                    user_id=user_id,
+                    bot_id=bot_id,
+                    group_id=group_id,
+                    uid="_".join(uids),
+                )
+            )
         await session.flush()
 
     @classmethod
     @with_session
     async def save_login_roles(
-        cls, session: AsyncSession, user_id: str, bot_id: str, group_id,
-        roles: list[dict[str, str]], **credentials,
+        cls,
+        session: AsyncSession,
+        user_id: str,
+        bot_id: str,
+        group_id,
+        roles: list[dict[str, str]],
+        **credentials,
     ) -> bool:
         """已验证角色、加密凭据与绑定同一事务提交。"""
         for role in roles:
             saved = await cls._upsert_in_session(
-                session, user_id, bot_id, role["role_id"],
-                **credentials, nickname=role["nickname"],
-                record_id=role["record_uid"], server_id=role["server_id"],
-                game_id=ARKNIGHTS_CHANNEL_OFFICIAL, cookie_status="",
-                login_disabled=False, platform="3", token=None,
+                session,
+                user_id,
+                bot_id,
+                role["role_id"],
+                **credentials,
+                nickname=role["nickname"],
+                record_id=role["record_uid"],
+                server_id=role["server_id"],
+                game_id=ARKNIGHTS_CHANNEL_OFFICIAL,
+                cookie_status="",
+                login_disabled=False,
+                platform="3",
+                token=None,
                 last_cred_request_time=None,
             )
             if not saved:
@@ -379,7 +414,11 @@ class ArkUser(User, table=True):
     @classmethod
     @with_session
     async def disable_logins(
-        cls, session: AsyncSession, user_id: str, bot_id: str, uids: list[str],
+        cls,
+        session: AsyncSession,
+        user_id: str,
+        bot_id: str,
+        uids: list[str],
         only_invalid: bool = False,
     ) -> int:
         """仅接受已解析归属的 UID；擦除凭据并禁止本插件 EndUID 回退。"""
@@ -387,18 +426,33 @@ class ArkUser(User, table=True):
         removed = 0
         for uid in targets:
             if only_invalid:
-                current = await session.execute(select(cls).where(
-                    cls.user_id == user_id, cls.bot_id == bot_id, cls.uid == uid,
-                    cls.game_id == ARKNIGHTS_CHANNEL_OFFICIAL,
-                    cls.cookie_status == "无效", cls.login_disabled == False,  # noqa: E712
-                ).with_for_update())
+                current = await session.execute(
+                    select(cls)
+                    .where(
+                        cls.user_id == user_id,
+                        cls.bot_id == bot_id,
+                        cls.uid == uid,
+                        cls.game_id == ARKNIGHTS_CHANNEL_OFFICIAL,
+                        cls.cookie_status == "无效",
+                        cls.login_disabled == False,  # noqa: E712
+                    )
+                    .with_for_update()
+                )
                 if current.scalars().first() is None:
                     continue
             saved = await cls._upsert_in_session(
-                session, user_id, bot_id, uid,
-                game_id=ARKNIGHTS_CHANNEL_OFFICIAL, login_disabled=True,
-                cookie="", token=None, hg_token="", record_id=None,
-                skland_user_id="", last_cred_request_time=None,
+                session,
+                user_id,
+                bot_id,
+                uid,
+                game_id=ARKNIGHTS_CHANNEL_OFFICIAL,
+                login_disabled=True,
+                cookie="",
+                token=None,
+                hg_token="",
+                record_id=None,
+                skland_user_id="",
+                last_cred_request_time=None,
                 cookie_status="已删除",
             )
             if not saved:
@@ -582,11 +636,14 @@ class ArkCommandAlias(SQLModel, table=True):
         if result.rowcount:
             await session.commit()
             return
-        session.add(cls(alias=alias, target=target))
         try:
-            await session.flush()
+            async with session.begin_nested():
+                session.add(cls(alias=alias, target=target))
+                await session.flush()
         except IntegrityError:
-            await session.rollback()
+            check = await session.execute(select(cls).where(cls.alias == alias))
+            if check.scalars().first() is None:
+                raise
             await session.execute(stmt)
         await session.commit()
 
@@ -618,13 +675,42 @@ async def _ark_auto_migrate() -> None:
     本钩子通过对比"模型列 vs 实表列"补齐缺的列，幂等。
     随后为 ArkUser 补建 (bot_id, user_id, uid) 唯一索引（先清理旧版
     update_data 全行覆盖 bug 留下的重复行），幂等。
+
+    补列结果由本钩子显式消费：宿主对 start 钩子的 gather 不
+    消费返回值，这里失败自己记 error 并按依赖跳过——涉及缺列表的索引
+    迁移与明文重加密跳过（下次启动重试），不依赖缺列的密钥 warmup 照常。
     """
-    await auto_add_missing_columns(__name__, log_prefix="[ARK·补列]")
-    await ensure_ark_user_unique_index(log_prefix="[ARK·唯一索引]")
-    await ensure_ark_alias_unique_index()
-    # 密钥首建/自愈的同步等待在线程内完成（避免落回事件循环）
+    result = await auto_add_missing_columns(__name__, log_prefix="[ARK·补列]")
+    ark_user_table = ArkUser.__table__.name
+    ark_alias_table = ArkAlias.__table__.name
+    ark_cmd_alias_table = ArkCommandAlias.__table__.name
+    inspection_unknown = not result.ok and (
+        "<inspect>" in result.failures or not result.failures
+    )
+    if not result.ok:
+        logger.error(
+            f"[ARK·补列] 自动补列未完成: {result.summary}"
+            "——依赖缺列的迁移本启动跳过，下次启动重试"
+        )
+    if result.ok or (not inspection_unknown and ark_user_table not in result.failures):
+        await ensure_ark_user_unique_index(log_prefix="[ARK·唯一索引]")
+    else:
+        logger.warning("[ARK·唯一索引] 表列未就绪，本启动跳过")
+    if result.ok or (not inspection_unknown and ark_alias_table not in result.failures):
+        if result.ok or ark_cmd_alias_table not in result.failures:
+            await ensure_ark_alias_unique_index()
+        else:
+            await ensure_ark_alias_unique_index(include_command_alias=False)
+            logger.warning("[ARK·指令别名唯一索引] 表列未就绪，本启动跳过")
+    else:
+        logger.warning("[ARK·别名唯一索引] 表列未就绪，本启动跳过")
+    # 密钥首建/自愈的同步等待在线程内完成（避免落回事件循环）；不依赖表列
     await crypto_warmup()
-    # 存量明文凭据升级为密文（幂等；加密不可用时下轮启动再试）
+    # 存量明文凭据升级为密文（幂等；加密不可用时下轮启动再试）。
+    # ArkUser 缺列时 ORM 读写会失败，跳过本轮，下次启动再试。
+    if not result.ok and (inspection_unknown or ark_user_table in result.failures):
+        logger.warning("[ArknightsUID·加密] ArkUser 列未就绪，明文重加密本启动跳过")
+        return
     try:
         await ArkUser.reencrypt_plaintext_credentials()
     except Exception as exc:

@@ -11,6 +11,8 @@ dependencies = [
     # proxy= 关键字 0.26 才引入（utils/http.get_client）；0.23-0.25 上
     # 启用 LocalProxyUrl 会在首次请求抛 TypeError（审计 #32）
     "httpx>=0.26.0",
+    # 本地凭据与网页登录会话 AES-GCM 加密（utils/crypto）
+    "cryptography>=43.0.0",
 ]
 
 # OCR 截图识别（ark公招推荐 发图）是可选能力：代码运行时惰性导入，
