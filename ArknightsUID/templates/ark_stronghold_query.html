@@ -202,6 +202,24 @@
         </div>
         <div class="sq-effect">{{ effect }}</div>
 
+        {% elif kind == 'item' %}
+        <div class="titleblock">
+            <div>
+                <div class="eyebrow">{{ season }} · 卫戍道具</div>
+                <h1 class="title title--s">道具<em>{{ name }}</em></h1>
+            </div>
+            <img class="sticker" src="data:image/png;base64,{% include "assets/sticker_stage.b64" %}" alt="">
+        </div>
+
+        <div class="sq-head">
+            <div class="sq-icon">{% if icon_b64 %}<img src="{{ icon_b64 }}" alt="">{% endif %}</div>
+            <div>
+                <div class="sq-name">{{ name }}</div>
+                <div class="sq-sub">卫戍装备 / 道具效果</div>
+            </div>
+        </div>
+        <div class="sq-effect">{{ effect }}</div>
+
         {% else %}
         <div class="titleblock">
             <div>
@@ -250,6 +268,11 @@
             {% for m in modules %}<span class="chip chip--blue">{{ m.name }}</span>{% endfor %}
         </div>
         {% endif %}
+        {% if related_strategies %}
+        <div class="prose" style="margin-top: var(--space-2); font-size: 11px;">
+            关联初始策略：{% for rs in related_strategies %}<b>{{ rs.name }}</b>{% if not loop.last %}、{% endif %}{% endfor %}（可查：<b>ark卫戍攻略 策略 {{ name }}</b>）
+        </div>
+        {% endif %}
         {% endif %}
 
         {% if guides %}
@@ -263,13 +286,22 @@
             {% if g.tags %}
             <div class="gs">{{ g.tags | join(' / ') }}</div>
             {% endif %}
+            {% if g.rec_chars %}
+            <div class="gs">推荐阵容：{{ g.rec_chars | join(' · ') }}</div>
+            {% endif %}
+            {% if g.rec_items %}
+            <div class="gs">推荐装备：{{ g.rec_items | join(' · ') }}</div>
+            {% endif %}
+            {% if g.idea %}
+            <div class="bd" style="margin-top: 4px; font-size: 11px; line-height: 1.5; color: var(--tx-1);">{{ g.idea }}</div>
+            {% endif %}
             <div class="gs">by {{ g.poster }}{% if g.scope %} · {{ g.scope }}{% endif %}</div>
         </div>
         {% endfor %}
         {% endif %}
 
         <div class="prose" style="margin-top: var(--space-3); font-size: 11px;">
-            攻略详情与发布见森空岛「卫戍协议攻略」页 · 更多查询 <b>ark卫戍攻略 &lt;盟约/策略/干员&gt;</b> · 模式玩法 <b>ark卫戍攻略</b>
+            攻略详情与发布见森空岛「卫戍协议攻略」页 · 更多查询 <b>ark卫戍攻略 &lt;盟约/策略/干员/道具&gt;</b> · 模式玩法 <b>ark卫戍攻略</b>
         </div>
 
         <div class="foot">

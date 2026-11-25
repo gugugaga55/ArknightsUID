@@ -22,6 +22,7 @@ resource ~540KB：磁盘缓存 24h（赛季内资源稳定，新一期靠 TTL �
 
 from __future__ import annotations
 
+import asyncio
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -44,17 +45,20 @@ GARRISON_UA = (
 _GUIDE_CACHE_SECONDS = 24 * 3600
 GARRISON_CACHE_DIR = CACHE_PATH / "stronghold_guide"
 _RESOURCE_CACHE = GARRISON_CACHE_DIR / "resource.json"
+_resource_lock = asyncio.Lock()
 GUIDE_DETAIL_URL = (
     "https://game.skland.com/arknights/stronghold-guide/detail?guideId="
 )
 
-# 查询意图前缀（「核心盟约 炎」「策略 阿米娅」这类带类型限定的输入）
+# 查询意图前缀（「核心盟约 炎」「策略 阿米娅」「道具 演示锤」这类带类型限定的输入）
 _QUERY_PREFIXES = (
     "核心盟约",
     "附加盟约",
     "盟约",
     "策略",
     "干员",
+    "道具",
+    "装备",
 )
 
 # 组合查询分隔符：炎+不屈 / 炎、不屈 / 核心:炎|不屈（任意子集，条件间 AND）
@@ -169,6 +173,8 @@ class GarrisonGuideEntry:
     strategy_ids: list[str] = field(default_factory=list)
     season_bond_ids: list[str] = field(default_factory=list)
     regular_bond_ids: list[str] = field(default_factory=list)
+    rec_char_ids: list[tuple[str, int]] = field(default_factory=list)
+    rec_item_ids: list[str] = field(default_factory=list)
     url: str = ""
 
 
@@ -373,7 +379,7 @@ async def _fetch_json(url: str, params: dict[str, Any] | None = None) -> dict[st
 
 
 async def fetch_resource(force: bool = False) -> GarrisonResource | None:
-    """拉取（或读 24h 缓存的）卫戍攻略静态资源。
+    """拉取（或读 24h 缓存的）卫戍攻略静态资源（带 single-flight 并发锁）。
 
     拉取失败但存在过期缓存时降级用旧数据（赛季内资源高度稳定）。
     """
@@ -385,17 +391,25 @@ async def fetch_resource(force: bool = False) -> GarrisonResource | None:
         if cached is not None and is_fresh(saved_ts, _GUIDE_CACHE_SECONDS):
             return parse_resource(cached)
 
-    payload = await _fetch_json(RESOURCE_URL)
-    if payload is not None and payload.get("code") == 0:
-        data = payload.get("data")
-        if _resource_well_formed(data):
-            GARRISON_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-            await cache_write(_RESOURCE_CACHE, data)
-            return parse_resource(data)
-        logger.warning("[ArknightsUID] 卫戍攻略资源结构异常，未写入缓存")
-    if cached is not None:
-        return parse_resource(cached)
-    return None
+    async with _resource_lock:
+        if not force:
+            cached, saved_ts = await cache_read(_RESOURCE_CACHE)
+            if cached is not None and not _resource_well_formed(cached):
+                cached = None
+            if cached is not None and is_fresh(saved_ts, _GUIDE_CACHE_SECONDS):
+                return parse_resource(cached)
+
+        payload = await _fetch_json(RESOURCE_URL)
+        if payload is not None and payload.get("code") == 0:
+            data = payload.get("data")
+            if _resource_well_formed(data):
+                GARRISON_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                await cache_write(_RESOURCE_CACHE, data)
+                return parse_resource(data)
+            logger.warning("[ArknightsUID] 卫戍攻略资源结构异常，未写入缓存")
+        if cached is not None:
+            return parse_resource(cached)
+        return None
 
 
 def _parse_guide_entry(item: dict[str, Any]) -> GarrisonGuideEntry | None:
@@ -413,6 +427,24 @@ def _parse_guide_entry(item: dict[str, Any]) -> GarrisonGuideEntry | None:
             if tab_idea:
                 raw_idea = tab_idea
                 break
+
+    rec_char_ids: list[tuple[str, int]] = []
+    rec_item_ids: list[str] = []
+    for tab in tabs:
+        raw_chars = _dict_entries(tab.get("recChars"))
+        if raw_chars and not rec_char_ids:
+            for rc in raw_chars:
+                cid = str(rc.get("charId") or "")
+                if cid:
+                    rec_char_ids.append((cid, _to_int(rc.get("mergeLevel"))))
+        raw_items = _dict_entries(tab.get("recItems"))
+        if raw_items and not rec_item_ids:
+            for ri in raw_items:
+                iid = str(ri.get("itemId") or "")
+                if iid and iid not in rec_item_ids:
+                    rec_item_ids.append(iid)
+        if rec_char_ids and rec_item_ids:
+            break
 
     season_bond_ids: list[str] = []
     regular_bond_ids: list[str] = []
@@ -443,6 +475,8 @@ def _parse_guide_entry(item: dict[str, Any]) -> GarrisonGuideEntry | None:
         strategy_ids=[str(s) for s in guide.get("strategyIds") or []],
         season_bond_ids=season_bond_ids,
         regular_bond_ids=regular_bond_ids,
+        rec_char_ids=rec_char_ids,
+        rec_item_ids=rec_item_ids,
         url=f"{GUIDE_DETAIL_URL}{guide_id}" if guide_id else "",
     )
 
@@ -571,6 +605,9 @@ def resolve_combo(
         if prefix == "干员":
             errors.append(f"「{keyword}」：组合查询不支持干员（干员走单查询）")
             continue
+        if prefix in ("道具", "装备"):
+            errors.append(f"「{keyword}」：组合查询不支持道具（道具走单查询）")
+            continue
         # 带类型前缀时用通用盟约池解析后自行核对类型，错型给明确报错
         # （「核心盟约 不屈」：不屈其实是附加盟约）
         lookup_prefix = "盟约" if prefix in ("核心盟约", "附加盟约") else (
@@ -642,18 +679,27 @@ def resolve_combo(
     }
 
 
+def _related_strategies(
+    resource: GarrisonResource, char_name: str
+) -> list[GarrisonStrategy]:
+    if not char_name:
+        return []
+    return [s for s in resource.strategies.values() if s.initiator == char_name]
+
+
 def resolve_query(
     resource: GarrisonResource, keyword: str, prefix: str = ""
 ) -> dict[str, Any]:
     """查询解析：意图限定（prefix）或全维度匹配。
 
-    返回 {kind: bond|strategy|char|ambiguous|none, ...}；kind=ambiguous 时
+    返回 {kind: bond|strategy|char|item|ambiguous|none, ...}；kind=ambiguous 时
     带 candidates（候选名列表）；命中时带对应对象与（策略/盟约的）关联攻略
     需另行 fetch（调用方控制网络次数）。
     """
     want_bond = prefix in ("核心盟约", "附加盟约", "盟约")
     want_strategy = prefix == "策略"
     want_char = prefix == "干员"
+    want_item = prefix in ("道具", "装备")
 
     if want_bond:
         pool = [
@@ -680,6 +726,13 @@ def resolve_query(
         if len(by_initiator) == 1:
             return {"kind": "strategy",
                     "strategy": resource.strategies[by_initiator[0]]}
+        if len(by_initiator) > 1:
+            return {
+                "kind": "ambiguous",
+                "candidates": sorted(
+                    {resource.strategies[sid].name for sid in by_initiator}
+                )[:8],
+            }
         pool = [(s.strategy_id, s.name) for s in resource.strategies.values()]
         key, candidates = _match_exact_then_contains(pool, keyword)
         if key:
@@ -695,50 +748,103 @@ def resolve_query(
         pool = [(c.char_id, c.name) for c in resource.chars.values()]
         key, candidates = _match_exact_then_contains(pool, keyword)
         if key:
-            return {"kind": "char", "char": resource.chars[key]}
+            char = resource.chars[key]
+            return {
+                "kind": "char",
+                "char": char,
+                "related_strategies": _related_strategies(resource, char.name),
+            }
         return {"kind": "ambiguous" if candidates else "none",
                 "candidates": candidates}
 
-    # 无前缀：优先全维度精确匹配，其次正向子串（keyword in name），最后多字反向包含，
-    # 防止单字盟约（如「炎」）劫持「炎客」「炎狱炎熔」等干员查询。
+    if want_item:
+        pool = [
+            (iid, str(info.get("name") or ""))
+            for iid, info in resource.items.items()
+        ]
+        key, candidates = _match_exact_then_contains(pool, keyword)
+        if key:
+            return {"kind": "item", "item_id": key, "item": resource.items[key]}
+        return {"kind": "ambiguous" if candidates else "none",
+                "candidates": candidates}
+
+    # 无前缀精确匹配顺序：盟约名 → 策略名 → 本期参战干员（附带同名发起人策略提示）
+    # → 卫戍道具 → 仅策略发起人（非本期参战干员，如凯尔希/可露希尔）。
     bond_exact = [b for b in resource.bonds.values() if b.name == keyword]
     if len(bond_exact) == 1:
         return {"kind": "bond", "bond": bond_exact[0]}
     strat_exact = [s for s in resource.strategies.values() if s.name == keyword]
     if len(strat_exact) == 1:
         return {"kind": "strategy", "strategy": strat_exact[0]}
+    char_exact = [c for c in resource.chars.values() if c.name == keyword]
+    if len(char_exact) == 1:
+        return {
+            "kind": "char",
+            "char": char_exact[0],
+            "related_strategies": _related_strategies(resource, char_exact[0].name),
+        }
+    item_exact = [
+        (iid, info)
+        for iid, info in resource.items.items()
+        if info.get("name") == keyword
+    ]
+    if len(item_exact) == 1:
+        return {
+            "kind": "item",
+            "item_id": item_exact[0][0],
+            "item": item_exact[0][1],
+        }
     strat_init_exact = [s for s in resource.strategies.values() if s.initiator == keyword]
     if len(strat_init_exact) == 1:
         return {"kind": "strategy", "strategy": strat_init_exact[0]}
-    char_exact = [c for c in resource.chars.values() if c.name == keyword]
-    if len(char_exact) == 1:
-        return {"kind": "char", "char": char_exact[0]}
     if len(strat_init_exact) > 1:
         return {
             "kind": "ambiguous",
             "candidates": sorted({s.name for s in strat_init_exact})[:8],
         }
 
-    # 第二轮：正向包含（keyword in name）按 盟约 → 策略 → 干员
+    # 第二轮：正向包含（keyword in name）按 盟约 → 策略名 → 参战干员 → 道具 → 策略发起人
     bond_fwd = [b for b in resource.bonds.values() if keyword in b.name]
     if len(bond_fwd) == 1:
         return {"kind": "bond", "bond": bond_fwd[0]}
     if len(bond_fwd) > 1:
         return {"kind": "ambiguous", "candidates": sorted({b.name for b in bond_fwd})[:8]}
-    strat_fwd = [
-        s
-        for s in resource.strategies.values()
-        if keyword in s.name or (s.initiator and keyword in s.initiator)
-    ]
+    strat_fwd = [s for s in resource.strategies.values() if keyword in s.name]
     if len(strat_fwd) == 1:
         return {"kind": "strategy", "strategy": strat_fwd[0]}
     if len(strat_fwd) > 1:
         return {"kind": "ambiguous", "candidates": sorted({s.name for s in strat_fwd})[:8]}
     char_fwd = [c for c in resource.chars.values() if keyword in c.name]
     if len(char_fwd) == 1:
-        return {"kind": "char", "char": char_fwd[0]}
+        return {
+            "kind": "char",
+            "char": char_fwd[0],
+            "related_strategies": _related_strategies(resource, char_fwd[0].name),
+        }
     if len(char_fwd) > 1:
         return {"kind": "ambiguous", "candidates": sorted({c.name for c in char_fwd})[:8]}
+    item_fwd = [
+        (iid, info)
+        for iid, info in resource.items.items()
+        if keyword in str(info.get("name") or "")
+    ]
+    if len(item_fwd) == 1:
+        return {"kind": "item", "item_id": item_fwd[0][0], "item": item_fwd[0][1]}
+    if len(item_fwd) > 1:
+        return {
+            "kind": "ambiguous",
+            "candidates": sorted({str(info.get("name") or "") for _, info in item_fwd})[:8],
+        }
+    strat_init_fwd = [
+        s for s in resource.strategies.values() if s.initiator and keyword in s.initiator
+    ]
+    if len(strat_init_fwd) == 1:
+        return {"kind": "strategy", "strategy": strat_init_fwd[0]}
+    if len(strat_init_fwd) > 1:
+        return {
+            "kind": "ambiguous",
+            "candidates": sorted({s.name for s in strat_init_fwd})[:8],
+        }
 
     # 第三轮：双字及以上反向包含兜底（单字如「炎」不做无前缀反向包含，防误伤未知词）
     for kind, pool_objs in (
@@ -747,10 +853,27 @@ def resolve_query(
         ("char", [c for c in resource.chars.values() if len(c.name) >= 2 and c.name in keyword]),
     ):
         if len(pool_objs) == 1:
-            return {"kind": kind, kind: pool_objs[0]}
+            extra = (
+                {"related_strategies": _related_strategies(resource, pool_objs[0].name)}
+                if kind == "char"
+                else {}
+            )
+            return {"kind": kind, kind: pool_objs[0], **extra}
         if len(pool_objs) > 1:
             return {
                 "kind": "ambiguous",
                 "candidates": sorted({o.name for o in pool_objs})[:8],
             }
+    item_rev = [
+        (iid, info)
+        for iid, info in resource.items.items()
+        if len(str(info.get("name") or "")) >= 2 and str(info.get("name") or "") in keyword
+    ]
+    if len(item_rev) == 1:
+        return {"kind": "item", "item_id": item_rev[0][0], "item": item_rev[0][1]}
+    if len(item_rev) > 1:
+        return {
+            "kind": "ambiguous",
+            "candidates": sorted({str(info.get("name") or "") for _, info in item_rev})[:8],
+        }
     return {"kind": "none", "candidates": []}

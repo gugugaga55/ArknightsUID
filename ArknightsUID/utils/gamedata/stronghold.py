@@ -112,14 +112,22 @@ BANDS: tuple[StrongholdBand, ...] = (
 BAND_INDEX: dict[str, StrongholdBand] = {b.id: b for b in BANDS}
 
 
-def band_name(band_id: str) -> str:
-    """小队 id → 中文名；未知 id 原样返回（上游新增小队时不至于空白）。"""
+def band_name(band_id: str, strategies: dict[str, Any] | None = None) -> str:
+    """小队 id → 中文名；优先从动态 strategies 表读取，其次静态 18 支表，最后回退原 id。"""
+    if strategies and band_id in strategies:
+        dyn_name = getattr(strategies[band_id], "name", "")
+        if dyn_name:
+            return str(dyn_name)
     band = BAND_INDEX.get(band_id)
     return band.name if band else band_id
 
 
-def band_icon(band_id: str) -> str:
-    """小队 id → 图标 URL；未知 id 返回空串（渲染层按无图标处理）。"""
+def band_icon(band_id: str, strategies: dict[str, Any] | None = None) -> str:
+    """小队 id → 图标 URL；优先从动态 strategies 表读取，未知 id 返回空串。"""
+    if strategies and band_id in strategies:
+        dyn_icon = getattr(strategies[band_id], "icon", "")
+        if dyn_icon:
+            return str(dyn_icon)
     band = BAND_INDEX.get(band_id)
     return band.icon if band else ""
 
@@ -209,7 +217,9 @@ def _to_str(value: Any) -> str:
     return str(value)
 
 
-def _parse_team(raw: Any) -> StrongholdTeam | None:
+def _parse_team(
+    raw: Any, strategies: dict[str, Any] | None = None
+) -> StrongholdTeam | None:
     if not isinstance(raw, dict):
         return None
     team_id = _to_str(raw.get("id"))
@@ -227,7 +237,7 @@ def _parse_team(raw: Any) -> StrongholdTeam | None:
         )
     return StrongholdTeam(
         id=team_id,
-        name=band_name(team_id),
+        name=band_name(team_id, strategies),
         pass_count=_to_int(raw.get("passCount")),
         shortest_round=_to_int(raw.get("shortestRound")),
         is_most_pass=bool(raw.get("isMostPass")),
@@ -236,7 +246,9 @@ def _parse_team(raw: Any) -> StrongholdTeam | None:
     )
 
 
-def parse_stronghold_info(data: Any) -> StrongholdStats | None:
+def parse_stronghold_info(
+    data: Any, strategies: dict[str, Any] | None = None
+) -> StrongholdStats | None:
     """解析 auto-chess 端点 data 字段；非 dict / 缺 userInfo 返回 None。"""
     if not isinstance(data, dict):
         return None
@@ -278,7 +290,9 @@ def parse_stronghold_info(data: Any) -> StrongholdStats | None:
                 continue
             teams = [
                 t
-                for t in (_parse_team(item) for item in block.get("teams") or [])
+                for t in (
+                    _parse_team(item, strategies) for item in block.get("teams") or []
+                )
                 if t is not None
             ]
             if teams:

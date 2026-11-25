@@ -57,6 +57,12 @@ from ArknightsUID.version import ArknightsUID_version
 stronghold_guide_sv = SV("ArknightsUID卫戍攻略", priority=5)
 stronghold_sv = SV("ArknightsUID卫戍", priority=5)
 
+# 战绩端点（arknights/auto-chess）门控：待真实凭据 stronghold_dump.json 实装校对后再开启
+_STRONGHOLD_RECORDS_ENABLED = False
+_RECORDS_GATED_HINT = (
+    "卫戍战绩接口待实装校对，当前可使用 ark卫戍攻略 <盟约|策略|干员|道具> 查询图鉴与社区攻略。"
+)
+
 # 每协议展示的小队条数（按通关次数降序；全 18 支上卡不可读）
 _TEAM_TOP_N = 3
 # 每支小队展示的击杀排行条数
@@ -68,9 +74,10 @@ _SOURCE_NOTE = "数据源 森空岛 · 攻略口径 PRTS Wiki"
 # 查询卡：盟约成员/攻略列表的展示上限
 _MEMBER_LIMIT = 12
 _GUIDE_LIMIT = 5
+_IDEA_MAX_LEN = 140
 _QUERY_HINT = (
-    "可查：盟约名（炎/不屈/乌萨斯）、策略名或发起干员（阿米娅）、本期干员名；"
-    "支持「核心盟约/附加盟约/策略/干员」前缀限定；多词条用 + 组合（炎+不屈+阿米娅）"
+    "可查：盟约名（炎/不屈/乌萨斯）、策略名或发起干员（阿米娅）、本期干员名、卫戍道具；"
+    "支持「核心盟约/附加盟约/策略/干员/道具」前缀限定；多词条用 + 组合（炎+不屈+阿米娅）"
 )
 
 
@@ -129,7 +136,9 @@ def _build_team_rows(teams: list) -> list[dict]:
 
 
 async def _build_records_context(
-    stats: StrongholdStats, shown_uid: str
+    stats: StrongholdStats,
+    shown_uid: str,
+    strategies: dict | None = None,
 ) -> dict:
     """战绩卡模板 context（含小队图标/头像 b64，失败回空不影响排版）。"""
     from ArknightsUID.utils.image import gather_b64
@@ -140,7 +149,7 @@ async def _build_records_context(
     icon_dir.mkdir(parents=True, exist_ok=True)
 
     async def _icon(band_id: str) -> str:
-        url = band_icon(band_id)
+        url = band_icon(band_id, strategies)
         if not url:
             return ""
         return await get_image_b64_with_cache(url, icon_dir)
@@ -222,12 +231,11 @@ def _format_records(stats: StrongholdStats, shown_uid: str) -> str:
     return "\n".join(lines)
 
 
-@stronghold_sv.on_command(("卫戍战绩",), block=True)
+@stronghold_sv.on_command(("卫戍战绩", "卫戎战绩", "自走棋战绩"), block=True)
 async def send_stronghold_records(bot: Bot, ev: Event) -> None:
-    """ark卫戍 [序号]：卫戍协议战绩卡（通关/最速/升金/击杀统计）。
-
-    数据与森空岛 App「卫戍协议数据」页同源；统计非实时（每日更新）。
-    """
+    """ark卫戍战绩 [序号]：卫戍协议战绩卡（受 _STRONGHOLD_RECORDS_ENABLED 门控）。"""
+    if not _STRONGHOLD_RECORDS_ENABLED:
+        return await _send_text(bot, ev, _RECORDS_GATED_HINT)
     try:
         _, uid, index = split_account(ev.text or "")
     except ValueError as exc:
@@ -235,7 +243,7 @@ async def send_stronghold_records(bot: Bot, ev: Event) -> None:
     await _send_stronghold_records(bot, ev, uid, index)
 
 
-@stronghold_sv.on_command(("卫戍",), block=True)
+@stronghold_sv.on_command(("卫戍", "卫戎", "自走棋"), block=True)
 async def send_stronghold_query(bot: Bot, ev: Event) -> None:
     try:
         query, uid, index = split_account(ev.text or "")
@@ -243,6 +251,8 @@ async def send_stronghold_query(bot: Bot, ev: Event) -> None:
         return await _send_text(bot, ev, str(exc))
     if query:
         return await _send_stronghold_guide(bot, ev, query)
+    if not _STRONGHOLD_RECORDS_ENABLED:
+        return await _send_stronghold_guide(bot, ev, "")
     await _send_stronghold_records(bot, ev, uid, index)
 
 
@@ -261,14 +271,16 @@ async def _send_stronghold_records(bot: Bot, ev: Event, uid: str, index: int) ->
         return await _send_text(
             bot, ev, f"卫戍战绩查询失败：code={code}，{message or '无详情'}"
         )
-    stats = parse_stronghold_info(response.get("data"))
+    resource = await fetch_resource()
+    strategies = resource.strategies if resource is not None else None
+    stats = parse_stronghold_info(response.get("data"), strategies=strategies)
     if stats is None:
         return await _send_text(
             bot, ev, "卫戍数据为空或结构未识别（可能未开放或未游玩该模式）。"
         )
 
     shown_uid = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
-    context = await _build_records_context(stats, shown_uid)
+    context = await _build_records_context(stats, shown_uid, strategies=strategies)
     text = _format_records(stats, shown_uid)
     await send_card_or_text(bot, ev, "ark_stronghold.html", context, text)
 
@@ -343,7 +355,7 @@ def _format_guide(guide: StrongholdGuide) -> str:
 
 
 def _guide_row(entry: GarrisonGuideEntry, resource: GarrisonResource) -> dict:
-    """攻略列表行（策略/盟约 id → 展示名）。"""
+    """攻略列表行（策略/盟约/阵容/装备 id → 展示名，运营思路压平截断）。"""
     strategy_names = [
         resource.strategies[s].name
         for s in entry.strategy_ids
@@ -354,13 +366,34 @@ def _guide_row(entry: GarrisonGuideEntry, resource: GarrisonResource) -> dict:
         for b in entry.season_bond_ids + entry.regular_bond_ids
         if b in resource.bonds
     ]
+    rec_chars: list[str] = []
+    for cid, merge_lv in entry.rec_char_ids:
+        char = resource.chars.get(cid)
+        label = char.name if char and char.name else cid
+        if label:
+            rec_chars.append(f"{label}★" if merge_lv else label)
+        if len(rec_chars) >= 6:
+            break
+    rec_items: list[str] = []
+    for iid in entry.rec_item_ids:
+        info = resource.items.get(iid)
+        label = str((info or {}).get("name") or "")
+        if label:
+            rec_items.append(label)
+        if len(rec_items) >= 4:
+            break
+    compact_idea = " ".join((entry.idea or "").split())
+    if len(compact_idea) > _IDEA_MAX_LEN:
+        compact_idea = compact_idea[:_IDEA_MAX_LEN] + "…"
     return {
         "title": entry.title,
         "poster": entry.poster,
         "liked": entry.liked,
         "scope": entry.scope,
         "tags": (strategy_names + bond_names)[:5],
-        "idea": entry.idea,
+        "rec_chars": rec_chars,
+        "rec_items": rec_items,
+        "idea": compact_idea,
         "url": entry.url,
     }
 
@@ -437,6 +470,12 @@ def _format_combo(context: dict) -> str:
             lines.append(
                 f"  · {g['title']} — {g['poster']} 赞{g['liked']}{suffix}"
             )
+            if g.get("rec_chars"):
+                lines.append(f"    推荐阵容：{' · '.join(g['rec_chars'])}")
+            if g.get("rec_items"):
+                lines.append(f"    推荐装备：{' · '.join(g['rec_items'])}")
+            if g.get("idea"):
+                lines.append(f"    思路：{g['idea']}")
     else:
         lines.append("暂无同时满足全部条件的攻略，试试放宽条件（去掉一两个词条）。")
     lines.append("攻略详情见森空岛卫戍攻略页 · 查询 ark卫戍攻略 <关键词>")
@@ -530,6 +569,10 @@ async def _build_query_context(
                     }
                     for b in char.bonds
                 ],
+                "related_strategies": [
+                    {"name": s.name, "initiator": s.initiator}
+                    for s in result.get("related_strategies") or []
+                ],
             }
         )
         # 干员维度无服务端过滤：标题关键词命中后本地再过滤一次
@@ -541,6 +584,17 @@ async def _build_query_context(
             for g in guides
             if char.name in g.title
         ][:_GUIDE_LIMIT]
+
+    elif kind == "item":
+        item_info: dict = result["item"]
+        context.update(
+            {
+                "kind": "item",
+                "name": str(item_info.get("name") or ""),
+                "icon": str(item_info.get("icon") or ""),
+                "effect": str(item_info.get("effect") or ""),
+            }
+        )
 
     await _fill_images(context)
     return context
@@ -564,6 +618,9 @@ def _format_query(context: dict) -> str:
             f"【卫戍策略】{context['name']}（发起：{context['initiator']}{hp}）"
         )
         lines.append(context["effect"])
+    elif kind == "item":
+        lines.append(f"【卫戍道具】{context['name']}")
+        lines.append(context["effect"])
     elif kind == "char":
         lines.append(
             f"【卫戍干员】{context['name']}（{context['profession']}）"
@@ -574,6 +631,12 @@ def _format_query(context: dict) -> str:
         for trait in context["traits"]:
             tag = "精锐" if trait["merge"] else "初始"
             lines.append(f"特质[{tag}]：{trait['desc']}")
+        rel = context.get("related_strategies") or []
+        if rel:
+            names = "、".join(s["name"] for s in rel)
+            lines.append(
+                f"关联初始策略：{names}（可查：ark卫戍攻略 策略 {context['name']}）"
+            )
     guides = context.get("guides") or []
     if guides:
         lines.append("◆ 社区攻略")
@@ -581,11 +644,44 @@ def _format_query(context: dict) -> str:
             tags = "/".join(g["tags"][:3])
             suffix = f"（{tags}）" if tags else ""
             lines.append(f"  · {g['title']} — {g['poster']} 赞{g['liked']}{suffix}")
+            if g.get("rec_chars"):
+                lines.append(f"    推荐阵容：{' · '.join(g['rec_chars'])}")
+            if g.get("rec_items"):
+                lines.append(f"    推荐装备：{' · '.join(g['rec_items'])}")
+            if g.get("idea"):
+                lines.append(f"    思路：{g['idea']}")
     lines.append("攻略详情见森空岛卫戍攻略页 · 查询 ark卫戍攻略 <关键词>")
     return "\n".join(line for line in lines if line.strip())
 
 
-@stronghold_guide_sv.on_command(("卫戍攻略",), block=True)
+async def _resolve_operator_keyword(ev: Event, keyword: str) -> str:
+    """将用户自定义干员别名 / 内置外号 / 已缓存干员索引代号归一为标准中文名。"""
+    from ArknightsUID.utils.gamedata.charinfo import (
+        CHARINDEX_PATH,
+        CURATED_ALIASES,
+        match_entries,
+    )
+    from ArknightsUID.utils.disk_cache import read_json
+    from ArknightsUID.utils.user_alias import apply_user_alias
+
+    mapped = await apply_user_alias(
+        getattr(ev, "bot_id", ""), getattr(ev, "user_id", ""), keyword
+    )
+    if mapped != keyword:
+        return mapped
+    curated = CURATED_ALIASES.get(keyword) or CURATED_ALIASES.get(keyword.lower())
+    if curated:
+        return curated
+    if CHARINDEX_PATH.exists():
+        cached = await read_json(CHARINDEX_PATH)
+        if isinstance(cached, dict) and cached:
+            hits = match_entries(keyword, cached)
+            if len(hits) == 1 and hits[0].get("name"):
+                return str(hits[0]["name"])
+    return keyword
+
+
+@stronghold_guide_sv.on_command(("卫戍攻略", "卫戎攻略", "自走棋攻略"), block=True)
 async def send_stronghold_guide(bot: Bot, ev: Event) -> None:
     """ark卫戍攻略 [关键词]：总览卡 / 结构化查询卡 / 组合筛选卡。
 
@@ -637,12 +733,16 @@ async def _send_stronghold_guide(bot: Bot, ev: Event, query: str) -> None:
 
     prefix, keyword = strip_query_prefix(query)
     result = resolve_query(resource, keyword, prefix)
+    if result["kind"] == "none" and prefix in ("", "干员"):
+        aliased = await _resolve_operator_keyword(ev, keyword)
+        if aliased != keyword:
+            result = resolve_query(resource, aliased, prefix or "干员")
     kind = result["kind"]
     if kind == "ambiguous":
         candidates = "、".join(result["candidates"][:8])
         return await _send_text(
             bot, ev, f"「{keyword}」有多个候选：{candidates}\n请用更精确的名称"
-            "或加「核心盟约/附加盟约/策略/干员」前缀限定。"
+            "或加「核心盟约/附加盟约/策略/干员/道具」前缀限定。"
         )
     if kind == "none":
         return await _send_text(bot, ev, f"未找到「{keyword}」。\n{_QUERY_HINT}")
