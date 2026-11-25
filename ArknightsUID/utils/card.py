@@ -15,10 +15,12 @@ from jinja2 import TemplateNotFound
 
 from .config import ArkConfig
 from .enduid.adapter import ArkCredential, resolve_credential
+from .registration import swap_ark_prefix
 
 
 async def send_text(bot: Bot, ev: Event, msg: str) -> None:
-    """文本回复：群聊加前导空格并 @发送者（防空格被吞），私聊原样发送。"""
+    """文本回复：按当前生效前缀归一命令用法，群聊加前导空格并 @发送者。"""
+    msg = swap_ark_prefix(msg)
     await bot.send((" " if ev.group_id else "") + msg, at_sender=bool(ev.group_id))
 
 

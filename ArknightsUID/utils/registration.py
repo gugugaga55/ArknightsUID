@@ -14,16 +14,50 @@
 
 from __future__ import annotations
 
+import re
+
 registered: bool = False
 
 SENSITIVE_URL_COMMANDS = frozenset({"导入抽卡", "小黑盒导入", "小黑盒抽卡导入"})
 SENSITIVE_CRED_COMMANDS = frozenset({"绑定", "绑定登录"})
 _DEFAULT_FORCE_PREFIXES = ("ark", "方舟", "明日方舟")
+_ARK_CMD_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9_/:.-])ark(?=[\u4e00-\u9fff]|wiki\b|BOX\b|box\b)"
+)
 
 
 def mark_registered() -> None:
     global registered
     registered = True
+
+
+def effective_prefix() -> str:
+    """本次展示用的生效命令前缀（单一事实源，兼容占位期与裸命令模式）。"""
+    from gsuid_core.sv import SL
+
+    plugin = SL.plugins.get("ArknightsUID")
+    if plugin is None:
+        return "ark"
+    prefixes: list[str] = []
+    if not plugin.disable_force_prefix:
+        prefixes.extend(p for p in plugin.force_prefix if p)
+    prefixes.extend(p for p in plugin.prefix if p)
+    if plugin.allow_empty_prefix:
+        prefixes.append("")
+    if not prefixes:
+        return "" if registered else "ark"
+    for prefix in prefixes:
+        if prefix:
+            return prefix
+    return ""
+
+
+def swap_ark_prefix(text: str, prefix: str | None = None) -> str:
+    """将文本中的命令前缀 ark 动态替换为当前生效前缀（不误伤英文单词或 URL 路径）。"""
+    active = effective_prefix() if prefix is None else prefix
+    if active == "ark" or "ark" not in text:
+        return text
+    return _ARK_CMD_TOKEN_RE.sub(active, text)
 
 
 def current_plugin_prefixes() -> tuple[str, ...]:
