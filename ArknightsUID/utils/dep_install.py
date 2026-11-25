@@ -33,98 +33,109 @@ def _req_name(spec: str) -> str:
     except Exception:
         return re.split(r"[<>=!~;\[\s]", spec.strip(), maxsplit=1)[0].strip().lower()
 
-# 友好别名 → 依赖名（pyproject 里没有但用户顺口会打的词）
-_ALIAS = {"ocr": "rapidocr", "截图识别": "rapidocr"}
+# 友好别名 → 依赖组名/依赖名（pyproject 里没有但用户顺口会打的词，以及把单组件收敛到整组）
+_ALIAS = {"截图识别": "ocr", "rapidocr": "ocr", "onnxruntime": "ocr"}
 
 _install_lock = asyncio.Lock()
 
 # pyproject 解析失败时的静态兜底（正常不会走到；防止 pyproject 被挪走
 # 后命令直接不可用）
-_FALLBACK_SPECS: list[tuple[str, str]] = [
-    ("rapidocr", "rapidocr[onnxruntime]>=3.0.0"),
-    ("ocr", "rapidocr[onnxruntime]>=3.0.0"),
-    ("takumi", "pytakumi>=0.1.4"),
-    ("pytakumi", "pytakumi>=0.1.4"),
+_FALLBACK_GROUPS: list[tuple[str, tuple[str, ...]]] = [
+    ("ocr", ("rapidocr>=3.0.0", "onnxruntime>=1.16.0")),
+    ("takumi", ("pytakumi>=0.1.4",)),
+    ("pytakumi", ("pytakumi>=0.1.4",)),
 ]
 
 
 class DepEntry(NamedTuple):
     keys: list[str]  # 可用匹配名（含别名/组名，小写）
-    spec: str  # pip 安装规格
-    module: str  # 导入验证用的模块名
+    specs: tuple[str, ...]  # pip 安装规格组
+    modules: tuple[str, ...]  # 导入验证用的模块名组
     installed: bool
 
+    @property
+    def spec(self) -> str:
+        return " ".join(self.specs)
 
-def _declared_specs() -> list[tuple[str, str]]:
-    """(匹配名, pip 规格) 列表：主依赖 + 可选组（extras 组名也算匹配名）。"""
+
+def _declared_groups() -> list[tuple[str, tuple[str, ...]]]:
+    """(匹配名, pip 规格元组) 列表：主依赖 + 可选组（组名与组内包名统一映射到整组）。"""
     try:
         import tomllib
 
         with open(_PYPROJECT, "rb") as f:
             data: dict[str, Any] = tomllib.load(f)
         project = data.get("project", {})
-        pairs: list[tuple[str, str]] = []
+        pairs: list[tuple[str, tuple[str, ...]]] = []
         for spec in project.get("dependencies", []):
-            pairs.append((_req_name(spec), str(spec)))
+            pairs.append((_req_name(spec), (str(spec),)))
         for group, group_specs in (project.get("optional-dependencies") or {}).items():
-            for spec in group_specs:
-                pairs.append((str(group).lower(), str(spec)))
-                pairs.append((_req_name(spec), str(spec)))
+            specs_tuple = tuple(str(s) for s in group_specs)
+            if not specs_tuple:
+                continue
+            pairs.append((str(group).lower(), specs_tuple))
+            for spec in specs_tuple:
+                pairs.append((_req_name(spec), specs_tuple))
         if pairs:
             return pairs
     except Exception as e:  # noqa: BLE001 - 解析失败走静态兜底
         logger.warning(f"[ArknightsUID·依赖] pyproject 解析失败，用静态兜底: {e}")
-    return _FALLBACK_SPECS
+    return _FALLBACK_GROUPS
 
 
 def _module_name(spec: str) -> str:
     return _req_name(spec).replace("-", "_")
 
 
-def is_installed(module: str) -> bool:
-    """模块当前是否可导入（依赖懒装后即时可见，调用前需 invalidate_caches）。"""
-    return importlib.util.find_spec(module) is not None
+def is_installed(modules: str | tuple[str, ...]) -> bool:
+    """模块（组）当前是否全部可导入（依赖懒装后即时可见，调用前需 invalidate_caches）。"""
+    if isinstance(modules, str):
+        modules = (modules,)
+    return bool(modules) and all(
+        importlib.util.find_spec(m) is not None for m in modules
+    )
 
 
-def resolve_dependency(name: str) -> tuple[str, str] | None:
-    """用户输入 → (pip 规格, 模块名)。不在白名单返回 None。"""
+def resolve_dependency(name: str) -> tuple[tuple[str, ...], tuple[str, ...]] | None:
+    """用户输入 → (pip 规格元组, 模块名元组)。不在白名单返回 None。"""
     key = name.strip().lower()
     key = _ALIAS.get(key, key)
     if not key:
         return None
-    for match_key, spec in _declared_specs():
+    for match_key, specs in _declared_groups():
         if match_key == key:
-            return spec, _module_name(spec)
+            return specs, tuple(_module_name(s) for s in specs)
     return None
 
 
 def dependency_status() -> list[DepEntry]:
     """全部可装依赖的安装状态（无参数用法时的列表输出）。"""
-    by_spec: dict[str, DepEntry] = {}
-    for key, spec in _declared_specs():
-        module = _module_name(spec)
-        entry = by_spec.get(spec)
+    by_specs: dict[tuple[str, ...], DepEntry] = {}
+    for key, specs in _declared_groups():
+        modules = tuple(_module_name(s) for s in specs)
+        entry = by_specs.get(specs)
         if entry is None:
             entry = DepEntry(
                 keys=[],
-                spec=spec,
-                module=module,
-                installed=importlib.util.find_spec(module) is not None,
+                specs=specs,
+                modules=modules,
+                installed=is_installed(modules),
             )
-            by_spec[spec] = entry
+            by_specs[specs] = entry
         if key not in entry.keys:
             entry.keys.append(key)
     # 友好别名并入对应条目（resolve 认的别名在列表里也要能看见）
-    for alias, dep in _ALIAS.items():
-        for entry in by_spec.values():
-            if _req_name(entry.spec) == dep:
-                if alias not in entry.keys:
-                    entry.keys.append(alias)
-    return list(by_spec.values())
+    for alias, target_key in _ALIAS.items():
+        for entry in by_specs.values():
+            if target_key in entry.keys and alias not in entry.keys:
+                entry.keys.append(alias)
+    return list(by_specs.values())
 
 
-def _pip_install_and_verify(spec: str, module: str) -> bool:
-    """同步执行：core 同款多镜像 pip 安装 + 导入验证（放线程里跑）。"""
+def _pip_install_and_verify(
+    specs: tuple[str, ...], modules: tuple[str, ...]
+) -> bool:
+    """同步执行：core 同款多镜像 pip 安装 + 全模块导入验证（放线程里跑）。"""
     try:
         from gsuid_core.server import install_packages
     except ImportError as exc:
@@ -133,27 +144,29 @@ def _pip_install_and_verify(spec: str, module: str) -> bool:
             f"[ArknightsUID·依赖] core 安装器不可用: {exc.__class__.__name__}"
         )
         return False
-    install_packages([spec])
+    install_packages(list(specs))
     importlib.invalidate_caches()
-    return importlib.util.find_spec(module) is not None
+    return all(importlib.util.find_spec(m) is not None for m in modules)
 
 
 async def install_dependency(name: str) -> tuple[bool, str]:
-    """装一个白名单依赖。返回 (成功?, 面向用户的消息)。"""
+    """装一个白名单依赖（组）。返回 (成功?, 面向用户的消息)。"""
     resolved = resolve_dependency(name)
     if resolved is None:
         known = "、".join("/".join(entry.keys) for entry in dependency_status())
         return False, f"未知依赖名「{name.strip()}」。可用：{known}"
-    spec, module = resolved
-    if importlib.util.find_spec(module) is not None:
-        return True, f"{module} 已安装，无需重复安装。"
+    specs, modules = resolved
+    if is_installed(modules):
+        return True, f"{'/'.join(modules)} 已安装，无需重复安装。"
     if _install_lock.locked():
         return False, "已有安装任务进行中，请等它结束再试。"
     async with _install_lock:
-        ok = await asyncio.to_thread(_pip_install_and_verify, spec, module)
+        ok = await asyncio.to_thread(_pip_install_and_verify, specs, modules)
+    joined = " + ".join(specs)
     if ok:
-        return True, f"✅ {spec} 安装成功，相关功能即时可用（无需重启）。"
+        return True, f"✅ {joined} 安装成功，相关功能即时可用（无需重启）。"
+    pip_args = " ".join(f'"{s}"' for s in specs)
     return False, (
-        f"❌ {spec} 安装失败（所有镜像源均不可用？）。"
-        f'可稍后重试，或手动执行：pip install "{spec}"'
+        f"❌ {joined} 安装失败（所有镜像源均不可用？）。"
+        f"可稍后重试，或手动执行：pip install {pip_args}"
     )

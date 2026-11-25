@@ -21,7 +21,8 @@ dependencies = [
 # 可选渲染引擎：RenderEngine=takumi 时需要（未安装自动回退 playwright）。
 [project.optional-dependencies]
 ocr = [
-    "rapidocr[onnxruntime]>=3.0.0",
+    "rapidocr>=3.0.0",
+    "onnxruntime>=1.16.0",
 ]
 takumi = [
     "pytakumi>=0.1.4",

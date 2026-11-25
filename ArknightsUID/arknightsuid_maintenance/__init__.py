@@ -273,10 +273,10 @@ async def install_dependency_command(bot: Bot, ev: Event) -> None:
         return await _send_text(
             bot, ev, f"未知依赖名「{arg}」，发送 ark安装依赖 查看可用列表。"
         )
-    spec, module = resolved
-    if dep_install.is_installed(module):
-        return await _send_text(bot, ev, f"{module} 已安装，无需重复安装。")
-    await _send_text(bot, ev, f"正在安装 {spec}（多镜像回退，约需 1-2 分钟）…")
+    specs, modules = resolved
+    if dep_install.is_installed(modules):
+        return await _send_text(bot, ev, f"{'/'.join(modules)} 已安装，无需重复安装。")
+    await _send_text(bot, ev, f"正在安装 {' + '.join(specs)}（多镜像回退，约需 1-2 分钟）…")
     ok, msg = await dep_install.install_dependency(arg)
     await _send_text(bot, ev, msg)
 

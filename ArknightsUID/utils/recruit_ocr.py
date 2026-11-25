@@ -27,6 +27,7 @@ import asyncio
 import base64
 import binascii
 import difflib
+import importlib.util
 import io
 import re
 import threading
@@ -87,12 +88,11 @@ class TagOcrResult(NamedTuple):
 
 
 def ocr_available() -> bool:
-    """rapidocr 是否已安装（可选依赖，未装时命令层回退文字输入）。"""
-    try:
-        import rapidocr  # noqa: F401
-    except ImportError:
-        return False
-    return True
+    """rapidocr 与 onnxruntime 均已安装时才可用（未装齐时回退文字输入）。"""
+    return (
+        importlib.util.find_spec("rapidocr") is not None
+        and importlib.util.find_spec("onnxruntime") is not None
+    )
 
 
 def _get_engine() -> Any:
@@ -183,9 +183,10 @@ async def _materialize(source: str) -> bytes | None:
 
     source = source.strip()
     if source.startswith(("http://", "https://")):
-        return await safe_download_bytes(
+        raw = await safe_download_bytes(
             source, max_bytes=_MAX_IMAGE_BYTES, timeout=SAFE_DOWNLOAD_TIMEOUT
         )
+        return raw if raw and _looks_like_image(raw) else None
     if source.startswith("base64://"):
         b64 = source[len("base64://") :]
     elif source.startswith("data:image/"):
@@ -202,7 +203,9 @@ async def _materialize(source: str) -> bytes | None:
         data = base64.b64decode(b64)
     except (binascii.Error, ValueError):
         return None
-    return data if len(data) <= _MAX_IMAGE_BYTES else None
+    if len(data) > _MAX_IMAGE_BYTES or not _looks_like_image(data):
+        return None
+    return data
 
 
 async def extract_recruit_tags(
