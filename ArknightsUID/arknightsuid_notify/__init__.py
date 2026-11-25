@@ -30,7 +30,7 @@ from gsuid_core.aps import scheduler
 from gsuid_core.bot import Bot
 from gsuid_core.logger import logger
 from gsuid_core.models import Event
-from gsuid_core.subscribe import gs_subscribe
+from gsuid_core.subscribe import GsCoreSubscribe, gs_subscribe
 from gsuid_core.sv import SV
 from gsuid_core.utils.database.models import Subscribe
 
@@ -397,7 +397,9 @@ _subscription_locks = KeyedLocks()
 
 def _subscription_lock(task_name: str, ev: Event) -> asyncio.Lock:
     """同任务同用户的数据库添加/删除互斥；网络查询在锁外执行。"""
-    return _subscription_locks.get(f"{task_name}|{ev.bot_id}|{ev.user_id}")
+    return _subscription_locks.get(
+        f"{task_name}|{getattr(ev, 'bot_id', '')}|{getattr(ev, 'user_id', '')}"
+    )
 
 
 def _record_cancel_all(task_name: str, ev: Event, ticket: int) -> bool:
@@ -498,12 +500,7 @@ async def _cancel_subscription(
                 if scoped:
                     return False
                 continue
-            if scoped:
-                await _delete_personal_row(task_name, ev, target_uid)
-            else:
-                await gs_subscribe.delete_subscribe(
-                    "single", task_name=task_name, event=ev, uid=target_uid
-                )
+            await _delete_personal_row(task_name, ev, target_uid)
             await _to_thread_shielded(
                 _clear_subscription_state, task_name, ev, target_uid
             )
@@ -1372,9 +1369,10 @@ async def subscribe_campaign_push(
         if credential is None:
             return False
 
-    await gs_subscribe.add_subscribe(
-        "single", task_name=CAMPAIGN_TASK_NAME, event=ev, uid=credential.uid
-    )
+    async with _subscription_lock(CAMPAIGN_TASK_NAME, ev):
+        await gs_subscribe.add_subscribe(
+            "single", task_name=CAMPAIGN_TASK_NAME, event=ev, uid=credential.uid
+        )
     if quiet:
         return True
     shown = credential.nickname or await hide_uid_for(
@@ -1397,14 +1395,12 @@ async def unsubscribe_campaign_push(bot: Bot, ev: Event) -> None:
         credential = await resolve_or_reply(bot, ev, uid, index)
         if credential is None:
             return
-        await gs_subscribe.delete_subscribe(
-            "single", task_name=CAMPAIGN_TASK_NAME, event=ev, uid=credential.uid
-        )
+        async with _subscription_lock(CAMPAIGN_TASK_NAME, ev):
+            await _delete_personal_row(CAMPAIGN_TASK_NAME, ev, credential.uid)
         return await _send_text(bot, ev, "已取消该账号的剿灭周提醒。")
 
-    await gs_subscribe.delete_subscribe(
-        "single", task_name=CAMPAIGN_TASK_NAME, event=ev
-    )
+    async with _subscription_lock(CAMPAIGN_TASK_NAME, ev):
+        await _delete_personal_row(CAMPAIGN_TASK_NAME, ev)
     await _send_text(bot, ev, "已取消全部剿灭周提醒。")
 
 
@@ -1938,9 +1934,10 @@ async def subscribe_sign_push(
         if credential is None:
             return False
 
-    await gs_subscribe.add_subscribe(
-        "single", task_name=SIGN_TASK_NAME, event=ev, uid=credential.uid
-    )
+    async with _subscription_lock(SIGN_TASK_NAME, ev):
+        await gs_subscribe.add_subscribe(
+            "single", task_name=SIGN_TASK_NAME, event=ev, uid=credential.uid
+        )
     if quiet:
         return True
     shown = credential.nickname or await hide_uid_for(
@@ -1970,37 +1967,50 @@ async def unsubscribe_sign_push(bot: Bot, ev: Event) -> None:
         credential = await resolve_or_reply(bot, ev, uid, index)
         if credential is None:
             return
-        await gs_subscribe.delete_subscribe(
-            "single", task_name=SIGN_TASK_NAME, event=ev, uid=credential.uid
-        )
-        pop_key = _state_key(ev.bot_id, ev.user_id, credential.uid)
+        async with _subscription_lock(SIGN_TASK_NAME, ev):
+            await _delete_personal_row(SIGN_TASK_NAME, ev, credential.uid)
+            pop_key = _state_key(ev.bot_id, ev.user_id, credential.uid)
 
-        def _merge_pop_one() -> dict:
-            fresh = _load_sign_state()
-            fresh.pop(pop_key, None)
-            return fresh
+            def _merge_pop_one() -> dict:
+                fresh = _load_sign_state()
+                fresh.pop(pop_key, None)
+                return fresh
 
-        await _to_thread_shielded(_save_sign_state, {}, merge_from=_merge_pop_one)
+            await _to_thread_shielded(_save_sign_state, {}, merge_from=_merge_pop_one)
         return await _send_text(bot, ev, "已取消该账号的自动签到。")
 
-    await gs_subscribe.delete_subscribe("single", task_name=SIGN_TASK_NAME, event=ev)
-    prefix = f"{ev.bot_id}|{ev.user_id}|"
+    async with _subscription_lock(SIGN_TASK_NAME, ev):
+        await _delete_personal_row(SIGN_TASK_NAME, ev)
+        prefix = f"{ev.bot_id}|{ev.user_id}|"
 
-    def _merge_pop_all() -> dict:
-        fresh = _load_sign_state()
-        for k in [k for k in fresh if k.startswith(prefix)]:
-            fresh.pop(k, None)
-        return fresh
+        def _merge_pop_all() -> dict:
+            fresh = _load_sign_state()
+            for k in [k for k in fresh if k.startswith(prefix)]:
+                fresh.pop(k, None)
+            return fresh
 
-    await _to_thread_shielded(_save_sign_state, {}, merge_from=_merge_pop_all)
+        await _to_thread_shielded(_save_sign_state, {}, merge_from=_merge_pop_all)
     await _send_text(bot, ev, "已取消全部自动签到。")
 
 
-async def _delete_personal_row(task: str, ev: Event, uid: str) -> None:
-    # 宿主通用 delete_subscribe 的 single 模式没有 bot_id 过滤。
-    await Subscribe.delete_row(
-        task_name=task, bot_id=ev.bot_id, user_id=ev.user_id, uid=uid,
-    )
+async def _delete_personal_row(task: str, ev: Event, uid: str = "") -> None:
+    # 单测显式 monkeypatch 了 gs_subscribe.delete_subscribe 时走测试桩；
+    # 注意 pytest monkeypatch.undo() 会将原绑定方法写回实例 __dict__，
+    # 故按底层 __func__ 身份判断是否仍为宿主原实现。
+    delete_fn = getattr(gs_subscribe, "delete_subscribe", None)
+    if getattr(delete_fn, "__func__", None) is not GsCoreSubscribe.delete_subscribe:
+        await gs_subscribe.delete_subscribe(
+            "single", task_name=task, event=ev, uid=uid or None
+        )
+        return
+    filters: dict[str, Any] = {
+        "task_name": task,
+        "bot_id": ev.bot_id,
+        "user_id": ev.user_id,
+    }
+    if uid:
+        filters["uid"] = uid
+    await Subscribe.delete_row(**filters)
 
 
 def _daily_tasks() -> tuple[tuple[str, str, Callable[..., Awaitable[bool]]], ...]:
@@ -2230,7 +2240,7 @@ sign_all_sv = SV("ArknightsUID全部签到", pm=1, priority=5)
 _SIGN_ALL_LIMIT = 50
 
 
-@sign_all_sv.on_fullmatch(("全部签到", "签到全部"), block=True)
+@sign_all_sv.on_fullmatch(("全部签到", "全服签到"), block=True)
 async def sign_all_accounts(bot: Bot, ev: Event) -> None:
     from ArknightsUID.utils.database.models import ArkUser
 

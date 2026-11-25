@@ -26,6 +26,48 @@ def mark_registered() -> None:
     registered = True
 
 
+def current_plugin_prefixes() -> tuple[str, ...]:
+    """返回当前生效的插件前缀集合（含默认强制前缀兜底，供敏感词注册使用）。"""
+    try:
+        from gsuid_core.sv import SL
+
+        plugin = SL.plugins.get("ArknightsUID")
+    except Exception:
+        plugin = None
+    if plugin is None:
+        return _DEFAULT_FORCE_PREFIXES
+    prefixes: list[str] = []
+    if not plugin.disable_force_prefix:
+        prefixes.extend(p for p in plugin.force_prefix if p)
+    prefixes.extend(p for p in plugin.prefix if p)
+    for default_prefix in _DEFAULT_FORCE_PREFIXES:
+        if default_prefix not in prefixes:
+            prefixes.append(default_prefix)
+    return tuple(prefixes)
+
+
+def sync_sensitive_prefixes() -> None:
+    """将当前插件前缀与敏感命令组合同步注册到宿主日志脱敏表。"""
+    try:
+        from gsuid_core.logger import register_sensitive_commands
+    except ImportError:
+        return
+    register_sensitive_commands(*SENSITIVE_URL_COMMANDS, require_url=True)
+    cred_words: list[str] = ["绑定登录"]
+    for prefix in current_plugin_prefixes():
+        for kw in SENSITIVE_CRED_COMMANDS:
+            cred_words.append(f"{prefix}{kw}")
+    try:
+        from gsuid_core.sv import SL
+
+        plugin = SL.plugins.get("ArknightsUID")
+        if plugin is not None and plugin.allow_empty_prefix:
+            cred_words.extend(SENSITIVE_CRED_COMMANDS)
+    except Exception:
+        pass
+    register_sensitive_commands(*cred_words, require_url=False)
+
+
 def register_sensitive_alias(alias: str, target: str) -> None:
     """自定义指令别名指向敏感命令时，同步向宿主登记脱敏保护。"""
     alias = (alias or "").strip()
@@ -39,7 +81,7 @@ def register_sensitive_alias(alias: str, target: str) -> None:
     if target in SENSITIVE_URL_COMMANDS:
         register_sensitive_commands(alias, require_url=True)
     elif target in SENSITIVE_CRED_COMMANDS:
-        prefixed = tuple(f"{p}{alias}" for p in _DEFAULT_FORCE_PREFIXES)
+        prefixed = tuple(f"{p}{alias}" for p in current_plugin_prefixes())
         if len(alias) >= 3:
             register_sensitive_commands(alias, *prefixed, require_url=False)
         else:

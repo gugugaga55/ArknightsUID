@@ -20,6 +20,7 @@ from ArknightsUID.utils.account_switch import (
 from ArknightsUID.utils.arg_utils import extract_uid
 from ArknightsUID.utils.config import ArkConfig
 from ArknightsUID.utils.enduid.adapter import hide_uid, hide_uid_for
+from ArknightsUID.utils.registration import sync_sensitive_prefixes
 from ArknightsUID.utils.resource.RESOURCE_PATH import CACHE_PATH
 from ArknightsUID.utils.skland import auth as ark_auth
 from ArknightsUID.utils.skland import store as ark_store
@@ -31,7 +32,10 @@ scan_sv = SV("ArknightsUID扫码登录", priority=5)
 # 也不挂 bind_sv
 web_login_sv = SV("ArknightsUID网页登录", priority=5)
 
-_PRIVATE_ONLY_HINT = "绑定/登录涉及凭据安全，请私聊我使用本命令。"
+_PRIVATE_ONLY_HINT = (
+    "⚠️ 绑定/登录涉及账号凭据安全，仅限私聊使用！\n"
+    "若你刚刚在群内发送了 cred 或 token，请立即撤回消息，并前往森空岛重新登录以刷新凭据。"
+)
 _GROUP_SCAN_OFF_HINT = (
     "扫码登录默认仅私聊可用（二维码等于一次免密登录，不适合发群里）。\n"
     "管理员可在插件配置开启「允许群聊扫码登录」（AllowGroupScanLogin）后群内使用。"
@@ -43,7 +47,12 @@ _GROUP_SCAN_NOTICE = (
 )
 
 
-bind_sv = SV("ArknightsUID绑定", area="DIRECT", priority=5)
+bind_sv = SV("ArknightsUID绑定", area="ALL", priority=5)
+# 迁移存量部署：旧版 area="DIRECT" 已被持久化进 plugin_config_store，
+# 仅改默认参数对老实例无效，必须在加载时显式纠偏为 ALL（交由 handler 内拒绝并提醒撤回）
+if bind_sv.area == "DIRECT":
+    bind_sv.set(area="ALL")
+sync_sensitive_prefixes()
 
 # 文本回复公共实现在 utils.card.send_text；保留模块级别名供调用点/测试 patch
 from ArknightsUID.utils.card import send_text as _send_text  # noqa: E402

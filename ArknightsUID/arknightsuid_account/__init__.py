@@ -1070,7 +1070,6 @@ async def show_ark_training(bot: Bot, ev: Event) -> None:
         return await _send_text(
             bot, ev, "未识别到基建数据（森空岛返回缺失 building 字段）。"
         )
-    shown = await hide_uid_for(credential.uid, ev.user_id, ev.bot_id)
 
     from ArknightsUID.utils.player.context import build_training_context
 
